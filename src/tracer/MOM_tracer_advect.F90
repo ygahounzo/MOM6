@@ -132,6 +132,8 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   use_PPM_stencil = CS%usePPM .and. .not. CS%useHuynhStencilBug
   if (use_PPM_stencil) stencil = 3
   if (CS%useWENO3) stencil = 3
+  if (CS%useWENO5) stencil = 5
+  if (CS%useWENO7) stencil = 7
 
   ntr = Reg%ntr
   Idt = 1.0 / dt
@@ -597,19 +599,15 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         i_up = I
         order3 = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up+1,j)*G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up+2,j)
         Tm1 = T_tmp(i_up-1,m) ; Tc = T_tmp(i_up,m) ; Tp1 = T_tmp(i_up+1,m); Tp2 = T_tmp(i_up+2,m)
+        Tm3 = T_tmp(i_up-3,m) ; Tp3 = T_tmp(i_up+3,m)
+
+        mu = CFL(i)
+        minT = Tmin(m) ; maxT = Tmax(m)
 
         if(uhh(I) >= 0.0) then
-          !if(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm1, Tc, Tp1, Tp2)
-          !else
-          !  wq = Tc
-          !endif
+          call weno3_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,mu,minT,maxT)
         else
-          !if(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tp2, Tp1, Tc, Tm1)
-          !else
-          !  wq = Tp1
-          !endif
+          call weno3_reconstruction_MPP(wq, Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,mu,minT,maxT)
         endif
 
         flux_x(I,j,m) = uhh(I)*wq
@@ -632,18 +630,21 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         minT = Tmin(m) ; maxT = Tmax(m)
 
         if(uhh(I) >= 0.0) then
-
-          !if(order5 == 1.0) then
+          if(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, Tm4,Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,TP4,mu,minT,maxT)
-          !else
-          !  wq = Tc
-          !endif
+          elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,mu,minT,maxT)
+          else
+            wq = Tc
+          endif
         else
-          !if(order5 == 1.0) then
+          if(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, Tp4,Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,Tm4,mu,minT,maxT)
-          !else
-          !  wq = Tp1
-          !endif
+          elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,mu,minT,maxT)
+          else
+            wq = Tp1
+          endif
         endif
 
         flux_x(I,j,m) = uhh(I)*wq 
@@ -669,20 +670,20 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           
           if(order7 == 1.0) then
             call weno7_reconstruction_MPP(wq, Tm4,Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,Tp4,mu,minT,maxT)
-          else
+          elseif(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, Tm4,Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,TP4,mu,minT,maxT)
-          !elseif(order3 == 1.0) then
-          !  call weno3_reconstruction(wq, Tm1, Tc, Tp1, Tp2)
-          !else
-          !  wq = Tc
+          elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,mu,minT,maxT)
+          else
+            wq = Tc
           endif
         else
           if(order7 == 1.0) then
             call weno7_reconstruction_MPP(wq, Tp4, Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,Tm4,mu,minT,maxT)
           elseif(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, TP4,Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,Tm4,mu,minT,maxT)
-          !elseif(order3 == 1.0) then
-          !  call weno3_reconstruction(wq, Tp2, Tp1, Tc,Tm1)
+          elseif(order3 == 1.0) then
+             call weno3_reconstruction_MPP(wq, Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,mu,minT,maxT)
           else
             wq = Tp1
           endif
@@ -1105,21 +1106,17 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         j_up = j
         Tm1 = T_tmp(i,m,j_up-1); Tc = T_tmp(i,m,j_up) ;
         Tp1 = T_tmp(i,m,j_up+1); Tp2 = T_tmp(i,m,j_up+2)
-        
+        Tm3 = T_tmp(i,m,j_up-3); Tp3 = T_tmp(i,m,j_up+3)
+
         order3 = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up+1)*G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up+2)
 
+        mu = CFL(i)
+        minT = Tmin(m) ; maxT = Tmax(m)
+
         if(vhh(i,J) >= 0.0) then
-          !if(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm1, Tc, Tp1, Tp2)
-          !else
-          !  wq = Tc
-          !endif
+          call weno3_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,mu,minT,maxT)
         else
-          !if(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tp2, Tp1, Tc, Tm1)
-          !else
-          !  wq = Tp1
-          !endif
+          call weno3_reconstruction_MPP(wq, Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,mu,minT,maxT)
         endif
             
         flux_y(i,m,J) = vhh(i,J)*wq
@@ -1142,18 +1139,21 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         minT = Tmin(m) ; maxT = Tmax(m)
 
         if(vhh(i,J) >= 0.0) then
-
-          !if(order5 == 1.0) then
+          if(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, Tm4,Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,TP4,mu,minT,maxT)
-          !else
-          !  wq = Tc
-          !endif
+          elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,mu,minT,maxT)
+          else
+            wq = Tc
+          endif
         else
-          !if(order5 == 1.0) then
+          if(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, TP4,Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,Tm4,mu,minT,maxT)
-          !else
-          !  wq = Tp1
-          !endif
+          elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tp3, Tp2, Tp1, Tc,Tm1, Tm2, Tm3, mu, minT, maxT)
+          else
+            wq = Tp1
+          endif
         endif
 
         flux_y(i,m,J) = vhh(i,J)*wq    
@@ -1178,20 +1178,20 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           
           if(order7 == 1.0) then
             call weno7_reconstruction_MPP(wq, Tm4,Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,Tp4,mu,minT,maxT)
-          else
+          elseif(order5 == 1.0) then 
             call weno5_reconstruction_MPP(wq, Tm4,Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3,TP4,mu,minT,maxT)
-          !elseif(order3 == 1.0) then
-          !  call weno3_reconstruction(wq, Tm1, Tc, Tp1, Tp2)
-          !else
-          !  wq = Tc
+          elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, mu, minT, maxT)
+          else
+            wq = Tc
           endif
         else
           if(order7 == 1.0) then
             call weno7_reconstruction_MPP(wq, Tp4, Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,Tm4,mu,minT,maxT)
           elseif(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, TP4,Tp3, Tp2, Tp1, Tc, Tm1, Tm2,Tm3,Tm4,mu,minT,maxT)
-          !elseif(order3 == 1.0) then
-          !  call weno3_reconstruction(wq, Tp2, Tp1, Tc,Tm1)
+          elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tp3, Tp2, Tp1, Tc,Tm1, Tm2, Tm3, mu, minT, maxT)
           else
             wq = Tp1
           endif
@@ -1427,18 +1427,40 @@ end subroutine tracer_advect_end
 
 ! weno reconstruction subroutine
 
-subroutine weno3_reconstruction(wq, qm, q0, qp, qpp)
+subroutine weno3_reconstruction_MPP(wq, qm3, qm2, qm, q0, qp, qp2, qp3, mu, qmin, qmax)
 
-   use, intrinsic :: ieee_arithmetic
-
-   real, intent(in) :: qm, q0, qp, qpp
+   real, intent(in) :: qm3, qm2, qm, q0, qp, qp2, qp3, mu, qmin, qmax
    real, intent(out) :: wq
 
-   real :: a1, a2, b1, b2, h1, h2, wq0
+   real :: theta, theta1, theta2, wq0, wqm, wqp
+   
+   ! WENO reconstruction at i-1/2
+   call weno3_reconstruction(wqm, qm3, qm2, qm, q0, qp)
+
+   ! WENO reconstruction at i+1/2
+   call weno3_reconstruction(wq0,qm2, qm, q0, qp, qp2)
+
+   ! WENO reconstruction at i+3/2
+   call weno3_reconstruction(wqp, qm, q0, qp, qp2, qp3)
+   
+   ! Maximum principle preserving
+
+   call MPP_limit(theta1,qm,q0,mu,qmin,qmax,wqm,wq0, 1.0)
+   call MPP_limit(theta2,q0,qp,mu,qmin,qmax,wq0,wqp, -1.0) 
+
+   theta = min(theta1, theta2)
+
+   wq = theta*(wq0 - q0) + q0 
+
+end subroutine weno3_reconstruction_MPP
+
+subroutine weno3_reconstruction(wq, qmm, qm, q0, qp, qpp)
+
+   real, intent(in) :: qmm, qm, q0, qp, qpp
+   real, intent(out) :: wq
+
+   real :: a1, a2, b1, b2, h1, h2
    real :: eps, wnorm, w_1, w_2, P1, P2, tau
-   real :: psi, d0, d1, dm1, d2, m2, m3
-   real :: m0,m1,dm4,qlc,qmd,qul,qmin,qmax,md, r
-   real :: q0_min, q0_max, qmp, dq0, dqp, qre, mmp, slop0
    
 
    call weno3_weights(b1, b2, qm, q0, qp)
@@ -1463,41 +1485,7 @@ subroutine weno3_reconstruction(wq, qm, q0, qp, qpp)
 
    ! MP step and limiting
 
-   d0 = qp -2.0*q0 + qm
-   d1 = qpp -2.0*qp + q0
-
-   call minmod(m0, 4.0*d0-d1, 4.0*d1-d0)
-   call minmod(m1,m0,d0)
-   call minmod(dm4,m1,d1)
-
-   qlc = q0 + 0.5*(q0-qm) + (4.0/3.0)*dm4
-   qmd = 0.5*(q0 + qp) - 0.5*dm4
-   qul = q0 + 2.0*(q0-qm)
-
-   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-
-   call minmod(mmp,qp-q0, 2.0*(q0-qm))
-   qmp = q0 + mmp
-
-   q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
-
-   if ((qmax-qmin) >= (q0_max - q0_min)) then
-
-     r = (q0-qm)/(qp-q0)
-     !slop0 = (r+abs(r))/(1.0+abs(r))
-     slop0 = r/(1.0 + r*r)
-
-     if(ieee_is_nan(slop0)) then
-       slop0 = 0.0
-     endif
-
-     wq = q0 + 0.5*slop0*(qp-q0)
-   else
-     call median(md,wq,qmin,qmax)
-     wq = md
-
-   endif
+   call apply_MP2(wq, qmm, qm, q0, qp, qpp)
 
 end subroutine weno3_reconstruction
 
@@ -1522,9 +1510,9 @@ subroutine weno3_weights(b1, b2, qm, q0, qp)
 
 end subroutine weno3_weights
 
-subroutine weno5_reconstruction_MPP(wq, qm4,qm3, qm2, qm, q0, qp, qp2, qp3, qp4, mu, umm, uM)
+subroutine weno5_reconstruction_MPP(wq, qm4,qm3, qm2, qm, q0, qp, qp2, qp3, qp4, mu, qmin, qmax)
 
-   real, intent(in) :: qm4, qm3, qm2, qm, q0, qp, qp2, qp3, qp4, mu, umm, uM
+   real, intent(in) :: qm4, qm3, qm2, qm, q0, qp, qp2, qp3, qp4, mu, qmin, qmax
    real, intent(out) :: wq
 
    real :: theta, theta1, theta2, wq0, wqm, wqp
@@ -1540,8 +1528,8 @@ subroutine weno5_reconstruction_MPP(wq, qm4,qm3, qm2, qm, q0, qp, qp2, qp3, qp4,
    
    ! Maximum principle preserving
 
-   call MPP_limit(theta1,qm,q0,mu,umm,uM,wqm,wq0, 1.0)
-   call MPP_limit(theta2,q0,qp,mu,umm,uM,wq0,wqp, -1.0) 
+   call MPP_limit(theta1,qm,q0,mu,qmin,qmax,wqm,wq0, 1.0)
+   call MPP_limit(theta2,q0,qp,mu,qmin,qmax,wq0,wqp, -1.0) 
 
    theta = min(theta1, theta2)
 
@@ -1652,21 +1640,21 @@ subroutine weno5_weights(b1, b2, b3, qmm, qm, q0, qp, qpp)
    ux2 = (qmm - 2.0*qm + q0)/2.0
 
    b1 = ux*ux + cff1*ux2*ux2
-   if(ieee_is_nan(b1)) b1 = 0.0
+   !if(ieee_is_nan(b1)) b1 = 0.0
 
    ! Second stencil
    ux = (qp - qm)/2.0
    ux2 = (qm - 2.0*q0 + qp)/2.0
 
    b2 = ux*ux + cff1*ux2*ux2
-   if(ieee_is_nan(b2)) b2 = 0.0
+   !if(ieee_is_nan(b2)) b2 = 0.0
 
    ! Third stencil
    ux = (-3.0*q0 + 4.0*qp - qpp)/2.0
    ux2 = (q0 - 2.0*qp + qpp)/2.0
 
    b3 = ux*ux + cff1*ux2*ux2
-   if(ieee_is_nan(b3)) b3 = 0.0
+   !if(ieee_is_nan(b3)) b3 = 0.0
 
 end subroutine weno5_weights
 
@@ -1760,6 +1748,8 @@ subroutine weno7_reconstruction_MPP(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, q
 
    wq = theta*(wq0 - q0) + q0
 
+   !wq = wq0
+
 end subroutine weno7_reconstruction_MPP
 
 subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
@@ -1782,11 +1772,16 @@ subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
    ! Alpha values
    eps = 1.0e-20
    !tau = abs(b1 + 3 * b2 - 3 * b3 - b4)
-   tau = abs(b1-b4)
-   a1 = g1/(1.0 + (tau/(b1+eps))**2)
-   a2 = g2/(1.0 + (tau/(b2+eps))**2)
-   a3 = g3/(1.0 + (tau/(b3+eps))**2)
-   a4 = g4/(1.0 + (tau/(b4+eps))**2)
+   !tau = abs(b1-b4)
+   tau = abs(b1 - b2 - b3 + b4)
+   !a1 = g1/(1.0 + (tau/(b1+eps))**2)
+   !a2 = g2/(1.0 + (tau/(b2+eps))**2)
+   !a3 = g3/(1.0 + (tau/(b3+eps))**2)
+   !a4 = g4/(1.0 + (tau/(b4+eps))**2)
+   a1 = g1/(b1+eps)**2
+   a2 = g2/(b2+eps)**2
+   a3 = g3/(b3+eps)**2
+   a4 = g4/(b4+eps)**2
 
    ! Normalization
    wnorm = 1.0/(a1+a2+a3+a4)
@@ -1799,8 +1794,8 @@ subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
 
    ! Monotonicity Preserving
 
-   call apply_MP(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
-   !call apply_MP2(wq, qm2, qm1, q0, qp1, qp2)
+   !call apply_MP(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+   call apply_MP2(wq, qm2, qm1, q0, qp1, qp2)
 
 end subroutine weno7_reconstruction
 
@@ -1817,28 +1812,28 @@ subroutine weno7_weights(b1,b2,b3,b4, qm3, qm2, qm1, q0, qp1, qp2, qp3)
    ux2 = (-qm3 + 4.0*qm2 - 5.0*qm1 +2.0*q0)/2.0
    ux3 = (-qm3 + 3.0*qm2 - 3.0*qm1 + q0)/6.0
 
-   b1 = (ux + ux3/10.0)**2 + (13.0/3.0)*ux2**2 + (781.0/20.0)*ux3**2
+   b1 = (ux + 0.1*ux3)**2 + (13.0/3.0)*(ux2**2) + (781.0/20.0)*(ux3**2)
 
    ! 2nd stencil
    ux = (11.0*qm2 - 63.0*qm1 + 33.0*q0 + 19.0*qp1)/60.0
    ux2 = (qm1 - 2.0*q0 + qp1)/2.0
    ux3 = (-qm2 + 3.0*qm1 -3.0*q0 + qp1)/6.0
 
-   b2 = (ux + ux3/10.0)**2 + (13.0/3.0)*ux2**2 + (781.0/20.0)*ux3**2
+   b2 = (ux + 0.1*ux3)**2 + (13.0/3.0)*(ux2**2) + (781.0/20.0)*(ux3**2)
 
    ! 3rd stencil
    ux = (-19.0*qm1 - 33.0*q0 + 63.0*qp1 - 11.0*qp2)/60.0
    ux2 = (qm1 - 2.0*q0 + qp1)/2.0
    ux3 = (-qm1 + 3.0*q0 - 3.0*qp1 + qp2)/6.0
 
-   b3 = (ux + ux3/10.0)**2 + (13.0/3.0)*ux2**2 + (781.0/20.0)*ux3**2
+   b3 = (ux + 0.1*ux3)**2 + (13.0/3.0)*(ux2**2) + (781.0/20.0)*(ux3**2)
 
    ! 4rd stencil
    ux = (-190.0*q0 + 177.0*qp1 - 87.0*qp2 + 19.0*qp3)/60.0
    ux2 = (2.0*q0 - 5.0*qp1 + 4.0*qp2 - qp3)/2.0
    ux3 = (-q0 + 3.0*qp1 - 3.0*qp2 + qp3)/6.0
 
-   b4 = (ux + ux3/10.0)**2 + (13.0/3.0)*ux2**2 + (781.0/20.0)*ux3**2
+   b4 = (ux + 0.1*ux3)**2 + (13.0/3.0)*(ux2**2) + (781.0/20.0)*(ux3**2)
 
 
 end subroutine weno7_weights
@@ -1851,7 +1846,7 @@ subroutine weno7_poly(P1,P2,P3,P4, qm3, qm2, qm1, q0, qp1, qp2, qp3)
 
    real :: ux, ux2, ux3, L1, L2, L3
 
-   L1 = 1.0/2.0; L2 = 1.0/6.0; L3 = 3.0/40.0  ! 2nd and 3rd Legendre polynomials evaluated at
+   L1 = 1.0/2.0; L2 = 1.0/6.0; L3 = 1.0/20.0  ! 2nd and 3rd Legendre polynomials evaluated at
 
    ! 1st stencil
    ux = (-19.0*qm3 + 87.0*qm2 - 177.0*qm1 + 199.0*q0)/60.0
@@ -1884,8 +1879,6 @@ subroutine weno7_poly(P1,P2,P3,P4, qm3, qm2, qm1, q0, qp1, qp2, qp3)
 end subroutine weno7_poly
 
 subroutine apply_MP(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
-
-   use, intrinsic :: ieee_arithmetic
 
    real, intent(in) :: qmm, qm, q0, qp, qpp, qp3, qm3
    real, intent(inout) :: wq
@@ -1930,7 +1923,7 @@ subroutine apply_MP(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
        !slop0 = (r+abs(r))/(1.0+abs(r))
      endif
 
-     wq = q0 + 0.5*slop0*(qp-q0)
+     wq = q0 !+ 0.5*slop0*(qp-q0)
 
    else
      call median(md,wq,qmin,qmax)
@@ -1967,6 +1960,7 @@ subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp)
    qlcm = q0 - dm
    qlcp = q0 - dm0
 
+   !nu = 1.0/0.7
    nu = 1.0/0.7
    
    fqmin = max(qmd_max_m1,qlcm) + nu*(q0 - max(qmd_max_m1,qlcm))
@@ -1993,7 +1987,7 @@ subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp)
        !slop0 = (r+abs(r))/(1.0+abs(r))
      endif
 
-     wq = q0 + 0.5*slop0*(qp-q0)
+     wq = q0 !+ 0.5*slop0*(qp-q0)
 
    else
      call median(md,wq,qmin,qmax)
