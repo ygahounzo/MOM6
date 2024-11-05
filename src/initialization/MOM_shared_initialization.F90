@@ -74,12 +74,14 @@ subroutine MOM_initialize_rotation(f, G, PF, US)
                  " \t 2omegasinlat - Use twice the planetary rotation rate \n"//&
                  " \t\t times the sine of latitude.\n"//&
                  " \t betaplane - Use a beta-plane or f-plane.\n"//&
+                 " \t file - read f from a file.\n"//&
                  " \t USER - call a user modified routine.", &
                  default="2omegasinlat")
   select case (trim(config))
     case ("2omegasinlat"); call set_rotation_planetary(f, G, PF, US)
     case ("beta"); call set_rotation_beta_plane(f, G, PF, US)
     case ("betaplane"); call set_rotation_beta_plane(f, G, PF, US)
+    case ("file"); call set_rotation_from_file(f, G, PF, US)
    !case ("nonrotating") ! Note from AJA: Missing case?
     case default ; call MOM_error(FATAL,"MOM_initialize: "// &
       "Unrecognized rotation setup "//trim(config))
@@ -529,6 +531,42 @@ subroutine set_rotation_beta_plane(f, G, param_file, US)
 
   call callTree_leave(trim(mdl)//'()')
 end subroutine set_rotation_beta_plane
+
+
+! -----------------------------------------------------------------------------
+!> This subroutine sets up the Coriolis parameter from a file
+subroutine set_rotation_from_file(f, G, param_file, US)
+  type(dyn_horgrid_type), intent(in)  :: G  !< The dynamic horizontal grid
+  real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), &
+                          intent(out) :: f  !< Coriolis parameter (vertical component) [T-1 ~> s-1]
+  type(param_file_type),  intent(in)  :: param_file !< A structure to parse for run-time parameters
+  type(unit_scale_type),  intent(in)  :: US !< A dimensional unit scaling type
+
+! This subroutine sets up the Coriolis parameter from a file
+  ! Local variables
+  character(len=200) :: filename, cori_file, inputdir ! Strings for file/path
+  character(len=200) :: cori_varname                  ! Variable name in file
+  character(len=40)  :: mdl = "set_rotation_from_file" ! This subroutine's name.
+
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
+
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
+  inputdir = slasher(inputdir)
+  call get_param(param_file, mdl, "CORI_FILE", cori_file, &
+                 "The file from which Coriolis is read.", &
+                 default="coriolis.nc")
+  call get_param(param_file, mdl, "CORI_VARNAME", cori_varname, &
+                 "The name of the Coriolis variable in CORI_FILE.", &
+                 default="f")
+
+  filename = trim(inputdir)//trim(cori_file)
+  call log_param(param_file, mdl, "INPUTDIR/CORI_FILE", filename)
+  
+  f(:,:) = 0.0
+  call MOM_read_data(filename, trim(cori_varname), f, G%Domain)
+
+  call callTree_leave(trim(mdl)//'()')
+end subroutine set_rotation_from_file
 
 !> initialize_grid_rotation_angle initializes the arrays with the sine and
 !!   cosine of the angle between logical north on the grid and true north.
