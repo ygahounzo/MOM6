@@ -205,7 +205,6 @@ subroutine initialize_gyre_tracer(restart, day, G, GV, h,diag, OBC, CS, &
       do k=1,nz ; do j=js,je ; do i=is,ie
         CS%tr(i,j,k,m) = 0.0
       enddo ; enddo ; enddo
-     ! print*, 'Inside gyre_tracer'
 
       !k=1 ! Square wave
       !do j=js,je ; do i=is,ie
