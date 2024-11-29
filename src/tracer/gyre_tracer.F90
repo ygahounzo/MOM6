@@ -217,7 +217,7 @@ subroutine initialize_gyre_tracer(restart, day, G, GV, h,diag, OBC, CS, &
       !  locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
       !  CS%tr(i,j,k,m) = max(0.0, 1.0-locx)*max(0.0, 1.0-locy)
       !enddo ; enddo
-      !k=3 ! Cosine bell
+      !k=1 ! Cosine bell
       !do j=js,je ; do i=is,ie
       !  locx = min(1.0, abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width) * (acos(0.0)*2.)
       !  locy = min(1.0, abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width) * (acos(0.0)*2.)
