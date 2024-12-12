@@ -11,6 +11,7 @@ use MOM_file_parser,     only : get_param, log_param, log_version, param_file_ty
 use MOM_forcing_type,    only : forcing
 use MOM_grid,            only : ocean_grid_type
 use MOM_hor_index,       only : hor_index_type
+use MOM_io,              only : file_exists, MOM_read_data
 use MOM_io,              only : slasher, vardesc, var_desc, query_vardesc
 use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_restart,         only : query_initialized, set_initialized, MOM_restart_CS
@@ -105,7 +106,7 @@ function register_gyre_tracer(G, GV, param_file, CS, tr_Reg, restart_CS)
         "The x-width of the test-functions.", units=G%x_ax_unit_short, default=0.)
   call get_param(param_file, mdl, "ADVECTION_TEST_Y_WIDTH", CS%y_width, &
         "The y-width of the test-functions.", units=G%y_ax_unit_short, default=0.)
-  call get_param(param_file, mdl, "ADVECTION_TEST_TRACER_IC_FILE", CS%tracer_IC_file, &
+  call get_param(param_file, mdl, "GYRE_TRACER_IC_FILE", CS%tracer_IC_file, &
                  "The name of a file from which to read the initial "//&
                  "conditions for the tracers, or blank to initialize "//&
                  "them internally.", default=" ")
@@ -113,7 +114,7 @@ function register_gyre_tracer(G, GV, param_file, CS, tr_Reg, restart_CS)
   if (len_trim(CS%tracer_IC_file) >= 1) then
     call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
     CS%tracer_IC_file = trim(slasher(inputdir))//trim(CS%tracer_IC_file)
-    call log_param(param_file, mdl, "INPUTDIR/ADVECTION_TEST_TRACER_IC_FILE", &
+    call log_param(param_file, mdl, "INPUTDIR/GYRE_TRACER_IC_FILE", &
                    CS%tracer_IC_file)
   endif
   call get_param(param_file, mdl, "SPONGE", CS%use_sponge, &
@@ -197,50 +198,61 @@ subroutine initialize_gyre_tracer(restart, day, G, GV, h,diag, OBC, CS, &
 
   CS%diag => diag
   CS%ntr = NTR
+
   do m=1,NTR
     call query_vardesc(CS%tr_desc(m), name=name, &
                        caller="initialize_gyre_tracer")
     if ((.not.restart) .or. (CS%tracers_may_reinit .and. .not. &
         query_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp))) then
-      do k=1,nz ; do j=js,je ; do i=is,ie
-        CS%tr(i,j,k,m) = 0.0
-      enddo ; enddo ; enddo
 
-      !k=1 ! Square wave
-      !do j=js,je ; do i=is,ie
-      !  if (abs(G%geoLonT(i,j)-CS%x_origin)<0.5*CS%x_width .and. &
-      !      abs(G%geoLatT(i,j)-CS%y_origin)<0.5*CS%y_width) CS%tr(i,j,k,m) = 1.0
-      !enddo ; enddo
-      !k=2 ! Triangle wave
-      !do j=js,je ; do i=is,ie
-      !  locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
-      !  locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
-      !  CS%tr(i,j,k,m) = max(0.0, 1.0-locx)*max(0.0, 1.0-locy)
-      !enddo ; enddo
-      !k=1 ! Cosine bell
-      !do j=js,je ; do i=is,ie
-      !  locx = min(1.0, abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width) * (acos(0.0)*2.)
-      !  locy = min(1.0, abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width) * (acos(0.0)*2.)
-      !  CS%tr(i,j,k,m) = (1.0+cos(locx))*(1.0+cos(locy))*0.25
-      !enddo ; enddo
-      !k=4 ! Cylinder
-      !do j=js,je ; do i=is,ie
-      !  locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
-      !  locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
-      !  if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
-      !enddo ; enddo
-      k=1 ! Cut cylinder
-      do j=js,je ; do i=is,ie
-        locx = (G%geoLonT(i,j)-CS%x_origin)/CS%x_width
-        locy = (G%geoLatT(i,j)-CS%y_origin)/CS%y_width
-        if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
-        if (locx>0.0 .and. abs(locy)<0.2) CS%tr(i,j,k,m) = 0.0
-      enddo ; enddo
+      if (len_trim(CS%tracer_IC_file) >= 1) then
+         !  Read the tracer concentrations from a netcdf file.
+         if (.not.file_exists(CS%tracer_IC_file, G%Domain)) &
+            call MOM_error(FATAL, "initialize_gyre_tracer: Unable to open "// &
+                        CS%tracer_IC_file)
+         call MOM_read_data(CS%tracer_IC_file, trim(name), CS%tr(:,:,:,m), G%Domain)
 
-      call set_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp)
+      else
+
+         do k=1,nz ; do j=js,je ; do i=is,ie
+            CS%tr(i,j,k,m) = 0.0
+         enddo ; enddo ; enddo
+
+         k=1 ! Square wave
+         do j=js,je ; do i=is,ie
+           if (abs(G%geoLonT(i,j)-CS%x_origin)<0.5*CS%x_width .and. &
+               abs(G%geoLatT(i,j)-CS%y_origin)<0.5*CS%y_width) CS%tr(i,j,k,m) = 1.0
+         enddo ; enddo
+         !k=2 ! Triangle wave
+         !do j=js,je ; do i=is,ie
+         !  locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
+         !  locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
+         !  CS%tr(i,j,k,m) = max(0.0, 1.0-locx)*max(0.0, 1.0-locy)
+         !enddo ; enddo
+         !k=1 ! Cosine bell
+         !do j=js,je ; do i=is,ie
+         !  locx = min(1.0, abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width) * (acos(0.0)*2.)
+         !  locy = min(1.0, abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width) * (acos(0.0)*2.)
+         !  CS%tr(i,j,k,m) = (1.0+cos(locx))*(1.0+cos(locy))*0.25
+         !enddo ; enddo
+         !k=4 ! Cylinder
+         !do j=js,je ; do i=is,ie
+         !  locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
+         !  locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
+         !  if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
+         !enddo ; enddo
+         !k=1 ! Cut cylinder
+         !do j=js,je ; do i=is,ie
+         !   locx = (G%geoLonT(i,j)-CS%x_origin)/CS%x_width
+         !   locy = (G%geoLatT(i,j)-CS%y_origin)/CS%y_width
+         !   if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
+         !   if (locx>0.0 .and. abs(locy)<0.2) CS%tr(i,j,k,m) = 0.0
+         !enddo ; enddo
+
+         call set_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp)
+      endif 
     endif ! restart
   enddo
-
 
 end subroutine initialize_gyre_tracer
 
