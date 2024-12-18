@@ -1120,17 +1120,17 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
         dy = G%dyT(i,j)
 
-        !if(order5 == 1.0) then
+        if(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, pcm, pcm1, mu, appm)
-        !elseif(order3 == 1.0) then
-        !    call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, pcm, pcm1, mu, appm)
-        !else
-        !    if(v >= 0.0) then
-        !       wq = Tc
-        !    else
-        !       wq = Tp1
-        !    endif 
-        !endif        
+        elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, pcm, pcm1, mu, appm)
+        else
+            if(v >= 0.0) then
+               wq = Tc
+            else
+               wq = Tp1
+            endif 
+        endif        
 
         flux_y(i,m,J) = vhh(i,J)*wq    
 
@@ -1418,12 +1418,18 @@ subroutine weno3_reconstruction_MPP(wq,  qm2, qm, q0, qp, qp2, qp3, u, pcm, pcm1
    real, intent(in) :: qm2, qm, q0, qp, qp2, qp3, u, pcm, mu, pcm1
    real, intent(out) :: wq, appm
 
+   real :: wmr, wpl, w0
+
+   w0 = 1.0
+
    if(u >= 0.0) then 
       call weno3_reconstruction(wmr, qp2, qp, q0, qm, qm2, pcm, mu, 1.0, appm)
       call weno3_reconstruction(wpl, qm2, qm, q0, qp, qp2, pcm, mu, 1.0, appm)
+      call PP_limiter(wq, qm, q0, qp, wmr, wpl, w0)
    else
       call weno3_reconstruction(wpl, qp3, qp2, qp, q0, qm, pcm1, mu, -1.0, appm)
       call weno3_reconstruction(wmr, qm, q0, qp, qp2, qp3, pcm1, mu, -1.0, appm)
+      call PP_limiter(wq, qp2, qp, q0, wmr, wpl, w0)
    endif
 
 end subroutine weno3_reconstruction_MPP
@@ -1436,10 +1442,6 @@ subroutine weno3_reconstruction(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
    real :: a1, a2, b1, b2, h1, h2, nu
    real :: eps, wnorm, w_1, w_2, P1, P2, tau
    
-   !if(pcm <= 1.0e-15) then
-   !   wq = q0
-   !else
-
       call weno3_weights(b1, b2, qm, q0, qp)
       call weno3_poly(P1, P2, qm, q0, qp)
 
@@ -1461,8 +1463,7 @@ subroutine weno3_reconstruction(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
       wq = w_1*P1 + w_2*P2
 
       ! Monotonicity Preserving
-      call apply_MP(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
-   !endif 
+      !call apply_MP(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
 
 end subroutine weno3_reconstruction
 
@@ -1543,26 +1544,10 @@ subroutine weno5_reconstruction(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
 
    ! Alpha values
    eps = 1.0e-40
-   !eps = ds!**2
    tau = abs(b2-b0)
-   !tau = (abs(b0-b1) + abs(b0-b2))/2.0
-   !tau = abs((qmm-2.0*qm+q0)**2 - 2.0*(qm-2.0*q0-qp)**2 + (q0-2.0*qp+qpp)**2)
-   !tau = abs((qm-2.0*q0-qp))
    a0 = d0*(1.0 + (tau/(b0+eps))**r)
    a1 = d1*(1.0 + (tau/(b1+eps))**r)
    a2 = d2*(1.0 + (tau/(b2+eps))**r)
-
-   !c0 = 3.0/4.0 ; c1 = 3.0/2.0 ; c2 = 3.0/4.0
-   !bb = (b0 + b1 +b2)/3.0
-   !z0 = (tau/(tau+bb+eps))**r
-   
-   !n0 = b0/(tau+bb+eps)
-   !n1 = b1/(tau+bb+eps)
-   !n2 = b2/(tau+bb+eps)
-
-   !a0 = d0*(1.0 + c0*((tau/(b0+eps))**r)*z0 + n0)
-   !a1 = d1*(1.0 + c1*((tau/(b1+eps))**r)*z0 + n1)
-   !a2 = d2*(1.0 + c2*((tau/(b2+eps))**r)*z0 + n2)
 
    wnorm = 1.0/(a0+a1+a2)
    w0 = a0*wnorm
@@ -1571,69 +1556,10 @@ subroutine weno5_reconstruction(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
 
    wq = w0*P0 + w1*P1 + w2*P2
 
-   !wq = (2.0*qmm - 13.0*qm + 47.0*q0 + 27.0*qp - 3.0*qpp)/60.0
-
    ! Monotonicity Preserving
    !call apply_MP(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
 
 end subroutine weno5_reconstruction
-
-subroutine weno5_reconstruction2(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp, pcm, mu, sig
-   real, intent(out) :: wq, appm
-
-   real :: a0, a1, a2, b0, b1, b2, d0, d1, d2, nu
-   real :: eps,  wnorm, w0, w1, w2, P0, P1, P2, tau
-   integer :: r
-   real :: bmin, theta, lab, u0, u1, u2, s0, s1, s2
-
-      r = 2
-
-      call weno5_weights(b0, b1, b2, qmm, qm, q0, qp, qpp)
-      call weno5_poly(P0, P1, P2, qmm, qm, q0, qp, qpp)
-
-      ! Gamma values in Weno reconstruction
-      d0 = 1.0/10.0
-      d1 = 6.0/10.0
-      d2 = 3.0/10.0
-
-      ! Alpha values
-      eps = 1.0e-20
-      tau = abs(b2-b0)
-      
-      lab = 100.0
-      s0 = tau/(b0+eps)
-      s1 = tau/(b1+eps)
-      s2 = tau/(b2+eps)
-
-      u0 = 1.0 + (s0**r - 1.0)**3/((s0**r - 1.0)**2 + lab/(d0*(s0**(2*r))))
-      u1 = 1.0 + (s1**r - 1.0)**3/((s1**r - 1.0)**2 + lab/(d1*(s1**(2*r))))
-      u2 = 1.0 + (s2**r - 1.0)**3/((s2**r - 1.0)**2 + lab/(d2*(s2**(2*r))))
-
-      !bmin = min(b0,b1,b2)
-      !theta = tau/((bmin + eps)**(0.8))
-      !lab = 1.0 !max(exp(-3.0*theta), 1.0e-6)
-      
-      !a0 = d0*exp(-(b0**lab)/lab)
-      !a1 = d1*exp(-(b1**lab)/lab)
-      !a2 = d2*exp(-(b2**lab)/lab)
-      
-      a0 = d0*(1.0 + u0)
-      a1 = d1*(1.0 + u1)
-      a2 = d2*(1.0 + u2)
-
-      wnorm = 1.0/(a0+a1+a2)
-      w0 = a0*wnorm
-      w1 = a1*wnorm
-      w2 = a2*wnorm
-
-      wq = w0*P0 + w1*P1 + w2*P2
-
-      ! Monotonicity Preserving
-      call apply_MP(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
-
-end subroutine weno5_reconstruction2
 
 subroutine weno5_weights(b0, b1, b2, qmm, qm, q0, qp, qpp)
 
@@ -1654,26 +1580,6 @@ subroutine weno5_weights(b0, b1, b2, qmm, qm, q0, qp, qpp)
 
 end subroutine weno5_weights
 
-
-subroutine weno5_weights2(b0, b1, b2, qmm, qm, q0, qp, qpp)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp
-   real, intent(out) :: b0, b1, b2
-
-   ! First stencil
-
-   b0 = (qmm - 2.0*qm + q0)**2 + 0.25*(qmm - 4.0*qm + 3.0*q0)**2 
-
-   ! Second stencil
-
-   b1 = (qm - 2.0*q0 + qp)**2 + 0.25*(qm - qp)**2
-
-   ! Third stencil
-
-   b2 = (q0 - 2.0*qp + qpp)**2 + 0.25*(3.0*q0 - 4.0*qp + qpp)**2
-
-end subroutine weno5_weights2
-
 subroutine weno5_poly(P0, P1, P2, qmm, qm, q0, qp, qpp)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp
@@ -1692,25 +1598,6 @@ subroutine weno5_poly(P0, P1, P2, qmm, qm, q0, qp, qpp)
    P2 = (2.0*q0 + 5.0*qp - qpp)/6.0
 
 end subroutine weno5_poly
-
-subroutine weno5_poly2(P0, P1, P2, qmm, qm, q0, qp, qpp)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp
-   real, intent(out) :: P0, P1, P2
-
-   ! First stencil
-
-   P0 = (3.0*qmm - 10.0*qm + 15.0*q0)/8.0
-
-   ! Second stencil
-
-   P1 = (-qm + 6.0*q0 + 3.0*qp)/8.0
-
-   ! Third stencil
-
-   P2 = (3.0*q0 + 6.0*qp - qpp)/8.0
-
-end subroutine weno5_poly2
 
 subroutine weno7_reconstruction_MPP(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, pcm, pcm1, mu, appm)
 
@@ -1755,21 +1642,10 @@ subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, pcm, mu, s
    ! Alpha values
    eps = 1.0e-20
    tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
-   !tau = abs(b3-b0)
-   !tau = abs(b0 - b1 - b2 + b3)
-   !tau = (abs(b3-b0) + abs(b3-b1) + abs(b3-b2))/3.0
    a0 = d0*(1.0 + (tau/(b0+eps))**r)
    a1 = d1*(1.0 + (tau/(b1+eps))**r)
    a2 = d2*(1.0 + (tau/(b2+eps))**r)
    a3 = d3*(1.0 + (tau/(b3+eps))**r)
-
-   !psi = min(1.0, sqrt(tau))
-
-   !a0 = d0!*(max(1.0, psi*(tau/(b0+eps))**r))
-   !a1 = d1!*(max(1.0, psi*(tau/(b1+eps))**r))
-   !a2 = d2!*(max(1.0, psi*(tau/(b2+eps))**r))
-   !a3 = d3!*(max(1.0, psi*(tau/(b3+eps))**r))
-   
 
    ! Normalization
    wnorm = 1.0/(a0+a1+a2+a3)
@@ -1812,29 +1688,24 @@ subroutine weno7_weights(b0, b1, b2, b3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
         qm2*(7043.0*qm2 - 17246.0*qm1 + 7042.0*q0) + &
         qm1*(11003.0*qm1 - 9402.0*q0) + 2107.0*q0**2
    
-   !b0 = b0/1000.0
    ! 2nd stencil
 
    b1 = qm2*(267.0*qm2 - 1642.0*qm1 + 1602.0*q0 - 494.0*qp1) + &
            qm1*(2843.0*qm1 - 5966.0*q0 + 1922.0*qp1) &
            + q0*(3443.0*q0 - 2522.0*qp1) + 547.0*qp1**2
    
-   !b1 = b1/1000.0
    ! 3rd stencil
 
    b2 = qm1*(547.0*qm1 - 2522.0*q0 + 1922.0*qp1 - 494.0*qp2) + &
            q0*(3443.0*q0 - 5966.0*qp1 + 1602.0*qp2) &
            + qp1*(2843.0*qp1 - 1642.0*qp2) + 267.0*qp2**2
    
-   !b2 = b2/1000.0
    ! 4rd stencil
   
    b3 = q0*(2107.0*q0 - 9402.0*qp1 + 7042.0*qp2 - 1854.0*qp3) + &
            qp1*(11003.0*qp1 - 17246.0*qp2 + 4642.0*qp3) &
            + qp2*(7043.0*qp2 - 3882.0*qp3) + 547.0*qp3**2
    
-   !b3 = b3/1000.0
-
 end subroutine weno7_weights
 
 subroutine apply_MP(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
@@ -1857,8 +1728,6 @@ subroutine apply_MP(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
 
    call minmod3(dm4, 4.0*d0-d1, 4.0*d1-d0, d0, d1)
    call minmod3(dm, 4.0*dm1-d0, 4.0*d0-dm1, dm1, d0)
-   !call minmod(dm4,d0, d1)
-   !call minmod(dm, dm1, d0)
     
    beta = 4.0
    ka = 2.0
@@ -1871,9 +1740,6 @@ subroutine apply_MP(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
    qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
    qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
    
-   qmin = max(0.0, qmin)
-   qmax = min(1.0, qmax)
-
    call minmod(mmp,qp-q0, ka*(q0-qm))
    qmp = q0 + mmp
 
@@ -1883,39 +1749,37 @@ subroutine apply_MP(wq, qmm, qm, q0, qp, qpp, pcm, mu, sig, appm)
    cp = (wq-qmin)*(wq-qmax)
    cp2 = sign(1.0,cp)
 
-   if(cp2 >= 0.0) then
+   !if(cp2 >= 0.0) then
    !if(cp > 0.0) then
      
      !call apply_PPM(wq, qm, q0, qp, pcm, mu)
 
-     aL = (5.0*q0 + (2.0*qm - qp))/6.0
-     aL = max(min(q0,qm),aL) ; aL = min(max(q0,qm),aL)
-     aR = (5.0*q0 + (2.0*qp - qm))/6.0
-     aR = max(min(q0,qp),aR) ; aR = min(max(q0,qp),aR)
+   !  aL = (5.0*q0 + (2.0*qm - qp))/6.0
+   !  aL = max(min(q0,qm),aL) ; aL = min(max(q0,qm),aL)
+   !  aR = (5.0*q0 + (2.0*qp - qm))/6.0
+   !  aR = max(min(q0,qp),aR) ; aR = min(max(q0,qp),aR)
 
-     dA = aR - aL ; mA = 0.5*(aR + aL)
-     if(pcm <= 0.0) then
-        aL = q0 ; aR = q0
-     elseif(dA*(q0-mA) > (dA*dA)/6.0) then
-        aL = (3.0*q0) - 2.0*aR
-     elseif (dA*(q0-mA) < - (dA*dA)/6.0) then
-        aR = (3.0*q0) - 2.0*aL
-     endif
+   !  dA = aR - aL ; mA = 0.5*(aR + aL)
+   !  if(pcm <= 0.0) then
+   !     aL = q0 ; aR = q0
+   !  elseif(dA*(q0-mA) > (dA*dA)/6.0) then
+   !     aL = (3.0*q0) - 2.0*aR
+   !  elseif (dA*(q0-mA) < - (dA*dA)/6.0) then
+   !     aR = (3.0*q0) - 2.0*aL
+   !  endif
 
-     a6 = 6.0*q0 - 3.0*(aR + aL) ! Curvature
+   !  a6 = 6.0*q0 - 3.0*(aR + aL) ! Curvature
 
-     wq = aR - 0.5*mu*((aR - aL) - a6*(1.0 - (2.0/3.0)*mu))
+   !  wq = aR - 0.5*mu*((aR - aL) - a6*(1.0 - (2.0/3.0)*mu))
 
-     appm = 1.0
+   !  appm = 1.0
 
    !else 
    !  call median(md,wq,qmin,qmax)
    !  call median(md,qmin,wq,qmax)
    !  wq = md
 
-   endif
-
-   !wq = 0.5*(wq + wq_ppm) - 0.5*sign(1.0,cp)*(wq - wq_ppm)
+   !endif
 
 end subroutine apply_MP
 
@@ -1927,7 +1791,6 @@ subroutine PP_limiter(wq, qm, q0, qp, wmr, wpl, w0)
    real :: qmin, qmax, theta, eps
    real :: qmin_g, qmax_g, eps2, P0, w1, wq_ppm
 
-   !w1 = 5.0/18.0
    P0 = (q0 - w0*wmr - w0*wpl)/(1.0 - 2.0*w0)
 
    qmin = min(wmr, P0, wpl)
@@ -1935,127 +1798,13 @@ subroutine PP_limiter(wq, qm, q0, qp, wmr, wpl, w0)
 
    qmin_g = 0.0; qmax_g = 1.0
 
-   eps = min(1.0e-13, (q0 - qmin)**5, q0)
-   !eps2 = min(1.0e-13, (q0 - qmax0)**5, q0)
+   !eps = min(1.0e-13, (q0 - qmin)**6, q0)
+   eps = min(1.0e-13, q0)
    theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
 
    wq = theta*(wpl - q0) + q0
 
 end subroutine PP_limiter
-
-subroutine apply_PPM(wq, qm, q0, qp, pcm, mu)
-
-   real, intent(in) :: qm, q0, qp, pcm, mu
-   real, intent(out) :: wq
-
-   real :: aL, aR, dA, mA, a6
-
-   aL = (5.*q0 + (2.*qm - qp))/6.
-   aL = max(min(q0,qm),aL) ; aL = min(max(q0,qm),aL)
-   aR = (5.*q0 + (2.*qp - qm))/6.
-   aR = max(min(q0,qp),aR) ; aR = min(max(q0,qp),aR)
-
-   dA = aR - aL ; mA = 0.5*(aR + aL)
-   if(pcm <= 0.) then
-      aL = q0 ; aR = q0
-   elseif(dA*(q0-mA) > (dA*dA)/6.) then
-      aL = (3.*q0) - 2.*aR
-   elseif (dA*(q0-mA) < - (dA*dA)/6.) then
-      aR = (3.*q0) - 2.*aL
-   endif
-     
-   a6 = 6.*q0 - 3.*(aR + aL) ! Curvature
-
-   wq = aR - 0.5*mu*((aR - aL) - a6*(1. - (2./3.)*mu))
-
-end subroutine apply_PPM
-
-subroutine fmd(qmd,q0,qp,a,d0,d1)
-
-   real, intent(in) :: q0, qp, a, d0, d1
-   real, intent(out) :: qmd
-
-   real :: b
-
-   call minmod(b, a*d0, (1.0-a)*d1)
-
-   qmd = (1.0-a)*q0 + a*qp - b
-
-end subroutine fmd
-
-subroutine PP_vars(wq, qm, q0, qp, wmr, wpl, ds)
-
-   real, intent(in) :: qm, q0, qp, wmr, wpl, ds
-   real, intent(out) :: wq
-
-   real, dimension(5) :: a, Fm, Fp
-   real :: qmin, qmax, theta, eps, s1, s2, s3, P1, P2, P3, mm
-   real :: qmin0, qmax0, qmin_g, qmax_g, eps2, P0, w1
-   integer :: i
-
-   a(1) = (qm + 298.0*q0 + qp - 54.0*(wmr + wpl))/192.0
-
-   a(2) = (qm - qp - 10.0*(wmr - wpl))/(8.0*ds)
-
-   a(3) = (-(qm + 58.0*q0 + qp) + 30.0*(wmr + wpl))/(8.0*ds**2)
-
-   a(4) = (qp - qm + 2.0*(wmr - wpl))/(ds**3)
-
-   a(5) = (5.0*qm + 50.0*q0 + 5.0*qp - 30.0*(wmr + wpl))/(12.0*ds**4)
-
-   s1 = -sqrt(5.0)*ds/10.0 ; s2 = 0.0 ; s3 = sqrt(5.0)*ds/10.0
-
-   P1 = a(1) + a(2)*s1 + a(3)*s1**2 + a(4)*s1**3 + a(5)*s1**4
-   P2 = a(1) + a(2)*s2 + a(3)*s2**2 + a(4)*s2**3 + a(5)*s2**4
-   P3 = a(1) + a(2)*s3 + a(3)*s3**2 + a(4)*s3**3 + a(5)*s3**4
-   
-   w1 = 5.0/18.0
-   P0 = (q0 - w1*wmr - w1*wpl)/(1.0 - 2.0*w1)
-
-   !qmin0 = min(wmr, P1, P2, P3, wpl)
-   !qmax0 = max(wmr, P1, P2, P3, wpl)
-   qmin0 = min(wmr, P0, wpl)
-   qmax0 = max(wmr, P0, wpl)
-   
-   qmin_g = 0.0; qmax_g = 1.0
-
-   eps = min(1.0e-13, (q0 - qmin0)**5, q0)
-   !eps2 = min(1.0e-13, (q0 - qmax0)**5, q0)
-   theta = min(abs((qmax_g-q0)/(qmax0-q0)), abs((qmin_g-q0+eps)/(qmin0-q0)), 1.0)
-   wq = theta*(wpl - q0) + q0
-
-   !wq = wpl
-
-   !qmin = 0.0
-   !qmax = 0.0
-
-   !Fm(1) = 1.0 ;        Fp(1) = 1.0
-   !Fm(2) = -0.5*ds ;    Fp(2) = 0.5*ds
-   !Fm(3) = 0.0 ;        Fp(3) = 0.25*ds**2
-   !Fm(4) = -ds**3/8.0 ; Fp(4) = ds**3/8.0
-   !Fm(5) = 0.0 ;        Fp(5) = ds**4/16.0
-
-   !do i = 1,5
-   !  qmin = qmin + a(i)*(0.5*(1.0-sign(1.0,a(i)))*Fp(i) + 0.5*(1.0+sign(1.0,a(i)))*Fm(i))
-   !  qmax = qmax + a(i)*(0.5*(1.0+sign(1.0,a(i)))*Fp(i) + 0.5*(1.0-sign(1.0,a(i)))*Fm(i))
-   !enddo
-
-   !if(qmin < qmin0) then
-   !  eps = min(1.0e-13, (q0 - qmin0)**5, q0)
-     !eps = 1.0e-13
-   !  theta = (q0 - eps)/(q0 - qmin0)
-   !  theta = min(abs(theta), 1.0)
-   !  wq = theta*(wpl - q0) + q0
-
-   !elseif(qmax > qmax0) then
-   !  eps = min(1.0e-13, (q0 - qmax)**5, q0)
-   !  theta = (q0 - eps)/(q0 - qmax)
-   !  theta = min(theta, 1.0)
-   !  wq = theta*(wpl - q0) + q0
-
-   !endif
-
-end subroutine PP_vars
 
 subroutine median(md,a,b,c)
 
