@@ -645,17 +645,17 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
         dx = G%dxT(i,j)
 
-        !if(order5 == 1.0) then
+        if(order5 == 1.0) then
             call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, pcm, pcm1, mu, appm)
-        !elseif(order3 == 1.0) then
-        !    call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, pcm, pcm1, mu, appm)
-        !else
-        !    if(u >= 0.0) then
-        !       wq = Tc
-        !    else
-        !       wq = Tp1
-        !    endif 
-        !endif        
+        elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, pcm, pcm1, mu, appm)
+        else
+            if(u >= 0.0) then
+               wq = Tc
+            else
+               wq = Tp1
+            endif 
+        endif        
 
         flux_x(I,j,m) = uhh(I)*wq 
         ppm_x(I,j,k) = appm
@@ -681,19 +681,19 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         pcm1 = G%mask2dCu(I_up+1,j)*G%mask2dCu(I_up,j)*(Tp2-Tp1)*(Tp1-Tc)
         appm = 0.0
 
-        !if(order7 == 1.0) then
+        if(order7 == 1.0) then
             call weno7_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, pcm, pcm1, mu, appm)
-        !elseif(order5 == 1.0) then
-        !    call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, pcm, pcm1, mu, appm)
-        !elseif(order3 == 1.0) then
-        !    call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, pcm, pcm1, mu, appm)
-        !else
-        !    if(u > 0.0) then
-        !       wq = Tc
-        !    else
-        !       wq = Tp1
-        !    endif 
-        !endif        
+        elseif(order5 == 1.0) then
+            call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, pcm, pcm1, mu, appm)
+        elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, pcm, pcm1, mu, appm)
+        else
+            if(u > 0.0) then
+               wq = Tc
+            else
+               wq = Tp1
+            endif 
+        endif        
 
         flux_x(I,j,m) = uhh(I)*wq
         ppm_x(I,j,k) = appm
@@ -1157,19 +1157,19 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         pcm1 = G%mask2dCv(i,J_up+1)*G%mask2dCv(i,J_up)*(Tp2-Tp1)*(Tp1-Tc)
         appm = 0.0
 
-        !if(order7 == 1.0) then
+        if(order7 == 1.0) then
             call weno7_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, pcm, pcm1, mu, appm)
-        !elseif(order5 == 1.0) then
-        !    call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, pcm, pcm1, mu, appm)
-        !elseif(order3 == 1.0) then
-        !    call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, pcm, pcm1, mu, appm)
-        !else
-        !    if(v >= 0.0) then
-        !       wq = Tc
-        !    else
-        !       wq = Tp1
-        !    endif 
-        !endif        
+        elseif(order5 == 1.0) then
+            call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, pcm, pcm1, mu, appm)
+        elseif(order3 == 1.0) then
+            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, pcm, pcm1, mu, appm)
+        else
+            if(v >= 0.0) then
+               wq = Tc
+            else
+               wq = Tp1
+            endif 
+        endif        
 
         flux_y(i,m,J) = vhh(i,J)*wq
         
@@ -1419,9 +1419,11 @@ subroutine weno3_reconstruction_MPP(wq,  qm2, qm, q0, qp, qp2, qp3, u, pcm, pcm1
    real, intent(out) :: wq, appm
 
    if(u >= 0.0) then 
-      call weno3_reconstruction(wq, qm2, qm, q0, qp, qp2, pcm, mu, 1.0, appm)
+      call weno3_reconstruction(wmr, qp2, qp, q0, qm, qm2, pcm, mu, 1.0, appm)
+      call weno3_reconstruction(wpl, qm2, qm, q0, qp, qp2, pcm, mu, 1.0, appm)
    else
-      call weno3_reconstruction(wq, qp3, qp2, qp, q0, qm, pcm1, mu, -1.0, appm)
+      call weno3_reconstruction(wpl, qp3, qp2, qp, q0, qm, pcm1, mu, -1.0, appm)
+      call weno3_reconstruction(wmr, qm, q0, qp, qp2, qp3, pcm1, mu, -1.0, appm)
    endif
 
 end subroutine weno3_reconstruction_MPP
