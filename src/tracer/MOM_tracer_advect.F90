@@ -688,7 +688,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         elseif(order3 == 1.0) then
             call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, pcm, pcm1, mu, appm)
         else
-            if(u > 0.0) then
+            if(u >= 0.0) then
                wq = Tc
             else
                wq = Tp1
