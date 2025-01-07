@@ -218,11 +218,11 @@ subroutine initialize_gyre_tracer(restart, day, G, GV, h,diag, OBC, CS, &
             CS%tr(i,j,k,m) = 0.0
          enddo ; enddo ; enddo
 
-         k=1 ! Square wave
-         do j=js,je ; do i=is,ie
-           if (abs(G%geoLonT(i,j)-CS%x_origin)<0.5*CS%x_width .and. &
-               abs(G%geoLatT(i,j)-CS%y_origin)<0.5*CS%y_width) CS%tr(i,j,k,m) = 1.0
-         enddo ; enddo
+         !k=1 ! Square wave
+         !do j=js,je ; do i=is,ie
+         !  if (abs(G%geoLonT(i,j)-CS%x_origin)<0.5*CS%x_width .and. &
+         !      abs(G%geoLatT(i,j)-CS%y_origin)<0.5*CS%y_width) CS%tr(i,j,k,m) = 1.0
+         !enddo ; enddo
          !k=2 ! Triangle wave
          !do j=js,je ; do i=is,ie
          !  locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
@@ -241,13 +241,13 @@ subroutine initialize_gyre_tracer(restart, day, G, GV, h,diag, OBC, CS, &
          !  locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
          !  if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
          !enddo ; enddo
-         !k=1 ! Cut cylinder
-         !do j=js,je ; do i=is,ie
-         !   locx = (G%geoLonT(i,j)-CS%x_origin)/CS%x_width
-         !   locy = (G%geoLatT(i,j)-CS%y_origin)/CS%y_width
-         !   if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
-         !   if (locx>0.0 .and. abs(locy)<0.2) CS%tr(i,j,k,m) = 0.0
-         !enddo ; enddo
+         k=1 ! Cut cylinder
+         do j=js,je ; do i=is,ie
+            locx = (G%geoLonT(i,j)-CS%x_origin)/CS%x_width
+            locy = (G%geoLatT(i,j)-CS%y_origin)/CS%y_width
+            if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
+            if (locx>0.0 .and. abs(locy)<0.2) CS%tr(i,j,k,m) = 0.0
+         enddo ; enddo
 
          call set_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp)
       endif 
