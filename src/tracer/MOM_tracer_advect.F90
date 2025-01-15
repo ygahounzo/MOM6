@@ -19,8 +19,8 @@ use MOM_tracer_registry, only : tracer_registry_type, tracer_type
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_spatial_means, only : array_global_min_max
-use MOM_tracer_advect_weno, only : weno3_reconstruction_MPP, weno5_reconstruction_MPP
-use MOM_tracer_advect_weno, only : weno7_reconstruction_MPP, weno9_reconstruction_MPP
+use MOM_tracer_advect_weno, only : weno3_reconstruction, weno5_reconstruction
+use MOM_tracer_advect_weno, only : weno7_reconstruction, weno9_reconstruction
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -35,14 +35,10 @@ type, public :: tracer_advect_CS ; private
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                                    !< timing of diagnostic output.
   logical :: debug                 !< If true, write verbose checksums for debugging purposes.
-  logical :: usePPM                !< If true, use PPM instead of PLM
-  logical :: useHuynh              !< If true, use the Huynh scheme for PPM interface values
-  logical :: useWENO5              !< if true, use WENO5 instead of PPM or PLM
-  logical :: useWENO7              !< if true, use WENO7 instead of WENO5, PPM or PLM
-  logical :: useWENO9              !< if true, use WENO9 instead of WENO7, WENO5, PPM or PLM
   logical :: useHuynhStencilBug = .false. !< If true, use the incorrect stencil width.
                                    !! This is provided for compatibility with legacy simuations.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
+  integer :: advect_scheme = -1 !< Determines which reconstruction to use
 
 end type tracer_advect_CS
 
@@ -51,6 +47,14 @@ integer :: id_clock_advect
 integer :: id_clock_pass
 integer :: id_clock_sync
 !>@}
+
+! The following are private parameter constants
+integer, parameter :: ADVECT_PLM        = 0 !< PLM advection scheme
+integer, parameter :: ADVECT_PPM        = 1 !< PPM advection scheme
+integer, parameter :: ADVECT_PPMH3      = 2 !< PPM:H3 advection scheme
+integer, parameter :: ADVECT_WENO5      = 3 !< WENO5 advection scheme
+integer, parameter :: ADVECT_WENO7      = 4 !< WENO7 advection scheme
+integer, parameter :: ADVECT_WENO9      = 5 !< WENO9 advection scheme
 
 contains
 
@@ -115,6 +119,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz, itt, ntr, do_any
   integer :: isv, iev, jsv, jev ! The valid range of the indices.
   integer :: IsdB, IedB, JsdB, JedB
+  integer :: local_advect_scheme
 
   domore_u(:,:) = .false.
   domore_v(:,:) = .false.
@@ -132,15 +137,26 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   call cpu_clock_begin(id_clock_advect)
   x_first = (MOD(G%first_direction,2) == 0)
 
+  ! Advection scheme use
+  local_advect_scheme = CS%advect_scheme
+
   ! increase stencil size for Colella & Woodward PPM
-  use_PPM_stencil = CS%usePPM .and. .not. CS%useHuynhStencilBug
-  if (use_PPM_stencil) stencil = 3
-  if (CS%useWENO5) stencil = 5
-  if (CS%useWENO7) stencil = 7 
-  if (CS%useWENO9) stencil = 9 
+  if ((local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) .and. &
+          .not. CS%useHuynhStencilBug) then
+          stencil = 3
+  elseif (local_advect_scheme == ADVECT_WENO5) then
+          stencil = 5
+  elseif (local_advect_scheme == ADVECT_WENO7) then
+          stencil = 7 
+  elseif (local_advect_scheme == ADVECT_WENO9) then
+          stencil = 9 
+  endif 
 
   ntr = Reg%ntr
   Idt = 1.0 / dt
+  
+  !print*, 'dt = ', dt
+  !print*, 'CS%dt = ', CS%dt
 
   max_iter = 2*INT(CEILING(dt/CS%dt)) + 1
 
@@ -263,16 +279,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       do k=1,nz ; if (domore_k(k) > 0) then
         ! First, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, CS%usePPM, &
-                      CS%useHuynh, CS%useWENO5, CS%useWENO7, CS%useWENO9)
+                      isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         !  Next, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, CS%usePPM, CS%useHuynh, &
-                      CS%useWENO5, CS%useWENO7, CS%useWENO9)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -287,8 +301,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       do k=1,nz ; if (domore_k(k) > 0) then
         ! First, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, CS%usePPM, &
-                      CS%useHuynh, CS%useWENO5, CS%useWENO7, CS%useWENO9)
+                      isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, local_advect_scheme)
 
       endif ; enddo
 
@@ -296,9 +309,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       do k=1,nz ; if (domore_k(k) > 0) then
         ! Next, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, CS%usePPM, CS%useHuynh, &
-                      CS%useWENO5, CS%useWENO7, CS%useWENO9)
-
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -343,7 +354,7 @@ end subroutine advect_tracer
 !> This subroutine does 1-d flux-form advection in the zonal direction using
 !! a monotonic piecewise linear scheme.
 subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, usePPM, useHuynh, useWENO5, useWENO7, useWENO9)
+                    is, ie, js, je, k, G, GV, US, local_advect_scheme)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr  !< The number of tracers
@@ -364,12 +375,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer,                                   intent(in)    :: je  !< The ending tracer j-index to work on
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
-  logical,                                   intent(in)    :: usePPM !< If true, use PPM instead of PLM
-  logical,                                   intent(in)    :: useHuynh !< If true, use the Huynh scheme
-                                                                     !! for PPM interface values
-  logical,                                   intent(in)    :: useWENO5 !< If true, use WENO5 instead of PPM or PLM
-  logical,                                   intent(in)    :: useWENO7 !< If true, use WENO7 instead of WENO5, PPM or PLM
-  logical,                                   intent(in)    :: useWENO9 !< If true, use WENO9 instead of WENO7, WENO5, PPM or PLM
+  integer,                                   intent(in)    :: local_advect_scheme !< Advection scheme to use
 
   real, dimension(SZI_(G),ntr) :: &
     slope_x             ! The concentration slope per grid point [conc].
@@ -410,16 +416,17 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   real :: wq, Tpp, Tmm, Tppp, Tmmm
   real :: order3, order5, order7, order9
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
-  real :: Tming(ntr), Tmaxg(ntr), u, Tmin, Tmax
+  real :: u, Tmin, Tmax
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
   domore_u_initial = domore_u
 
-  usePLMslope = .not. (usePPM .and. useHuynh)
+  usePLMslope = .false.
+  if(local_advect_scheme == ADVECT_PLM) usePLMslope = .true.
   ! stencil for calculating slope values
   stencil = 1
-  if (usePPM .and. .not. useHuynh) stencil = 2
+  if (local_advect_scheme == ADVECT_PPM) stencil = 2
 
   min_h = 0.1*GV%Angstrom_H
   tiny_h = tiny(min_h)
@@ -427,12 +434,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
   do I=is-1,ie ; CFL(I) = 0.0 ; enddo
   
-  do m = 1,ntr
-    !Tming(m) = 0.0 ; Tmaxg(m) = 1.0 
-    !Tming(m) = minval(Tr(m)%t(:,:,k)) ; Tmaxg(m) = maxval(Tr(m)%t(:,:,k))
-    call array_global_min_max(Tr(m)%t(:,:,k), G, 1, Tming(m), Tmaxg(m))
-  enddo
-
   do j=js,je ; if (domore_u(j,k)) then
     domore_u(j,k) = .false.
 
@@ -507,7 +508,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
       enddo
     endif ; endif
 
-
     ! Calculate the i-direction fluxes of each tracer, using as much
     ! the minimum of the remaining mass flux (uhr) and the half the mass
     ! in the cell plus whatever part of its half of the mass flux that
@@ -544,7 +544,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
     enddo
 
-    if (usePPM) then
+    if(local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) then
       do m=1,ntr ; do I=is-1,ie
         ! centre cell depending on upstream direction
         if (uhh(I) >= 0.0) then
@@ -556,7 +556,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         ! Implementation of PPM-H3
         Tp = T_tmp(i_up+1,m) ; Tc = T_tmp(i_up,m) ; Tm = T_tmp(i_up-1,m)
 
-        if (useHuynh) then
+        if(local_advect_scheme == ADVECT_PPMH3) then
           aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
           aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
           aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
@@ -586,7 +586,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         endif
       enddo ; enddo
 
-    elseif(useWENO5) then
+    elseif(local_advect_scheme == ADVECT_WENO5) then
       do m=1,ntr ; do I=is-1,ie
         
         i_up = i
@@ -598,13 +598,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         Tp1 = T_tmp(i_up+1,m); Tp2 = T_tmp(i_up+2,m); Tp3 = T_tmp(i_up+3,m)
 
         u = uhh(I)
-        !Tmin = Tming(m) ; Tmax = Tmaxg(m)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
         if(order5 == 1.0) then
-            call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -617,7 +616,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
       enddo ; enddo
 
-    elseif(useWENO7) then
+    elseif(local_advect_scheme == ADVECT_WENO7) then
       do m=1,ntr ; do I=is-1,ie
         
         i_up = i
@@ -630,16 +629,14 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         Tp1 = T_tmp(i_up+1,m); Tp2 = T_tmp(i_up+2,m); Tp3 = T_tmp(i_up+3,m); Tp4 = T_tmp(i_up+4,m)
 
         u = uhh(I)
-        !Tmin = Tming(m) ; Tmax = Tmaxg(m)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
-        !print*, Tr(m)%Tmingg
 
         if(order7 == 1.0) then
-            call weno7_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -652,7 +649,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
       enddo ; enddo
 
-    elseif(useWENO9) then ! WENO9
+    elseif(local_advect_scheme == ADVECT_WENO9) then
       do m=1,ntr ; do I=is-1,ie
 
         i_up = i
@@ -667,17 +664,16 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         Tm4 = T_tmp(i_up-4,m); Tp5 = T_tmp(i_up+5,m)
 
         u = uhh(I)
-        !Tmin = Tming(m) ; Tmax = Tmaxg(m)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
         if(order9 == 1.0) then
-            call weno9_reconstruction_MPP(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, Tmin, Tmax)
+            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, Tmin, Tmax)
         elseif(order7 == 1.0) then
-            call weno7_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -837,7 +833,7 @@ end subroutine advect_x
 !> This subroutine does 1-d flux-form advection using a monotonic piecewise
 !! linear scheme.
 subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, usePPM, useHuynh, useWENO5, useWENO7, useWENO9)
+                    is, ie, js, je, k, G, GV, US, local_advect_scheme)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr !< The number of tracers
@@ -858,12 +854,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer,                                   intent(in)    :: je  !< The ending tracer j-index to work on
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
-  logical,                                   intent(in)    :: usePPM !< If true, use PPM instead of PLM
-  logical,                                   intent(in)    :: useHuynh !< If true, use the Huynh scheme
-                                                                     !! for PPM interface values
-  logical,                                   intent(in)    :: useWENO5 !< If true, use WENO5 instead of PPM or PLM
-  logical,                                   intent(in)    :: useWENO7 !< If true, use WENO7 instead of WENO5, PPM or PLM
-  logical,                                   intent(in)    :: useWENO9 !< If true, use WENO9 instead of WENO7, WENO5, PPM or PLM
+  integer,                                   intent(in)    :: local_advect_scheme !< Advection scheme to use
 
   real, dimension(SZI_(G),ntr,SZJ_(G)) :: &
     slope_y                     ! The concentration slope per grid point [conc].
@@ -906,17 +897,12 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: Tming(ntr), Tmaxg(ntr), v, Tmin, Tmax
 
-  usePLMslope = .not. (usePPM .and. useHuynh)
+  usePLMslope = .false.
+  if(local_advect_scheme == ADVECT_PLM) usePLMslope = .true.
   ! stencil for calculating slope values
   stencil = 1
-  if (usePPM .and. .not. useHuynh) stencil = 2
+  if (local_advect_scheme == ADVECT_PPM) stencil = 2
   
-  do m = 1,ntr
-    !Tming(m) = 0.0 ; Tmaxg(m) = 1.0 
-    !Tming(m) = minval(Tr(m)%t(:,:,k)) ; Tmaxg(m) = maxval(Tr(m)%t(:,:,k))
-    call array_global_min_max(Tr(m)%t(:,:,k), G, 1, Tming(m), Tmaxg(m))
-  enddo
-
   min_h = 0.1*GV%Angstrom_H
   tiny_h = tiny(min_h)
   h_neglect = GV%H_subroundoff
@@ -1047,7 +1033,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
     enddo
 
-    if (usePPM) then
+    if(local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) then
       do m=1,ntr ; do i=is,ie
         ! centre cell depending on upstream direction
         if (vhh(i,J) >= 0.0) then
@@ -1059,7 +1045,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         ! Implementation of PPM-H3
         Tp = T_tmp(i,m,j_up+1) ; Tc = T_tmp(i,m,j_up) ; Tm = T_tmp(i,m,j_up-1)
 
-        if (useHuynh) then
+        if (local_advect_scheme == ADVECT_PPMH3) then
           aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
           aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
           aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
@@ -1089,7 +1075,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         endif
       enddo ; enddo
 
-    elseif(useWENO5) then ! WENO5
+    elseif(local_advect_scheme == ADVECT_WENO5) then ! WENO5
       do m=1,ntr ; do i=is,ie
 
         j_up = j
@@ -1101,13 +1087,12 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         Tp1 = T_tmp(i,m,j_up+1); Tp2 = T_tmp(i,m,j_up+2); Tp3 = T_tmp(i,m,j_up+3)
 
         v = vhh(i,J)
-        !Tmin = Tming(m) ; Tmax = Tmaxg(m)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
         if(order5 == 1.0) then
-            call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1120,7 +1105,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
       enddo ; enddo
 
-    elseif(useWENO7) then ! WENO7
+    elseif(local_advect_scheme == ADVECT_WENO7) then ! WENO7
       do m=1,ntr ; do i=is,ie
 
         j_up = j
@@ -1133,15 +1118,14 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         Tp1 = T_tmp(i,m,j_up+1); Tp2 = T_tmp(i,m,j_up+2); Tp3 = T_tmp(i,m,j_up+3); Tp4 = T_tmp(i,m,j_up+4)
 
         v = vhh(i,J)
-        !Tmin = Tming(m) ; Tmax = Tmaxg(m)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
         if(order7 == 1.0) then
-            call weno7_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1154,7 +1138,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
       enddo ; enddo
 
-    elseif(useWENO9) then ! WENO9
+    elseif(local_advect_scheme == ADVECT_WENO9) then ! WENO9
       do m=1,ntr ; do i=is,ie
 
         j_up = j
@@ -1169,17 +1153,16 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         Tm4 = T_tmp(i,m,j_up-4); Tp5 = T_tmp(i,m,j_up+5)
 
         v = vhh(i,J)
-        !Tmin = Tming(m) ; Tmax = Tmaxg(m)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
         if(order9 == 1.0) then
-            call weno9_reconstruction_MPP(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, Tmin, Tmax)
+            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, Tmin, Tmax)
         elseif(order7 == 1.0) then
-            call weno7_reconstruction_MPP(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction_MPP(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1374,25 +1357,23 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
           , default='PLM')
   select case (trim(mesg))
     case ("PLM")
-      CS%usePPM = .false.
+      CS%advect_scheme = ADVECT_PLM
     case ("PPM:H3")
-      CS%usePPM = .true.
-      CS%useHuynh = .true.
+      CS%advect_scheme = ADVECT_PPMH3
     case ("PPM")
-      CS%usePPM = .true.
-      CS%useHuynh = .false.
+      CS%advect_scheme = ADVECT_PPM
     case ("WENO5")
-      CS%useWENO5 = .true.
+      CS%advect_scheme = ADVECT_WENO5
     case ("WENO7")
-      CS%useWENO7 = .true.
+      CS%advect_scheme = ADVECT_WENO7
     case ("WENO9")
-      CS%useWENO9 = .true.
+      CS%advect_scheme = ADVECT_WENO9
     case default
       call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
            "Unknown TRACER_ADVECTION_SCHEME = "//trim(mesg))
   end select
 
-  if (CS%useHuynh) then
+  if (CS%advect_scheme == ADVECT_PPMH3) then
     call get_param(param_file, mdl, "USE_HUYNH_STENCIL_BUG", &
         CS%useHuynhStencilBug, &
         desc="If true, use a stencil width of 2 in PPM:H3 tracer advection. " &
@@ -1423,17 +1404,12 @@ end subroutine tracer_advect_end
 !!
 !! \section section_mom_advect_intro
 !!
-!!  * advect_tracer advects tracer concentrations using a combination
-!!  of the modified flux advection scheme from Easter (Mon. Wea. Rev.,
-!!  1993) with tracer distributions given by the monotonic modified
-!!  van Leer scheme proposed by Lin et al. (Mon. Wea. Rev., 1994).
-!!  This scheme conserves the total amount of tracer while avoiding
-!!  higher order accuracy scheme is needed, suggest monotonic
+!!  * advect_tracer advects tracer concentrations using a
+!!  higher order accuracy scheme such as monotonic
 !!  piecewise parabolic method, as described in Carpenter et al.
-!!  (MWR, 1990).
+!!  (MWR, 1990); 5th, 7th, 9th-order WENO reconstruction methods.
 !!
-!!  * advect_tracer has 4 arguments, described below. This
-!!  subroutine determines the volume of a layer in a grid cell at the
+!!  This subroutine determines the volume of a layer in a grid cell at the
 !!  previous instance when the tracer concentration was changed, so
 !!  it is essential that the volume fluxes should be correct.  It is
 !!  also important that the tracer advection occurs before each

@@ -11,46 +11,16 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public weno3_reconstruction_MPP 
-public weno5_reconstruction_MPP
-public weno7_reconstruction_MPP
-public weno9_reconstruction_MPP
+public weno3_reconstruction 
+public weno5_reconstruction
+public weno7_reconstruction
+public weno9_reconstruction
 public tracer_min_max_init
 
 contains
 
-!> Find the min and max of the tracer to use in max-principle limiter with WENO reconstructions
-subroutine tracer_min_max_init(Reg, G, GV)
-
-  type(tracer_registry_type), pointer    :: Reg  !< pointer to the tracer registry
-  type(ocean_grid_type),      intent(in) :: G    !< The ocean's grid structure
-  type(verticalGrid_type),    intent(in) :: GV   !< ocean vertical grid structure
-
-  type(tracer_type), pointer :: Tr=>NULL()
-  integer :: k, nz, m, ntr 
-  real :: Tmin, Tmax ! Global min and max of tracer
-
-  nz = GV%ke ; ntr = Reg%ntr
-
-  do m=1,ntr
-    Tr => Reg%Tr(m)
-
-    do k=1,nz
-
-      call array_global_min_max(Tr%t(:,:,k), G, k, Tmin, Tmax)
-
-      Tr%Tmingg = Tmin
-      Tr%Tmaxgg = Tmax
-
-      !print*, m, k, Tr%Tmingg, Tr%Tmaxgg
-
-    enddo
-  enddo
-
-end subroutine tracer_min_max_init
-
 !> 3rd weno reconstruction subroutine and limiter
-subroutine weno3_reconstruction_MPP(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
+subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
 
    real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 ! tracer concentration from i-2 to  i+3 respectively
    real, intent(in) :: u                         ! advection velocity
@@ -62,25 +32,25 @@ subroutine weno3_reconstruction_MPP(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qma
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
    
-   w0 = 1.0
-   !w0 = 1.0/6.0
+   !w0 = 1.0
+   w0 = 1.0/6.0
 
    if(u >= 0.0) then 
-      call weno3_reconstruction(wmr, qp2, qp, q0, qm, qm2)
-      call weno3_reconstruction(wpl, qm2, qm, q0, qp, qp2)
+      call weno3_reconstruction_tmp(wmr, qp2, qp, q0, qm, qm2)
+      call weno3_reconstruction_tmp(wpl, qm2, qm, q0, qp, qp2)
       ! maximum-principle limiter
       call PP_limiter(wq, qm, q0, qp, wmr, wpl, w0, qmin, qmax)
    else
-      call weno3_reconstruction(wpl, qp3, qp2, qp, q0, qm)
-      call weno3_reconstruction(wmr, qm, q0, qp, qp2, qp3)
+      call weno3_reconstruction_tmp(wpl, qp3, qp2, qp, q0, qm)
+      call weno3_reconstruction_tmp(wmr, qm, q0, qp, qp2, qp3)
       ! maximum-principle limiter
       call PP_limiter(wq, qp2, qp, q0, wmr, wpl, w0, qmin, qmax)
    endif
 
-end subroutine weno3_reconstruction_MPP
+end subroutine weno3_reconstruction
 
 !> 3rd-order weno reconstruction subroutine
-subroutine weno3_reconstruction(wq, qmm, qm, q0, qp, qpp)
+subroutine weno3_reconstruction_tmp(wq, qmm, qm, q0, qp, qpp)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp
    real, intent(out) :: wq
@@ -111,7 +81,7 @@ subroutine weno3_reconstruction(wq, qmm, qm, q0, qp, qpp)
       ! Monotonicity Preserving
       call apply_MP(wq, qmm, qm, q0, qp, qpp)
 
-end subroutine weno3_reconstruction
+end subroutine weno3_reconstruction_tmp
 
 subroutine weno3_poly(P1, P2, qm, q0, qp)
 
@@ -135,7 +105,7 @@ subroutine weno3_weights(b1, b2, qm, q0, qp)
 end subroutine weno3_weights
 
 !> 5th-order weno reconstruction subroutine and limiter
-subroutine weno5_reconstruction_MPP(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
+subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
 
    real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 ! tracer concentration from i-2 to  i+3 respectively
    real, intent(in) :: u                         ! advection velocity
@@ -147,22 +117,22 @@ subroutine weno5_reconstruction_MPP(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
 
-   w0 = 5.0/18.0
-   !w0 = 1.0/12.0
+   !w0 = 5.0/18.0
+   w0 = 1.0/12.0
 
    if(u >= 0.0) then
-      call weno5_reconstruction(wmr, qp2, qp, q0, qm, qm2)
-      call weno5_reconstruction(wpl, qm2, qm, q0, qp, qp2)
+      call weno5_reconstruction_tmp(wmr, qp2, qp, q0, qm, qm2)
+      call weno5_reconstruction_tmp(wpl, qm2, qm, q0, qp, qp2)
       call PP_limiter(wq, qm, q0, qp, wmr, wpl, w0, qmin, qmax)
    else
-      call weno5_reconstruction(wpl, qp3, qp2, qp, q0, qm)
-      call weno5_reconstruction(wmr, qm, q0, qp, qp2, qp3)
+      call weno5_reconstruction_tmp(wpl, qp3, qp2, qp, q0, qm)
+      call weno5_reconstruction_tmp(wmr, qm, q0, qp, qp2, qp3)
       call PP_limiter(wq, qp2, qp, q0, wmr, wpl, w0, qmin, qmax)
    endif
 
-end subroutine weno5_reconstruction_MPP
+end subroutine weno5_reconstruction
 
-subroutine weno5_reconstruction(wq, qmm, qm, q0, qp, qpp)
+subroutine weno5_reconstruction_tmp(wq, qmm, qm, q0, qp, qpp)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp
    real, intent(out) :: wq
@@ -199,7 +169,7 @@ subroutine weno5_reconstruction(wq, qmm, qm, q0, qp, qpp)
    ! Monotonicity Preserving
    call apply_MP(wq, qmm, qm, q0, qp, qpp)
 
-end subroutine weno5_reconstruction
+end subroutine weno5_reconstruction_tmp
 
 subroutine weno5_weights(b0, b1, b2, qmm, qm, q0, qp, qpp)
 
@@ -239,7 +209,7 @@ subroutine weno5_poly(P0, P1, P2, qmm, qm, q0, qp, qpp)
 
 end subroutine weno5_poly
 
-subroutine weno7_reconstruction_MPP(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qmin, qmax)
+subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qmin, qmax)
 
    real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 ! tracer concentration from i-3 to  i+4 respectively
    real, intent(in) :: u                         ! advection velocity
@@ -251,22 +221,22 @@ subroutine weno7_reconstruction_MPP(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
 
-   w0 = (322.0-13.0*sqrt(70.0))/1800.0
-   !w0 = 1.0/30.0
+   !w0 = (322.0-13.0*sqrt(70.0))/1800.0
+   w0 = 1.0/20.0
 
    if(u >= 0.0) then
-      call weno7_reconstruction(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
-      call weno7_reconstruction(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+      call weno7_reconstruction_tmp(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
+      call weno7_reconstruction_tmp(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
       call PP_limiter(wq, qm1, q0, qp1, wmr, wpl, w0, qmin, qmax)
    else
-      call weno7_reconstruction(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2)
-      call weno7_reconstruction(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4)
+      call weno7_reconstruction_tmp(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2)
+      call weno7_reconstruction_tmp(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4)
       call PP_limiter(wq, qp2, qp1, q0, wmr, wpl, w0, qmin, qmax)
    endif
 
-end subroutine weno7_reconstruction_MPP
+end subroutine weno7_reconstruction
 
-subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+subroutine weno7_reconstruction_tmp(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
 
    real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3
    real, intent(out) :: wq
@@ -306,7 +276,7 @@ subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
    ! Monotonicity Preserving
    call apply_MP(wq, qm2, qm1, q0, qp1, qp2)
 
-end subroutine weno7_reconstruction
+end subroutine weno7_reconstruction_tmp
 
 subroutine weno7_poly(P0, P1, P2, P3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
 
@@ -355,9 +325,9 @@ subroutine weno7_weights(b0, b1, b2, b3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
    
 end subroutine weno7_weights
 
-subroutine weno9_reconstruction_MPP(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5, u, qmin, qmax)
+subroutine weno9_reconstruction(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5, u, qmin, qmax)
 
-   real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5 ! tracer concentration from i-3 to i+4 respectively
+   real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5 ! tracer concentration from cell i-4 to i+5
    real, intent(in) :: u                         ! advection velocity
    real, intent(in) :: qmin, qmax                ! global min and max of tracer concentration
    real, intent(out) :: wq                       ! weno reconstruction at the interface i+1/2
@@ -367,21 +337,22 @@ subroutine weno9_reconstruction_MPP(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, q
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
 
-   w0 = 0.5*0.1294849661688697
+   !w0 = 0.5*0.1294849661688697
+   w0 = 1.0/30.0
 
    if(u >= 0.0) then
-      call weno9_reconstruction(wmr, qp4, qp3, qp2, qp1, q0, qm1, qm2, qm3, qm4)
-      call weno9_reconstruction(wpl, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
+      call weno9_reconstruction_tmp(wmr, qp4, qp3, qp2, qp1, q0, qm1, qm2, qm3, qm4)
+      call weno9_reconstruction_tmp(wpl, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
       call PP_limiter(wq, qm1, q0, qp1, wmr, wpl, w0, qmin, qmax)
    else
-      call weno9_reconstruction(wpl, qp5, qp4, qp3, qp2, qp1, q0, qm1, qm2, qm3)
-      call weno9_reconstruction(wmr, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5)
+      call weno9_reconstruction_tmp(wpl, qp5, qp4, qp3, qp2, qp1, q0, qm1, qm2, qm3)
+      call weno9_reconstruction_tmp(wmr, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5)
       call PP_limiter(wq, qp2, qp1, q0, wmr, wpl, w0, qmin, qmax)
    endif
 
-end subroutine weno9_reconstruction_MPP
+end subroutine weno9_reconstruction
 
-subroutine weno9_reconstruction(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
+subroutine weno9_reconstruction_tmp(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
 
    real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4
    real, intent(out) :: wq
@@ -420,7 +391,7 @@ subroutine weno9_reconstruction(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
 
    wq = w0*P0 + w1*P1 + w2*P2 + w3*P3 + w4*P4
 
-end subroutine weno9_reconstruction
+end subroutine weno9_reconstruction_tmp
 
 subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
 
@@ -639,6 +610,36 @@ subroutine minmod3(mab,a1,a2,a3,a4)
    endif
 
 end subroutine minmod3
+
+!> Find the min and max of the tracer to use in max-principle limiter with WENO reconstructions
+subroutine tracer_min_max_init(Reg, G, GV)
+
+  type(tracer_registry_type), pointer    :: Reg  !< pointer to the tracer registry
+  type(ocean_grid_type),      intent(in) :: G    !< The ocean's grid structure
+  type(verticalGrid_type),    intent(in) :: GV   !< ocean vertical grid structure
+
+  type(tracer_type), pointer :: Tr=>NULL()
+  integer :: k, nz, m, ntr 
+  real :: Tmin, Tmax ! Global min and max of tracer
+
+  nz = GV%ke ; ntr = Reg%ntr
+
+  do m=1,ntr
+    Tr => Reg%Tr(m)
+
+    do k=1,nz
+
+      call array_global_min_max(Tr%t(:,:,k), G, k, Tmin, Tmax)
+
+      Tr%Tmingg = Tmin
+      Tr%Tmaxgg = Tmax
+
+      !print*, m, k, Tr%Tmingg, Tr%Tmaxgg
+
+    enddo
+  enddo
+
+end subroutine tracer_min_max_init
 
 !> \namespace mom_tracer_advect
 !!
