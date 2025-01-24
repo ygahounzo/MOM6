@@ -23,6 +23,10 @@ use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_variables,       only : surface
 use MOM_verticalGrid,    only : verticalGrid_type
+use MOM_open_boundary, only : ocean_OBC_type, OBC_NONE
+use MOM_open_boundary,   only : OBC_segment_type, register_segment_tracer
+use MOM_tracer_registry, only : tracer_registry_type, tracer_type
+use MOM_tracer_registry, only : tracer_name_lookup
 
 implicit none ; private
 
@@ -31,6 +35,7 @@ implicit none ; private
 public register_gyre_tracer, initialize_gyre_tracer
 public gyre_tracer_surface_state, gyre_tracer_end
 public gyre_tracer_column_physics, gyre_stock
+public register_gyre_tracer_segments
 
 integer, parameter :: NTR = 1  !< The number of tracers in this module.
 
@@ -256,6 +261,32 @@ subroutine initialize_gyre_tracer(restart, day, G, GV, h,diag, OBC, CS, &
 
 end subroutine initialize_gyre_tracer
 
+subroutine register_gyre_tracer_segments(GV, OBC, tr_Reg, param_file)
+  type(verticalGrid_type),    intent(in)    :: GV         !< ocean vertical grid structure
+  type(ocean_OBC_type),       pointer       :: OBC        !< Open boundary structure
+  type(tracer_registry_type), pointer       :: tr_Reg     !< Tracer registry
+  type(param_file_type),      intent(in)    :: param_file !< file to parse for  model parameter values
+
+! Local variables
+  integer :: n, ntr_id
+  character(len=32) :: name
+  type(OBC_segment_type), pointer :: segment => NULL() ! pointer to segment type list
+  type(tracer_type), pointer :: tr_ptr => NULL()
+
+  real :: T_init
+
+  T_init = 0.0
+
+  if (.not. associated(OBC)) return
+
+    segment=>OBC%segment(1)
+    if (.not. segment%on_pe) return
+
+    write(name,'("tr",I1.1)') 1
+    call tracer_name_lookup(tr_Reg, ntr_id, tr_ptr, name)
+    call register_segment_tracer(tr_ptr, ntr_id, param_file, GV, segment, OBC_scalar=T_init)
+
+end subroutine register_gyre_tracer_segments
 
 !>   Applies diapycnal diffusion and any other column tracer physics or chemistry to the tracers
 !! from this package.  This is a simple example of a set of advected passive tracers.

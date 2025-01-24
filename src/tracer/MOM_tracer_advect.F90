@@ -139,7 +139,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
 
   ! Advection scheme use
   local_advect_scheme = CS%advect_scheme
-
+  
   ! increase stencil size for Colella & Woodward PPM
   if ((local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) .and. &
           .not. CS%useHuynhStencilBug) then
@@ -1351,8 +1351,8 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
           "  PLM    - Piecewise Linear Method\n"//&
           "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
           "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n"// &
-          "  WENO5  - Weighted Essentially Non-Oscillatory, 5th order"//&
-          "  WENO7  - Weighted Essentially Non-Oscillatory, 7th order"//&
+          "  WENO5  - Weighted Essentially Non-Oscillatory, 5th order\n"//&
+          "  WENO7  - Weighted Essentially Non-Oscillatory, 7th order\n"//&
           "  WENO9  - Weighted Essentially Non-Oscillatory, 9th order"&
           , default='PLM')
   select case (trim(mesg))

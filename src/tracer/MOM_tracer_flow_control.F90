@@ -74,6 +74,7 @@ use nw2_tracers, only : initialize_nw2_tracers, nw2_tracers_end
 use gyre_tracer, only : register_gyre_tracer, initialize_gyre_tracer
 use gyre_tracer, only : gyre_tracer_surface_state, gyre_tracer_end
 use gyre_tracer, only : gyre_tracer_column_physics, gyre_stock, gyre_tracer_CS
+use gyre_tracer, only : register_gyre_tracer_segments
 
 implicit none ; private
 
@@ -388,6 +389,8 @@ subroutine call_tracer_register_obc_segments(GV, param_file, CS, tr_Reg, OBC)
 
   if (CS%use_MOM_generic_tracer) &
       call register_MOM_generic_tracer_segments(CS%MOM_generic_tracer_CSp, GV, OBC, tr_Reg, param_file)
+  if (CS%use_gyre_tracer) &
+      call register_gyre_tracer_segments(GV, OBC, tr_Reg, param_file)
 
 end subroutine call_tracer_register_obc_segments
 
