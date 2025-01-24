@@ -97,16 +97,12 @@ integer, parameter :: ROBUST_ENSTRO     = 3
 integer, parameter :: SADOURNY75_ENSTRO = 4
 integer, parameter :: ARAKAWA_LAMB81    = 5
 integer, parameter :: AL_BLEND          = 6
-integer, parameter :: WENO5_ENSTRO = 7 
-integer, parameter :: WENO7_ENSTRO = 8 
 character*(20), parameter :: SADOURNY75_ENERGY_STRING = "SADOURNY75_ENERGY"
 character*(20), parameter :: ARAKAWA_HSU_STRING = "ARAKAWA_HSU90"
 character*(20), parameter :: ROBUST_ENSTRO_STRING = "ROBUST_ENSTRO"
 character*(20), parameter :: SADOURNY75_ENSTRO_STRING = "SADOURNY75_ENSTRO"
 character*(20), parameter :: ARAKAWA_LAMB_STRING = "ARAKAWA_LAMB81"
 character*(20), parameter :: AL_BLEND_STRING = "ARAKAWA_LAMB_BLEND"
-character*(20), parameter :: WENO5_ENSTRO_STRING = "WENO5_ENSTRO"
-character*(20), parameter :: WENO7_ENSTRO_STRING = "WENO7_ENSTRO"
 !>@}
 !>@{ Enumeration values for KE_Scheme
 integer, parameter :: KE_ARAKAWA        = 10
@@ -193,8 +189,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
     PV, &       ! A diagnostic array of the potential vorticities [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1].
     RV          ! A diagnostic array of the relative vorticities [T-1 ~> s-1].
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: CAuS ! Stokes contribution to CAu [L T-2 ~> m s-2]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: CAvS ! Stokes contribution to CAv [L T-2 ~> m s-2]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)) :: CAuS ! Stokes contribution to CAu [L T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(G)) :: CAvS ! Stokes contribution to CAv [L T-2 ~> m s-2]
   real :: fv1, fv2, fv3, fv4   ! (f+rv)*v at the 4 points surrounding a u points[L T-2 ~> m s-2]
   real :: fu1, fu2, fu3, fu4   ! -(f+rv)*u at the 4 points surrounding a v point [L T-2 ~> m s-2]
   real :: max_fv, max_fu       ! The maximum of the neighboring Coriolis accelerations [L T-2 ~> m s-2]
@@ -230,9 +226,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: UHeff, VHeff  ! More temporary variables [H L2 T-1 ~> m3 s-1 or kg s-1].
   real :: QUHeff,QVHeff ! More temporary variables [H L2 T-2 ~> m3 s-2 or kg s-2].
   integer :: i, j, k, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  integer :: order7, order5, order3 ! Order of accuracy for the WENO scheme to apply
   logical :: Stokes_VF
-  real :: u_v, v_u, wq_v, wq_u ! u_v is the u velocity at v point, v_u is the v velocity at u point 
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
@@ -690,73 +684,51 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         CAu(I,j,k) = (((a(I,j) * vh(i+1,J,k)) +  (c(I,j) * vh(i,J-1,k)))  + &
                       ((b(I,j) * vh(i,J,k)) +  (d(I,j) * vh(i+1,J-1,k)))) * G%IdxCu(I,j)
       enddo ; enddo
-
-    elseif (CS%Coriolis_Scheme == WENO5_ENSTRO) then
+    elseif (CS%Coriolis_Scheme == ROBUST_ENSTRO) then
+      ! An enstrophy conserving scheme robust to vanishing layers
+      ! Note: Heffs are in lieu of h_at_v that should be returned by the
+      !       continuity solver. AJA
       do j=js,je ; do I=Isq,Ieq
-        v_u = 0.25 * G%IdxCu(I,j) * ((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
-
-        order3 = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCu(I,j) * & 
-                       G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
-
-        order5 = order3 * G%mask2dCu(i,j-3) * G%mask2dCu(i,j+3) 
-
-        if (order5 == 1) then
-            ! 5th order reconstruction
-            call weno5_reconstruction(wq_u, q(I,J-3),q(I,J-2),q(I,J-1), &
-                                          q(I,J), q(I,J+1),q(I,J+2), v_u)
-
-        elseif (order3 == 1) then
-            ! 3rd order reconstruction
-            call weno3_reconstruction(wq_u, q(I,J-2),q(I,J-1),q(I,J),q(I,J+1), v_u)
-
-        else ! Upwind first order
-            if (v_u > 0.0) then
-                wq_u = q(I,J-1)
-            else
-                wq_u = q(I,J)
-            endif
+        Heff1 = abs(vh(i,J,k) * G%IdxCv(i,J)) / (eps_vel+abs(v(i,J,k)))
+        Heff1 = max(Heff1, min(h(i,j,k),h(i,j+1,k)))
+        Heff1 = min(Heff1, max(h(i,j,k),h(i,j+1,k)))
+        Heff2 = abs(vh(i,J-1,k) * G%IdxCv(i,J-1)) / (eps_vel+abs(v(i,J-1,k)))
+        Heff2 = max(Heff2, min(h(i,j-1,k),h(i,j,k)))
+        Heff2 = min(Heff2, max(h(i,j-1,k),h(i,j,k)))
+        Heff3 = abs(vh(i+1,J,k) * G%IdxCv(i+1,J)) / (eps_vel+abs(v(i+1,J,k)))
+        Heff3 = max(Heff3, min(h(i+1,j,k),h(i+1,j+1,k)))
+        Heff3 = min(Heff3, max(h(i+1,j,k),h(i+1,j+1,k)))
+        Heff4 = abs(vh(i+1,J-1,k) * G%IdxCv(i+1,J-1)) / (eps_vel+abs(v(i+1,J-1,k)))
+        Heff4 = max(Heff4, min(h(i+1,j-1,k),h(i+1,j,k)))
+        Heff4 = min(Heff4, max(h(i+1,j-1,k),h(i+1,j,k)))
+        if (CS%PV_Adv_Scheme == PV_ADV_CENTERED) then
+          CAu(I,j,k) = 0.5*(abs_vort(I,J)+abs_vort(I,J-1)) * &
+                       ((vh(i,J,k) + vh(i+1,J-1,k)) + (vh(i,J-1,k) + vh(i+1,J,k)) ) /  &
+                       (h_tiny + ((Heff1+Heff4) + (Heff2+Heff3)) ) * G%IdxCu(I,j)
+        elseif (CS%PV_Adv_Scheme == PV_ADV_UPWIND1) then
+          VHeff = ((vh(i,J,k) + vh(i+1,J-1,k)) + (vh(i,J-1,k) + vh(i+1,J,k)) )
+          QVHeff = 0.5*( ((abs_vort(I,J)+abs_vort(I,J-1))*VHeff) &
+                       - ((abs_vort(I,J)-abs_vort(I,J-1))*abs(VHeff)) )
+          CAu(I,j,k) = (QVHeff / ( h_tiny + ((Heff1+Heff4) + (Heff2+Heff3)) ) ) * G%IdxCu(I,j)
         endif
-
-        CAu(I,j,k) = (wq_u * v_u) 
-
       enddo ; enddo
+    endif
+    ! Add in the additional terms with Arakawa & Lamb.
+    if ((CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
+        (CS%Coriolis_Scheme == AL_BLEND)) then ; do j=js,je ; do I=Isq,Ieq
+      CAu(I,j,k) = CAu(I,j,k) + &
+            ((ep_u(i,j)*uh(I-1,j,k)) - (ep_u(i+1,j)*uh(I+1,j,k))) * G%IdxCu(I,j)
+    enddo ; enddo ; endif
 
-    elseif (CS%Coriolis_Scheme == WENO7_ENSTRO) then
-      do j=js,je ; do I=Isq,Ieq    
-        v_u = 0.25 * G%IdxCu(I,j) *((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
-
-        order3 = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCu(I,j) * & 
-                       G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
-
-        order5 = order3 * G%mask2dCu(i,j-3) * G%mask2dCu(i,j+3) 
-        order7 = order5 * G%mask2dCu(I,j-4) * G%mask2dCu(i,j-4)
-
-        ! compute the masking to make sure that inland values are not used
-        if (order7 == 1) then
-            ! 7th order reconstruction
-            call weno7_reconstruction(wq_u, q(I,J-4),q(I,J-3),q(I,J-2),q(I,J-1), & 
-                                           q(I,J),q(I,J+1),q(I,J+2),q(I,J+3), v_u)
-
-        elseif (order5 == 1) then
-            ! 5th order reconstruction
-            call weno5_reconstruction(wq_u, q(I,J-3),q(I,J-2),q(I,J-1), &
-                                          q(I,J), q(I,J+1),q(I,J+2), v_u)
-
-        elseif (order3 == 1) then
-            ! 3rd order reconstruction
-            call weno3_reconstruction(wq_u, q(I,J-2),q(I,J-1),q(I,J),q(I,J+1), v_u)
-
-        else ! Upwind first order
-            if (v_u > 0.0) then
-                wq_u = q(I,J-1)
-            else
-                wq_u = q(I,J)
-            endif
-        endif
-
-        CAu(I,j,k) = (wq_u * v_u) 
-      enddo ; enddo            
-
+    if (Stokes_VF) then
+      if (CS%id_CAuS>0 .or. CS%id_CAvS>0) then
+        ! Computing the diagnostic Stokes contribution to CAu
+        do j=js,je ; do I=Isq,Ieq
+          CAuS(I,j,k) = 0.25 * &
+                ((qS(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+                 (qS(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j)
+        enddo ; enddo
+      endif
     endif
 
     if (CS%bound_Coriolis) then
@@ -823,75 +795,48 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         CAv(i,J,k) = -0.125 * (G%IdyCv(i,J) * (q(I-1,J) + q(I,J))) * &
                      ((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
       enddo ; enddo
-
-    elseif (CS%Coriolis_Scheme == WENO5_ENSTRO) then
+    elseif ((CS%Coriolis_Scheme == ARAKAWA_HSU90) .or. &
+            (CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
+            (CS%Coriolis_Scheme == AL_BLEND)) then
+      ! (Global) Energy and (Local) Enstrophy conserving, Arakawa & Hsu 1990
       do J=Jsq,Jeq ; do i=is,ie
-        u_v = 0.25* G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
-
-        order3 = (G%mask2dCv(i-2,J) * G%mask2dCv(i-1,J) * G%mask2dCv(i,J) * G%mask2dCv(i+1,J) * & 
-                       G%mask2dCv(i+2,J))
-
-        order5   = order3 * G%mask2dCv(i-3,J) * G%mask2dCv(i+3,J) 
-
-        if (order5 == 1) then
-            ! 5th order reconstruction
-            call weno5_reconstruction(wq_v, q(I-3,J),q(I-2,J),q(I-1,J), &
-                                          q(I,J),q(I+1,J),q(I+2,J), u_v)
-
-        elseif (order3 == 1) then
-            ! 3rd order reconstruction
-             call weno3_reconstruction(wq_v, q(I-2,J),q(I-1,J),q(I,J),q(I+1,J), u_v)
-
-        else ! Upwind first order!
-            if (u_v > 0.0) then
-                wq_v = q(I-1,J)
-            else
-                wq_v = q(I,J)
-            endif
-        endif
-
-        CAv(i,J,k) = - (wq_v * u_v)
-
-      enddo ; enddo      
-
-    elseif (CS%Coriolis_Scheme == WENO7_ENSTRO) then
-      do J=Jsq,Jeq ; do i=is,ie
-        u_v = 0.25* G%IdyCv(i,J)*((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
-
-        order3 = (G%mask2dCv(i-2,J) * G%mask2dCv(i-1,J) * G%mask2dCv(i,J) * G%mask2dCv(i+1,J) * & 
-                       G%mask2dCv(i+2,J))
-
-        order5   = order3 * G%mask2dCv(i-3,J) * G%mask2dCv(i+3,J) 
-        order7 = order5 * G%mask2dCv(i-4,J) * G%mask2dCv(i+4,J) 
-
-        ! compute the masking to make sure that inland values are not used
-        if (order7 == 1) then
-            ! 7th order reconstruction
-            call weno7_reconstruction(wq_v, q(I-4,J),q(I-3,J),q(I-2,J),q(I-1,J), & 
-                                           q(I,J),q(I+1,J),q(I+2,J),q(I+3,J), u_v)
-
-        elseif (order5 == 1) then
-            ! 5th order reconstruction
-            call weno5_reconstruction(wq_v, q(I-3,J),q(I-2,J),q(I-1,J), &
-                                          q(I,J),q(I+1,J),q(I+2,J), u_v)
-
-        elseif (order3 == 1) then
-            ! 3rd order reconstruction
-            call weno3_reconstruction(wq_v, q(I-2,J),q(I-1,J),q(I,J),q(I+1,J), u_v)
-
-        else ! Upwind first order!
-            if (u_v > 0.0) then
-                wq_v = q(I-1,J)
-            else
-                wq_v = q(I,J)
-            endif
-        endif
-
-        CAv(i,J,k) = - (wq_v * u_v)
+        CAv(i,J,k) = - (((a(I-1,j)   * uh(I-1,j,k)) + &
+                         (c(I,j+1)   * uh(I,j+1,k)))  &
+                      + ((b(I,j)     * uh(I,j,k)) +   &
+                         (d(I-1,j+1) * uh(I-1,j+1,k)))) * G%IdyCv(i,J)
       enddo ; enddo
-
+    elseif (CS%Coriolis_Scheme == ROBUST_ENSTRO) then
+      ! An enstrophy conserving scheme robust to vanishing layers
+      ! Note: Heffs are in lieu of h_at_u that should be returned by the
+      !       continuity solver. AJA
+      do J=Jsq,Jeq ; do i=is,ie
+        Heff1 = abs(uh(I,j,k) * G%IdyCu(I,j)) / (eps_vel+abs(u(I,j,k)))
+        Heff1 = max(Heff1, min(h(i,j,k),h(i+1,j,k)))
+        Heff1 = min(Heff1, max(h(i,j,k),h(i+1,j,k)))
+        Heff2 = abs(uh(I-1,j,k) * G%IdyCu(I-1,j)) / (eps_vel+abs(u(I-1,j,k)))
+        Heff2 = max(Heff2, min(h(i-1,j,k),h(i,j,k)))
+        Heff2 = min(Heff2, max(h(i-1,j,k),h(i,j,k)))
+        Heff3 = abs(uh(I,j+1,k) * G%IdyCu(I,j+1)) / (eps_vel+abs(u(I,j+1,k)))
+        Heff3 = max(Heff3, min(h(i,j+1,k),h(i+1,j+1,k)))
+        Heff3 = min(Heff3, max(h(i,j+1,k),h(i+1,j+1,k)))
+        Heff4 = abs(uh(I-1,j+1,k) * G%IdyCu(I-1,j+1)) / (eps_vel+abs(u(I-1,j+1,k)))
+        Heff4 = max(Heff4, min(h(i-1,j+1,k),h(i,j+1,k)))
+        Heff4 = min(Heff4, max(h(i-1,j+1,k),h(i,j+1,k)))
+        if (CS%PV_Adv_Scheme == PV_ADV_CENTERED) then
+          CAv(i,J,k) = - 0.5*(abs_vort(I,J)+abs_vort(I-1,J)) * &
+                         ((uh(I  ,j  ,k)+uh(I-1,j+1,k)) +      &
+                          (uh(I-1,j  ,k)+uh(I  ,j+1,k)) ) /    &
+                      (h_tiny + ((Heff1+Heff4) +(Heff2+Heff3)) ) * G%IdyCv(i,J)
+        elseif (CS%PV_Adv_Scheme == PV_ADV_UPWIND1) then
+          UHeff = ((uh(I  ,j  ,k)+uh(I-1,j+1,k)) +      &
+                   (uh(I-1,j  ,k)+uh(I  ,j+1,k)) )
+          QUHeff = 0.5*( ((abs_vort(I,J)+abs_vort(I-1,J))*UHeff) &
+                       - ((abs_vort(I,J)-abs_vort(I-1,J))*abs(UHeff)) )
+          CAv(i,J,k) = - QUHeff / &
+                       (h_tiny + ((Heff1+Heff4) +(Heff2+Heff3)) ) * G%IdyCv(i,J)
+        endif
+      enddo ; enddo
     endif
-
     ! Add in the additonal terms with Arakawa & Lamb.
     if ((CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
         (CS%Coriolis_Scheme == AL_BLEND)) then ; do J=Jsq,Jeq ; do i=is,ie
@@ -923,7 +868,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         CAv(I,j,k) = min(CAv(I,j,k), max_fu)
         CAv(I,j,k) = max(CAv(I,j,k), min_fu)
       enddo ; enddo
-    endif    
+    endif
 
     ! Term - d(KE)/dy.
     do J=Jsq,Jeq ; do i=is,ie
@@ -1019,6 +964,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
 end subroutine CorAdCalc
 
+
 !> Calculates the acceleration due to the gradient of kinetic energy.
 subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
@@ -1036,12 +982,9 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   type(CoriolisAdv_CS),                       intent(in)  :: CS  !< Control structure for MOM_CoriolisAdv
   ! Local variables
-  real :: um, un, up, uq, vm, vn, vp, vq         ! Temporary variables [L T-1 ~> m s-1].
+  real :: um, up, vm, vp         ! Temporary variables [L T-1 ~> m s-1].
   real :: um2, up2, vm2, vp2     ! Temporary variables [L2 T-2 ~> m2 s-2].
   real :: um2a, up2a, vm2a, vp2a ! Temporary variables [L4 T-2 ~> m4 s-2].
-  real :: third_order_u, third_order_v  ! Product of mask values to determine the boundary
-  real :: fifth_order_u, fifth_order_v  ! Product of mask values to determine the boundary
-  real :: seventh_order_u, seventh_order_v  ! Product of mask values to determine the boundary
   integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -1079,7 +1022,6 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
       vm = 0.5*( v(i, J ,k) - ABS( v(i, J ,k) ) ) ; vm2a = vm*vm*G%areaCv(i, J )
       KE(i,j) = ( max(um2a,up2a) + max(vm2a,vp2a) )*0.5*G%IareaT(i,j)
     enddo ; enddo
-
   endif
 
   ! Term - d(KE)/dx.
@@ -1158,10 +1100,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "\t SADOURNY75_ENSTRO - Sadourny, 1975; enstrophy cons. \n"//&
                  "\t ARAKAWA_LAMB81    - Arakawa & Lamb, 1981; En. + Enst.\n"//&
                  "\t ARAKAWA_LAMB_BLEND - A blend of Arakawa & Lamb with \n"//&
-                 "\t                      Arakawa & Hsu and Sadourny energy \n"//&
-                 "\t WENO5_ENSTRO - 5th-order enstrophy cons. \n"//&
-                 "\t WENO7_ENSTRO - 7th-order enstrophy cons.",&
-
+                 "\t                      Arakawa & Hsu and Sadourny energy", &
                  default=SADOURNY75_ENERGY_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
@@ -1178,10 +1117,6 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
     case (ROBUST_ENSTRO_STRING)
       CS%Coriolis_Scheme = ROBUST_ENSTRO
       CS%Coriolis_En_Dis = .false.
-    case (WENO7_ENSTRO_STRING)
-      CS%Coriolis_Scheme = WENO7_ENSTRO      
-    case (WENO5_ENSTRO_STRING)
-      CS%Coriolis_Scheme = WENO5_ENSTRO      
     case default
       call MOM_mesg('CoriolisAdv_init: Coriolis_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: Unrecognized setting "// &
@@ -1228,8 +1163,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "KE_SCHEME selects the discretization for acceleration "//&
                  "due to the kinetic energy gradient. Valid values are: \n"//&
                  "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV", &
-                  default=KE_ARAKAWA_STRING)
-
+                 default=KE_ARAKAWA_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
     case (KE_ARAKAWA_STRING); CS%KE_Scheme = KE_ARAKAWA
@@ -1388,258 +1322,6 @@ end subroutine CoriolisAdv_init
 subroutine CoriolisAdv_end(CS)
   type(CoriolisAdv_CS), intent(inout) :: CS !< Control structure for MOM_CoriolisAdv
 end subroutine CoriolisAdv_end
-
-subroutine weno3_reconstruction(wq, qm, q0, qp, qp2, u)
-
-   real, intent(in) :: qm, q0, qp, qp2, u
-   real, intent(out) :: wq
-
-   if(u > 0.0) then
-      call weno3_reconstruction_temp(wq, qm, q0, qp)
-   else
-      call weno3_reconstruction_temp(wq, qp2, qp, q0)
-   endif
-
-end subroutine weno3_reconstruction
-
-subroutine weno3_poly(P1, P2, qm, q0, qp)
-
-
-   real, intent(in) :: qm, q0, qp
-   real, intent(out) :: P1, P2
-
-   P1 = 0.5*(-qm + 3.0*q0)
-   P2 = 0.5*(q0 + qp)
-
-end subroutine weno3_poly
-
-subroutine weno3_weights(b1, b2, qm, q0, qp)
-
-   real, intent(in) :: qm, q0, qp
-   real, intent(out) :: b1, b2
-
-   b1 = (q0-qm)*(q0-qm)
-   b2 = (qp-q0)*(qp-q0)
-
-end subroutine weno3_weights
-
-subroutine weno3_reconstruction_temp(wq, qm, q0, qp)
-
-   real, intent(in) :: qm, q0, qp
-   real, intent(out) :: wq
-
-   real :: a1, a2, b1, b2, h1, h2, nu
-   real :: eps, wnorm, w_1, w_2, P1, P2, tau
-
-   call weno3_weights(b1, b2, qm, q0, qp)
-   call weno3_poly(P1, P2, qm, q0, qp)
-
-   wq = 0.0
-   h1 = 1.0/3.0
-   h2 = 2.0/3.0
-
-   ! Alpha values
-   eps = 1.0e-30
-   tau = abs(b2-b1)
-   a1 = h1*(1.0 + (tau/(b1+eps))**2)
-   a2 = h2*(1.0 + (tau/(b2+eps))**2)
-
-   ! Normalization
-   wnorm = a1+a2
-   w_1 = a1 / wnorm
-   w_2 = a2 / wnorm
-
-   wq = w_1*P1 + w_2*P2
-
-end subroutine weno3_reconstruction_temp
-
-subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u)
-
-   real, intent(in) :: qm2, qm, q0, qp, qp2, qp3, u
-   real, intent(out) :: wq
-
-   if(u > 0.0) then
-      call weno5_reconstruction_temp(wq, qm2, qm, q0, qp, qp2)
-   else
-      call weno5_reconstruction_temp(wq, qp3, qp2, qp, q0, qm)
-   endif
-
-end subroutine weno5_reconstruction
-
-subroutine weno5_reconstruction_temp(wq, qmm, qm, q0, qp, qpp)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp
-   real, intent(out) :: wq
-
-   real :: a0, a1, a2, b0, b1, b2, d0, d1, d2
-   real :: eps,  wnorm, w0, w1, w2, P0, P1, P2, tau
-   integer :: r
-
-   r = 2
-
-   call weno5_weights(b0, b1, b2, qmm, qm, q0, qp, qpp)
-   call weno5_poly(P0, P1, P2, qmm, qm, q0, qp, qpp)
-
-   ! Gamma values in Weno reconstruction
-   d0 = 1.0/10.0
-   d1 = 6.0/10.0
-   d2 = 3.0/10.0
-
-   ! Alpha values
-   eps = 1.0e-40
-   tau = abs(b2-b0)
-   !tau = (abs(b0-b1) + abs(b0-b2))/2.0
-
-   a0 = d0*(1.0 + (tau/(b0+eps))**r)
-   a1 = d1*(1.0 + (tau/(b1+eps))**r)
-   a2 = d2*(1.0 + (tau/(b2+eps))**r)
-
-   wnorm = 1.0/(a0+a1+a2)
-   w0 = a0*wnorm
-   w1 = a1*wnorm
-   w2 = a2*wnorm
-
-   wq = w0*P0 + w1*P1 + w2*P2
-
-end subroutine weno5_reconstruction_temp
-
-subroutine weno5_weights(b0, b1, b2, qmm, qm, q0, qp, qpp)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp
-   real, intent(out) :: b0, b1, b2
-
-   ! First stencil
-
-   b0 = (13.0/12.0)*(qmm - 2.0*qm + q0)**2 + 0.25*(qmm - 4.0*qm + 3.0*q0)**2
-
-   ! Second stencil
-
-   b1 = (13.0/12.0)*(qm - 2.0*q0 + qp)**2 + 0.25*(qm - qp)**2
-
-   ! Third stencil
-
-   b2 = (13.0/12.0)*(q0 - 2.0*qp + qpp)**2 + 0.25*(3.0*q0 - 4.0*qp + qpp)**2
-
-end subroutine weno5_weights
-
-subroutine weno5_poly(P0, P1, P2, qmm, qm, q0, qp, qpp)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp
-   real, intent(out) :: P0, P1, P2
-
-   ! First stencil
-
-   P0 = (2.0*qmm - 7.0*qm + 11.0*q0)/6.0
-
-   ! Second stencil
-
-   P1 = (-qm + 5.0*q0 + 2.0*qp)/6.0
-
-   ! Third stencil
-
-   P2 = (2.0*q0 + 5.0*qp - qpp)/6.0
-
-end subroutine weno5_poly
-
-subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u)
-
-   real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u
-   real, intent(out) :: wq
-
-   if(u > 0.0) then
-      call weno7_reconstruction_temp(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
-   else
-      call weno7_reconstruction_temp(wq, qp4, qp3, qp2, qp1, q0, qm1, qm2)
-   endif
-
-end subroutine weno7_reconstruction
-
-subroutine weno7_reconstruction_temp(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
-
-   real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3
-   real, intent(out) :: wq
-
-   real :: b0, b1, b2, b3, d0, d1, d2, d3
-   real :: eps, a0, a1, a2, a3, wnorm, w0, w1, w2, w3, tau
-   real :: P0, P1, P2, P3, nu
-   integer :: r
-
-   r = 2
-
-   call weno7_weights(b0, b1, b2, b3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
-   call weno7_poly(P0, P1, P2, P3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
-
-   d0 = 1.0/35.0
-   d1 = 12.0/35.0
-   d2 = 18.0/35.0
-   d3 = 4.0/35.0
-
-   ! Alpha values
-   eps = 1.0e-20
-   tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
-   a0 = d0*(1.0 + (tau/(b0+eps))**r)
-   a1 = d1*(1.0 + (tau/(b1+eps))**r)
-   a2 = d2*(1.0 + (tau/(b2+eps))**r)
-   a3 = d3*(1.0 + (tau/(b3+eps))**r)
-
-   ! Normalization
-   wnorm = 1.0/(a0+a1+a2+a3)
-   w0 = a0*wnorm
-   w1 = a1*wnorm
-   w2 = a2*wnorm
-   w3 = a3*wnorm
-
-   wq = w0*P0 + w1*P1 + w2*P2 + w3*P3
-
-end subroutine weno7_reconstruction_temp
-
-subroutine weno7_poly(P0, P1, P2, P3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
-
-   real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3
-   real, intent(out) :: P0, P1, P2, P3
-
-   P0 = (-3.0*qm3 + 13.0*qm2 - 23.0*qm1 + 25.0*q0)/12.0
-
-   P1 = (qm2 - 5.0*qm1 + 13.0*q0 + 3.0*qp1)/12.0
-
-   P2 = (-qm1 + 7.0*q0 + 7.0*qp1 - qp2)/12.0
-
-   P3 = (3.0*q0 + 13.0*qp1 - 5.0*qp2 + qp3)/12.0
-
-end subroutine weno7_poly
-
-subroutine weno7_weights(b0, b1, b2, b3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
-
-
-   real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3
-   real, intent(out) :: b0, b1, b2, b3
-
-   ! 1st stencil
-
-   b0 = qm3*(547.0*qm3 - 3882.0*qm2 + 4642.0*qm1 - 1854.0*q0) + &
-        qm2*(7043.0*qm2 - 17246.0*qm1 + 7042.0*q0) + &
-        qm1*(11003.0*qm1 - 9402.0*q0) + 2107.0*q0**2
-
-   ! 2nd stencil
-
-   b1 = qm2*(267.0*qm2 - 1642.0*qm1 + 1602.0*q0 - 494.0*qp1) + &
-           qm1*(2843.0*qm1 - 5966.0*q0 + 1922.0*qp1) &
-           + q0*(3443.0*q0 - 2522.0*qp1) + 547.0*qp1**2
-
-   ! 3rd stencil
-
-   b2 = qm1*(547.0*qm1 - 2522.0*q0 + 1922.0*qp1 - 494.0*qp2) + &
-           q0*(3443.0*q0 - 5966.0*qp1 + 1602.0*qp2) &
-           + qp1*(2843.0*qp1 - 1642.0*qp2) + 267.0*qp2**2
-
-   ! 4rd stencil
-
-   b3 = q0*(2107.0*q0 - 9402.0*qp1 + 7042.0*qp2 - 1854.0*qp3) + &
-           qp1*(11003.0*qp1 - 17246.0*qp2 + 4642.0*qp3) &
-           + qp2*(7043.0*qp2 - 3882.0*qp3) + 547.0*qp3**2
-
-end subroutine weno7_weights
-
 
 !> \namespace mom_coriolisadv
 !!
