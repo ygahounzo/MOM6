@@ -209,9 +209,10 @@ subroutine USER_initialize_tracer(restart, day, G, GV, US, h, diag, OBC, CS, &
         dist2 = (G%Rad_Earth_L * PI / 180.0)**2 * (G%geoLatT(i,j) - CS%stripe_lat)**2
         tr_y = 0.5 * exp( -dist2 / CS%stripe_width**2 )
 
-        do k=1,nz ; do i=is,ie
+        do k=1,1 ; do i=is,ie
 !      This adds the stripes of tracer to every layer.
-          CS%tr(i,j,k,1) = CS%tr(i,j,k,1) + tr_y
+          !CS%tr(i,j,k,1) = CS%tr(i,j,k,1) + tr_y
+          CS%tr(i,j,k,1) = CS%tr(i,j,k,1) + 100.0
         enddo ; enddo
       enddo
     endif

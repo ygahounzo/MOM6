@@ -17,7 +17,7 @@ use MOM_open_boundary, only : ocean_OBC_type
 use MOM_restart,       only : MOM_restart_CS
 use MOM_sponge,        only : sponge_CS
 use MOM_ALE_sponge,    only : ALE_sponge_CS
-use MOM_tracer_registry, only : tracer_registry_type
+use MOM_tracer_registry, only : tracer_registry_type, tracer_type
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : surface, thermo_var_ptrs
 use MOM_verticalGrid,  only : verticalGrid_type
@@ -71,6 +71,10 @@ use boundary_impulse_tracer, only : boundary_impulse_stock, boundary_impulse_tra
 use boundary_impulse_tracer, only : boundary_impulse_tracer_CS
 use nw2_tracers, only : nw2_tracers_CS, register_nw2_tracers, nw2_tracer_column_physics
 use nw2_tracers, only : initialize_nw2_tracers, nw2_tracers_end
+use gyre_tracer, only : register_gyre_tracer, initialize_gyre_tracer
+use gyre_tracer, only : gyre_tracer_surface_state, gyre_tracer_end
+use gyre_tracer, only : gyre_tracer_column_physics, gyre_stock, gyre_tracer_CS
+use gyre_tracer, only : register_gyre_tracer_segments
 
 implicit none ; private
 
@@ -89,6 +93,7 @@ type, public :: tracer_flow_control_CS ; private
   logical :: use_regional_dyes = .false.           !< If true, use the regional dyes tracer package
   logical :: use_oil = .false.                     !< If true, use the oil tracer package
   logical :: use_advection_test_tracer = .false.   !< If true, use the advection_test_tracer package
+  logical :: use_gyre_tracer = .false.             !< If true, use the gyre_tracer package
   logical :: use_OCMIP2_CFC = .false.              !< If true, use the OCMIP2_CFC tracer package
   logical :: use_CFC_cap = .false.                 !< If true, use the CFC_cap tracer package
   logical :: use_MOM_generic_tracer = .false.      !< If true, use the MOM_generic_tracer packages
@@ -105,6 +110,7 @@ type, public :: tracer_flow_control_CS ; private
   type(dye_tracer_CS), pointer :: dye_tracer_CSp => NULL()
   type(oil_tracer_CS), pointer :: oil_tracer_CSp => NULL()
   type(advection_test_tracer_CS), pointer :: advection_test_tracer_CSp => NULL()
+  type(gyre_tracer_CS), pointer :: gyre_tracer_CSp => NULL()
   type(OCMIP2_CFC_CS), pointer :: OCMIP2_CFC_CSp => NULL()
   type(CFC_cap_CS),    pointer :: CFC_cap_CSp => NULL()
   type(MOM_generic_tracer_CS), pointer :: MOM_generic_tracer_CSp => NULL()
@@ -203,6 +209,9 @@ subroutine call_tracer_register(G, GV, US, param_file, CS, tr_Reg, restart_CS)
   call get_param(param_file, mdl, "USE_ADVECTION_TEST_TRACER", CS%use_advection_test_tracer, &
                  "If true, use the advection_test_tracer tracer package.", &
                  default=.false.)
+  call get_param(param_file, mdl, "USE_GYRE_TRACER", CS%use_gyre_tracer, &
+                 "If true, use the gyre_tracer tracer package.", &
+                 default=.false.)
   call get_param(param_file, mdl, "USE_OCMIP2_CFC", CS%use_OCMIP2_CFC, &
                  "If true, use the MOM_OCMIP2_CFC tracer package.", &
                  default=.false.)
@@ -252,6 +261,9 @@ subroutine call_tracer_register(G, GV, US, param_file, CS, tr_Reg, restart_CS)
                         tr_Reg, restart_CS)
   if (CS%use_advection_test_tracer) CS%use_advection_test_tracer = &
     register_advection_test_tracer(G, GV, param_file, CS%advection_test_tracer_CSp, &
+                                   tr_Reg, restart_CS)
+  if (CS%use_gyre_tracer) CS%use_gyre_tracer = &
+    register_gyre_tracer(G, GV, param_file, CS%gyre_tracer_CSp, &
                                    tr_Reg, restart_CS)
   if (CS%use_OCMIP2_CFC) CS%use_OCMIP2_CFC = &
     register_OCMIP2_CFC(G%HI, GV, param_file, CS%OCMIP2_CFC_CSp, &
@@ -335,6 +347,9 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
   if (CS%use_advection_test_tracer) &
     call initialize_advection_test_tracer(restart, day, G, GV, h, diag, OBC, CS%advection_test_tracer_CSp, &
                                 sponge_CSp)
+  if (CS%use_gyre_tracer) &
+    call initialize_gyre_tracer(restart, day, G, GV, h, diag, OBC, CS%gyre_tracer_CSp, &
+                                sponge_CSp)
   if (CS%use_OCMIP2_CFC) &
     call initialize_OCMIP2_CFC(restart, day, G, GV, US, h, diag, OBC, CS%OCMIP2_CFC_CSp, sponge_CSp)
   if (CS%use_CFC_cap) &
@@ -374,6 +389,8 @@ subroutine call_tracer_register_obc_segments(GV, param_file, CS, tr_Reg, OBC)
 
   if (CS%use_MOM_generic_tracer) &
       call register_MOM_generic_tracer_segments(CS%MOM_generic_tracer_CSp, GV, OBC, tr_Reg, param_file)
+  if (CS%use_gyre_tracer) &
+      call register_gyre_tracer_segments(GV, OBC, tr_Reg, param_file)
 
 end subroutine call_tracer_register_obc_segments
 
@@ -522,6 +539,12 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
                                                 G, GV, US, CS%advection_test_tracer_CSp, &
                                                 evap_CFL_limit=evap_CFL_limit, &
                                                 minimum_forcing_depth=minimum_forcing_depth)
+
+    if (CS%use_gyre_tracer) &
+      call gyre_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                                G, GV, US, CS%gyre_tracer_CSp, &
+                                                evap_CFL_limit=evap_CFL_limit, &
+                                                minimum_forcing_depth=minimum_forcing_depth)
     if (CS%use_OCMIP2_CFC) &
       call OCMIP2_CFC_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%OCMIP2_CFC_CSp, &
@@ -598,6 +621,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
     if (CS%use_advection_test_tracer) &
       call advection_test_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                       G, GV, US, CS%advection_test_tracer_CSp)
+    if (CS%use_gyre_tracer) &
+      call gyre_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                      G, GV, US, CS%gyre_tracer_CSp)
     if (CS%use_OCMIP2_CFC) &
       call OCMIP2_CFC_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%OCMIP2_CFC_CSp)
@@ -740,6 +766,13 @@ subroutine call_tracer_stocks(h, stock_values, G, GV, US, CS, stock_names, stock
                       set_pkg_name, max_ns, ns_tot, stock_names, stock_units)
   endif
 
+  if (CS%use_gyre_tracer) then
+    ns = gyre_stock( h, values_EFP, G, GV, CS%gyre_tracer_CSp, &
+                         names, units, stock_index )
+    call store_stocks("gyre_tracer", ns, names, units, values_EFP, index, stock_val_EFP, &
+                      set_pkg_name, max_ns, ns_tot, stock_names, stock_units)
+  endif
+
   if (CS%use_MOM_generic_tracer) then
     ns = MOM_generic_tracer_stock(h, values_EFP, G, GV, CS%MOM_generic_tracer_CSp, &
                                    names, units, stock_index)
@@ -870,6 +903,8 @@ subroutine call_tracer_surface_state(sfc_state, h, G, GV, US, CS)
     call oil_tracer_surface_state(sfc_state, h, G, GV, CS%oil_tracer_CSp)
   if (CS%use_advection_test_tracer) &
     call advection_test_tracer_surface_state(sfc_state, h, G, GV, CS%advection_test_tracer_CSp)
+  if (CS%use_gyre_tracer) &
+    call gyre_tracer_surface_state(sfc_state, h, G, GV, CS%gyre_tracer_CSp)
   if (CS%use_OCMIP2_CFC) &
     call OCMIP2_CFC_surface_state(sfc_state, h, G, GV, US, CS%OCMIP2_CFC_CSp)
   if (CS%use_MOM_generic_tracer) &
@@ -890,6 +925,7 @@ subroutine tracer_flow_control_end(CS)
   if (CS%use_regional_dyes) call regional_dyes_end(CS%dye_tracer_CSp)
   if (CS%use_oil) call oil_tracer_end(CS%oil_tracer_CSp)
   if (CS%use_advection_test_tracer) call advection_test_tracer_end(CS%advection_test_tracer_CSp)
+  if (CS%use_gyre_tracer) call gyre_tracer_end(CS%gyre_tracer_CSp)
   if (CS%use_OCMIP2_CFC) call OCMIP2_CFC_end(CS%OCMIP2_CFC_CSp)
   if (CS%use_CFC_cap) call CFC_cap_end(CS%CFC_cap_CSp)
   if (CS%use_MOM_generic_tracer) call end_MOM_generic_tracer(CS%MOM_generic_tracer_CSp)

@@ -100,6 +100,9 @@ type, public :: tracer_type
   ! logical :: kpp_nonlocal_tr = .true. !< if true, apply KPP nonlocal transport to this tracer before diffusion
   logical :: remap_tr = .true.        !< If true, this tracer should be vertically remapped
 
+  real  :: Tmingg           !
+  real  :: Tmaxgg           !
+
   integer :: diag_form = 1  !< An integer indicating which template is to be used to label diagnostics.
   !>@{ Diagnostic IDs
   integer :: id_tr = -1, id_tr_post_horzn = -1
