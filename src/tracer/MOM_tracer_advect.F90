@@ -127,7 +127,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
   landvolfill = 1.0e-20         ! This is arbitrary, but must be positive.
-  stencil = 2                   ! The scheme's stencil; 2 for PLM
+  !stencil = 2                   ! The scheme's stencil; 2 for PLM
 
   if (.not. associated(CS)) call MOM_error(FATAL, "MOM_tracer_advect: "// &
        "tracer_advect_init must be called before advect_tracer.")
@@ -141,16 +141,40 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   local_advect_scheme = CS%advect_scheme
   
   ! increase stencil size for Colella & Woodward PPM
-  if ((local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) .and. &
-          .not. CS%useHuynhStencilBug) then
-          stencil = 3
+  !if ((local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) .and. &
+  !        .not. CS%useHuynhStencilBug) then
+  !        stencil = 3
+  !elseif (local_advect_scheme == ADVECT_WENO5) then
+  !        stencil = 5
+  !elseif (local_advect_scheme == ADVECT_WENO7) then
+  !        stencil = 7 
+  !elseif (local_advect_scheme == ADVECT_WENO9) then
+  !        stencil = 9 
+  !endif 
+
+  ! The total stencil extent is i-stencil-1 to i+stencil or less
+  if (local_advect_scheme == ADVECT_PLM) then
+    stencil = 2
+  elseif (local_advect_scheme == ADVECT_PPM) then
+    stencil = 3
+  elseif (local_advect_scheme == ADVECT_PPMH3) then
+    if (CS%useHuynhStencilBug) then
+      stencil = 2
+    else
+      stencil = 3
+    endif
   elseif (local_advect_scheme == ADVECT_WENO5) then
-          stencil = 5
+    stencil = 3
   elseif (local_advect_scheme == ADVECT_WENO7) then
-          stencil = 7 
+    stencil = 4
   elseif (local_advect_scheme == ADVECT_WENO9) then
-          stencil = 9 
-  endif 
+    stencil = 5
+  endif
+
+  if (min(is-isd,ied-ie,js-jsd,jed-je).lt.stencil) then
+    call MOM_error(FATAL, "MOM_tracer_advect: "//&
+      "stencil is wider than the halo.")
+  endif
 
   ntr = Reg%ntr
   Idt = 1.0 / dt
@@ -423,7 +447,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   domore_u_initial = domore_u
 
   usePLMslope = .false.
-  if(local_advect_scheme == ADVECT_PLM) usePLMslope = .true.
+  if(local_advect_scheme == ADVECT_PLM .or. local_advect_scheme == ADVECT_PPM) usePLMslope = .true.
   ! stencil for calculating slope values
   stencil = 1
   if (local_advect_scheme == ADVECT_PPM) stencil = 2
@@ -898,7 +922,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   real :: Tming(ntr), Tmaxg(ntr), v, Tmin, Tmax
 
   usePLMslope = .false.
-  if(local_advect_scheme == ADVECT_PLM) usePLMslope = .true.
+  if(local_advect_scheme == ADVECT_PLM .or. local_advect_scheme == ADVECT_PPM) usePLMslope = .true.
   ! stencil for calculating slope values
   stencil = 1
   if (local_advect_scheme == ADVECT_PPM) stencil = 2
