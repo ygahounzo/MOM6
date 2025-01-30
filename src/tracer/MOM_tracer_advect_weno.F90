@@ -154,7 +154,7 @@ subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, d
    real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2],
                ! N is weno reconstruction order
-   real :: ds(5), ds1(6)
+   real :: ds(5), ds1(6), wppm
 
 
    !w0 = 5.0/18.0
@@ -166,7 +166,7 @@ subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, d
       call weno5_reconstruction_interface2(wpl, qm2, qm, q0, qp, qp2, ds)  ! i+1/2
       ! maximum-principle limiter
       !call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-      !call apply_MP2(wq, qm2, qm, q0, qp, qp2, wmr, wpl, w0, qmin, qmax, wppm)
+      call apply_MP2(wq, qm2, qm, q0, qp, qp2, wmr, wpl, w0, qmin, qmax, wppm)
    else
       ds1 = dx(6:1:-1)
       ds = ds1(1:5)
@@ -174,10 +174,10 @@ subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, d
       call weno5_reconstruction_interface2(wmr, qm, q0, qp, qp2, qp3, ds)
       ! maximum-principle limiter
       !call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
-      !call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm)
+      call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm)
    endif
 
-   wq = wpl
+   !wq = wpl
 
 end subroutine weno5_reconstruction2
 
@@ -202,7 +202,7 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    d2 = 3.0/10.0
 
    ! Alpha values
-   eps = 1.0e-40
+   eps = 1.0e-20
    tau = abs(b2-b0)
    a0 = d0*(1.0 + (tau/(b0+eps))**r)
    a1 = d1*(1.0 + (tau/(b1+eps))**r)
@@ -269,7 +269,7 @@ subroutine weno5_weights(b0, b1, b2, qmm, qm, q0, qp, qpp)
 
    ! Second stencil
 
-   b1 = (13.0/12.0)*(qm - 2.0*q0 + qp)**2 + 0.25*(qm - qp)**2
+   b1 = (13.0/12.0)*(qm - 2.0*q0 + qp)**2 + 0.25*(-qm + qp)**2
 
    ! Third stencil
 
@@ -302,40 +302,41 @@ subroutine weno5NM_poly(P0, P1, P2, b0, b1, b2, qmm, qm, q0, qp, qpp, dx)
    real, intent(out) :: P0, P1, P2, b0, b1, b2
 
    real :: a0, a1, a2, a3, qh, qhh, qhp, qhpp
+   real :: um, up
 
    ! First stencil
 
    a0 = dx(1)/(dx(1)+dx(2))
    a1 = dx(2)/(dx(2)+dx(3))
 
-   qh = (1.0-a1)*qm + a1*q0
-   qhh = (2.0-a0)*qm - (1.0-a0)*qmm
+   um = (2.0-a0)*qm - (1.0-a0)*qmm
+   up = (1.0-a1)*qm + a1*q0
 
-   b0 = (13.0/12.0)*(2.0*qh - 2.0*qhh)**2 + 0.25*(4.0*q0 - 2.0*qh - 2.0*qhh)**2
+   b0 = (13.0/12.0)*(2.0*up - 2.0*um)**2 + 0.25*(4.0*q0 - 2.0*up - 2.0*um)**2
 
-   P0 = (6.0*q0 - qh - 2.0*qhh)/3.0
+   P0 = (6.0*q0 - up - 2.0*um)/3.0
 
    ! Second stencil
 
    a2 = dx(3)/(dx(3)+dx(4))
 
-   !qh = (1.0-a1)*qm + a1*q0
-   qhp = (1.0-a2)*q0 + a2*qp
+   um = (1.0-a1)*qm + a1*q0
+   up = (1.0-a2)*q0 + a2*qp
 
-   b1 = (13.0/12.0)*(2.0*qh - 4.0*q0 + 2.0*qhp)**2 + 0.25*(-2.0*qh + 2.0*qhp)**2
+   b1 = (13.0/12.0)*(2.0*um - 4.0*q0 + 2.0*up)**2 + 0.25*(-2.0*um + 2.0*up)**2
 
-
-   P1 = (-qh + 2*q0 + 2.0*qhp)/3.0
+   P1 = (-um + 2*q0 + 2.0*up)/3.0
 
    ! Third stencil
 
    a3 = dx(4)/(dx(4)+dx(5))
+   
+   um = (1.0-a2)*q0 + a2*qp
+   up = (1.0-a3)*qp + a3*qpp
 
-   qhpp = (1.0-a3)*qp + a3*qpp
+   b2 = (13.0/12.0)*(2.0*um - 4.0*qp + 2.0*up)**2 + 0.25*(-6.0*um + 8.0*qp - 2.0*up)**2
 
-   b2 = (13.0/12.0)*(2.0*qhp - 4.0*qp + 2.0*qhpp)**2 + 0.25*(-6.0*qhp + 8.0*qp - 2.0*qhpp)**2
-
-   P2 = (2.0*qhp + 5.0*qp - qhpp)/3.0
+   P2 = (2.0*um + 2.0*qp - up)/3.0
 
 end subroutine weno5NM_poly
 
@@ -713,12 +714,6 @@ subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp, wmr, wpl, w0, qmin_g, qmax_g, wpp
       !theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0)/(qmin-q0)), 1.0)
    endif
    
-   !if(tmp <= 0.0 ) then
-   !   theta = 0.0
-   !else
-   !   theta = 1.0
-   !endif
-
    !if(qmin < eps) then
    !   theta = 0.0
    !else 
