@@ -35,8 +35,8 @@ subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, w
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
    
-   !w0 = 1.0
-   w0 = 1.0/6.0
+   w0 = 1.0
+   !w0 = 1.0/6.0
 
    if(u >= 0.0) then 
       call weno3_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)
@@ -123,8 +123,8 @@ subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, wp
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
 
-   !w0 = 5.0/18.0
-   w0 = 1.0/12.0
+   w0 = 5.0/18.0
+   !w0 = 1.0/12.0
 
    if(u >= 0.0) then
       call weno5_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)  ! i-1/2
@@ -157,8 +157,8 @@ subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, d
    real :: ds(5), ds1(6), wppm
 
 
-   !w0 = 5.0/18.0
-   w0 = 1.0/12.0
+   w0 = 5.0/18.0
+   !w0 = 1.0/12.0
 
    if(u >= 0.0) then
       ds = dx(1:5)
@@ -176,8 +176,6 @@ subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, d
       !call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
       call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm)
    endif
-
-   !wq = wpl
 
 end subroutine weno5_reconstruction2
 
@@ -353,8 +351,8 @@ subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qm
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
 
-   !w0 = (322.0-13.0*sqrt(70.0))/1800.0
-   w0 = 1.0/20.0
+   w0 = (322.0-13.0*sqrt(70.0))/1800.0
+   !w0 = 1.0/20.0
 
    if(u >= 0.0) then
       call weno7_reconstruction_interface(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
@@ -610,11 +608,11 @@ subroutine apply_MP(wq, qmm, qm, q0, qp, qpp)
 
    cp = (wq - q0)*(wq - qmp)
 
-   if(cp <= 1.0e-10) then
+   !if(cp <= 1.0e-10) then
 
-      tmp = wq
+   !   tmp = wq
 
-   else
+   !else
 
       dm1 = qmm - 2.0*qm + q0
       d0 = qp - 2.0*q0 + qm
@@ -635,9 +633,7 @@ subroutine apply_MP(wq, qmm, qm, q0, qp, qpp)
       call median(md,wq,qmin,qmax)
       tmp = md
 
-      !tmp = q0
-
-   endif
+   !endif
 
    wq = tmp 
 
@@ -664,76 +660,38 @@ subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp, wmr, wpl, w0, qmin_g, qmax_g, wpp
    qmp = q0 + mmp
 
    !cp = (wq - q0)*(qmp - q0)
+   !cp = (wpl - q0)*(wpl - qmp)
 
-   cp = (wpl - q0)*(wpl - qmp)
+   dm1 = qmm - 2.0*qm + q0
+   d0 = qp - 2.0*q0 + qm
+   d1 = qpp - 2.0*qp + q0
 
-   !if(cp <= 0.0) then
+   call minmod3(dm4, 4.0*d0-d1, 4.0*d1-d0, d0, d1)
+   call minmod3(dm, 4.0*dm1-d0, 4.0*d0-dm1, dm1, d0)
 
-   !   tmp = wpl
+   beta = 4.0
+   qul = q0 + ka*(q0-qm)
+   qmd = 0.5*(q0 + qp) - 0.5*dm4
+   qlc = q0 + 0.5*(q0-qm) + (beta/3.0)*dm
+   !qlc = 0.5*(q0 + qul) + 0.5*ka*dm
 
-   !else
+   qmin2 = max(min(q0,qp,qmd),min(q0,qul,qlc))
+   qmax2 = min(max(q0,qp,qmd),max(q0,qul,qlc))
 
-      dm1 = qmm - 2.0*qm + q0
-      d0 = qp - 2.0*q0 + qm
-      d1 = qpp - 2.0*qp + q0
-
-      call minmod3(dm4, 4.0*d0-d1, 4.0*d1-d0, d0, d1)
-      call minmod3(dm, 4.0*dm1-d0, 4.0*d0-dm1, dm1, d0)
-
-      beta = 4.0
-      qul = q0 + ka*(q0-qm)
-      qmd = 0.5*(q0 + qp) - 0.5*dm4
-      qlc = q0 + 0.5*(q0-qm) + (beta/3.0)*dm
-      !qlc = 0.5*(q0 + qul) + 0.5*ka*dm
-
-      qmin2 = max(min(q0,qp,qmd),min(q0,qul,qlc))
-      qmax2 = min(max(q0,qp,qmd),max(q0,qul,qlc))
-
-      call median(md,wpl,qmin2,qmax2)
-      tmp = md
-
-      !tmp = wppm
-
-   !endif
+   call median(md,wpl,qmin2,qmax2)
+   tmp = md
 
    ! MPP limiter
-   P0 = (q0 - w0*wmr - w0*wpl)/(1.0 - 2.0*w0)
+   P0 = (q0 - w0*(wmr + wpl))/(1.0 - 2.0*w0)
 
    qmin = min(wmr, P0, wpl)
    qmax = max(wmr, P0, wpl)
 
-   !print*, wmr, wpl, qmin, qmax
-
    !eps = min(1.0e-13, (q0 - qmin)**5, q0)
-   !eps = min(1.0e-13, q0)
-   eps = 1.0e-13
-   if(abs(qmin-q0) <= eps .or. abs(qmax-q0) <= eps) then
-      theta = 0.0
-   else
-      theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
-      !theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0)/(qmin-q0)), 1.0)
-   endif
-   
-   !if(qmin < eps) then
-   !   theta = 0.0
-   !else 
-   !   s0 = abs(q0/(q0 - qmin))
-   !   !if (s0 > 1.0) s0 = 0.0
-   !   theta = min(s0, 1.0)
-   !endif
-   
-   !s0 = q0
+   eps = min(1.0e-13, q0)
+   theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
 
-   !if(theta == 1.0 .and. tmp < 0.0) then
-   !  print*, 'theta = ', theta, q0
-   !  print*, 'min1 = ', qmin, tmp
-   !endif 
-
-   !if(theta < 1.0) print*,'theta = ', theta
-   !theta = 0.0
    wq = theta*(tmp - q0) + q0
-
-   !wq = tmp
 
 end subroutine apply_MP2
 
@@ -752,20 +710,19 @@ subroutine PP_limiter(wq, q0, wmr, wpl, w0, qmin_g, qmax_g)
 
    wq = 0.0
 
-   P0 = (q0 - w0*wmr - w0*wpl)/(1.0 - 2.0*w0)
+   P0 = (q0 - w0*(wmr + wpl))/(1.0 - 2.0*w0)
 
    qmin = min(wmr, P0, wpl)
    qmax = max(wmr, P0, wpl)
 
    !eps = min(1.0e-13, (q0 - qmin)**5, q0)
-   !eps = min(1.0e-13, q0)
-   eps = 1.0e-13
-   theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
-   !theta = min(abs((qmax_g-q0)/(qmax-q0)), 1.0)
+   eps = min(1.0e-13, q0)
+   !eps = 1.0e-13
+
+   qmin = min(qmin,eps)
+   qmax = max(qmax,eps)
 
    wq = theta*(wpl - q0) + q0
-
-   !wq = wpl
 
 end subroutine PP_limiter
 
@@ -802,7 +759,7 @@ subroutine minmod3(mab,a1,a2,a3,a4)
 
    real, intent(in) :: a1,a2,a3,a4
    real, intent(out) :: mab
-   real :: s1,s2,s3,s4
+   real :: s1,s2
 
    s1 = 0.5*(sign(1.0,a1) + sign(1.0,a2))*min(abs(a1),abs(a2))
 
