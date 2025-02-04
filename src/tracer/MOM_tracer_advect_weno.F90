@@ -22,56 +22,64 @@ public weno5_reconstruction2
 contains
 
 !> 3rd weno reconstruction subroutine and limiter
-subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, wppm)
+subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, wppm, mu)
 
    real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 ! tracer concentration from i-2 to  i+3 respectively
    real, intent(in) :: u                         ! advection velocity
    real, intent(in) :: qmin, qmax                ! global min and max of tracer concentration
-   real, intent(in) :: wppm
+   real, intent(in) :: wppm, mu
    real, intent(out) :: wq                       ! weno reconstruction at the interface i+1/2
 
    real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
    real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
-   
+   real :: s, r0, r1
+
    w0 = 1.0
    !w0 = 1.0/6.0
 
    if(u >= 0.0) then 
-      call weno3_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)
-      call weno3_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)
+      call weno3_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2, r1)
+      call weno3_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2, r0)
       ! maximum-principle limiter
       !call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-      call apply_MP2(wq, qm2, qm, q0, qp, qp2, wmr, wpl, w0, qmin, qmax, wppm)
+      s = max(r0,r1)
+      call apply_MP2(wq, qm2, qm, q0, qp, qp2, wmr, wpl, w0, qmin, qmax, wppm, mu, s)
    else
-      call weno3_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
-      call weno3_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
+      call weno3_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm, r0)
+      call weno3_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3, r1)
       ! maximum-principle limiter
       !call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
-      call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm)
+      s = max(r0,r1)
+      call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm, mu, s)
    endif
 
 end subroutine weno3_reconstruction
 
 !> 3rd-order weno reconstruction subroutine
-subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
+subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp, ri)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp
-   real, intent(out) :: wq
+   real, intent(out) :: wq, ri
 
    real :: a1, a2, b1, b2, h1, h2, nu
    real :: eps, wnorm, w_1, w_2, P1, P2, tau
+
+   eps = 1.0e-20
    
    call weno3_weights(b1, b2, qm, q0, qp)
    call weno3_poly(P1, P2, qm, q0, qp)
+
+   ri = 0.0
+   ri = max(b1,b2)/(min(b1,b2)+eps)
+   if(ri > 5.0) ri = 1.0
 
    wq = 0.0
    h1 = 1.0/3.0
    h2 = 2.0/3.0
 
    ! Alpha values
-   eps = 1.0e-20
    tau = abs(b2-b1)
    a1 = h1*(1.0 + (tau/(b1+eps))**2)
    a2 = h2*(1.0 + (tau/(b2+eps))**2)
@@ -110,44 +118,47 @@ subroutine weno3_weights(b1, b2, qm, q0, qp)
 end subroutine weno3_weights
 
 !> 5th-order weno reconstruction subroutine and limiter
-subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, wppm)
+subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, wppm, mu)
 
    real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 ! tracer concentration from i-2 to  i+3 respectively
    real, intent(in) :: u                         ! advection velocity
    real, intent(in) :: qmin, qmax                ! global min and max of tracer concentration
-   real, intent(in) :: wppm
+   real, intent(in) :: wppm, mu
    real, intent(out) :: wq                       ! weno reconstruction at the interface i+1/2
 
    real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
    real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
+   real :: s, r0, r1
 
    w0 = 5.0/18.0
    !w0 = 1.0/12.0
 
    if(u >= 0.0) then
-      call weno5_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)  ! i-1/2
-      call weno5_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)  ! i+1/2
+      call weno5_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2, r0)  ! i-1/2
+      call weno5_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2, r1)  ! i+1/2
       ! maximum-principle limiter
       !call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-      call apply_MP2(wq, qm2, qm, q0, qp, qp2, wmr, wpl, w0, qmin, qmax, wppm)
+      s = max(r0,r1)
+      call apply_MP2(wq, qm2, qm, q0, qp, qp2, wmr, wpl, w0, qmin, qmax, wppm, mu, s)
    else
-      call weno5_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)  
-      call weno5_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
+      call weno5_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm, r0)  
+      call weno5_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3, r1)
       ! maximum-principle limiter
       !call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
-      call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm)
+      s = max(r0,r1)
+      call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm, mu, s)
    endif
 
 end subroutine weno5_reconstruction
 
-subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, dx)
+subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, dx, mu)
 
    real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 ! tracer concentration from i-2 to  i+3 respectively
    real, intent(in) :: u                         ! advection velocity
    real, intent(in) :: qmin, qmax                ! global min and max of tracer concentration
-   real, intent(in) :: dx(6)
+   real, intent(in) :: dx(6), mu
    real, intent(out) :: wq                       ! weno reconstruction at the interface i+1/2
 
    real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
@@ -166,7 +177,7 @@ subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, d
       call weno5_reconstruction_interface2(wpl, qm2, qm, q0, qp, qp2, ds)  ! i+1/2
       ! maximum-principle limiter
       !call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-      call apply_MP2(wq, qm2, qm, q0, qp, qp2, wmr, wpl, w0, qmin, qmax, wppm)
+      !call apply_MP2(wq, qm2, qm, q0, qp, qp2, wmr, wpl, w0, qmin, qmax, wppm, mu)
    else
       ds1 = dx(6:1:-1)
       ds = ds1(1:5)
@@ -174,15 +185,15 @@ subroutine weno5_reconstruction2(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, d
       call weno5_reconstruction_interface2(wmr, qm, q0, qp, qp2, qp3, ds)
       ! maximum-principle limiter
       !call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
-      call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm)
+      !call apply_MP2(wq, qp3, qp2, qp, q0, qm, wmr, wpl, w0, qmin, qmax, wppm, mu)
    endif
 
 end subroutine weno5_reconstruction2
 
-subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
+subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp, ri)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp
-   real, intent(out) :: wq
+   real, intent(out) :: wq, ri
 
    real :: a0, a1, a2, b0, b1, b2, d0, d1, d2, nu
    real :: eps,  wnorm, w0, w1, w2, P0, P1, P2, tau
@@ -190,9 +201,14 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    integer :: r
 
    r = 2 
+   eps = 1.0e-20
 
    call weno5_weights(b0, b1, b2, qmm, qm, q0, qp, qpp)
    call weno5_poly(P0, P1, P2, qmm, qm, q0, qp, qpp)
+   
+   ri = 0.0
+   ri = max(b0,b1,b2)/(min(b0,b1,b2)+eps)
+   if(ri > 5.0) ri = 1.0
 
    ! Gamma values in Weno reconstruction
    d0 = 1.0/10.0
@@ -200,7 +216,6 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    d2 = 3.0/10.0
 
    ! Alpha values
-   eps = 1.0e-20
    tau = abs(b2-b0)
    a0 = d0*(1.0 + (tau/(b0+eps))**r)
    a1 = d1*(1.0 + (tau/(b1+eps))**r)
@@ -338,42 +353,45 @@ subroutine weno5NM_poly(P0, P1, P2, b0, b1, b2, qmm, qm, q0, qp, qpp, dx)
 
 end subroutine weno5NM_poly
 
-subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qmin, qmax, wppm)
+subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qmin, qmax, wppm, mu)
 
    real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 ! tracer concentration from i-3 to  i+4 respectively
    real, intent(in) :: u                         ! advection velocity
    real, intent(in) :: qmin, qmax                ! global min and max of tracer concentration
-   real, intent(in) :: wppm
+   real, intent(in) :: wppm, mu
    real, intent(out) :: wq                       ! weno reconstruction at the interface i+1/2
 
    real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
    real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
    real :: w0  ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2], 
                ! N is weno reconstruction order
+   real :: s, r0, r1
 
    w0 = (322.0-13.0*sqrt(70.0))/1800.0
    !w0 = 1.0/20.0
 
    if(u >= 0.0) then
-      call weno7_reconstruction_interface(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
-      call weno7_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+      call weno7_reconstruction_interface(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3, r0)
+      call weno7_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3, r1)
       ! maximum-principle limiter
       !call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-      call apply_MP2(wq, qm2, qm1, q0, qp1, qp2, wmr, wpl, w0, qmin, qmax, wppm)
+      s = max(r0,r1)
+      call apply_MP2(wq, qm2, qm1, q0, qp1, qp2, wmr, wpl, w0, qmin, qmax, wppm, mu, s)
    else
-      call weno7_reconstruction_interface(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2)
-      call weno7_reconstruction_interface(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4)
+      call weno7_reconstruction_interface(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2, r0)
+      call weno7_reconstruction_interface(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4, r1)
       ! maximum-principle limiter
       !call PP_limiter(wq, qp1, wmr, wpl, w0, qmin, qmax)
-      call apply_MP2(wq, qp3, qp2, qp1, q0, qm1, wmr, wpl, w0, qmin, qmax, wppm)
+      s = max(r0,r1)
+      call apply_MP2(wq, qp3, qp2, qp1, q0, qm1, wmr, wpl, w0, qmin, qmax, wppm, mu, s)
    endif
 
 end subroutine weno7_reconstruction
 
-subroutine weno7_reconstruction_interface(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+subroutine weno7_reconstruction_interface(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, ri)
 
    real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3
-   real, intent(out) :: wq
+   real, intent(out) :: wq, ri
 
    real :: b0, b1, b2, b3, d0, d1, d2, d3
    real :: eps, a0, a1, a2, a3, wnorm, w0, w1, w2, w3, tau
@@ -381,9 +399,14 @@ subroutine weno7_reconstruction_interface(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
    integer :: r
 
    r = 2
+   eps = 1.0e-20
 
    call weno7_weights(b0, b1, b2, b3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
    call weno7_poly(P0, P1, P2, P3, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+   
+   ri = 0.0
+   ri = max(b0,b1,b2,b3)/(min(b0,b1,b2,b3) + eps)
+   if(ri > 5.0) ri = 1.0
 
    d0 = 1.0/35.0
    d1 = 12.0/35.0
@@ -391,7 +414,6 @@ subroutine weno7_reconstruction_interface(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
    d3 = 4.0/35.0
 
    ! Alpha values
-   eps = 1.0e-20
    tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
    a0 = d0*(1.0 + (tau/(b0+eps))**r)
    a1 = d1*(1.0 + (tau/(b1+eps))**r)
@@ -640,7 +662,7 @@ subroutine apply_MP(wq, qmm, qm, q0, qp, qpp)
 end subroutine apply_MP
 
 !> This is the subroutine for the monotonic-preserving limiter
-subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp, wmr, wpl, w0, qmin_g, qmax_g, wppm)
+subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp, wmr, wpl, w0, qmin_g, qmax_g, wppm, mu, dis0)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp ! tracer concentration from i-2 to i+2 respectively
    real, intent(out) :: wq                ! weno reconstruction at the interface i+1/2 after MP limiter
@@ -648,14 +670,16 @@ subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp, wmr, wpl, w0, qmin_g, qmax_g, wpp
    real, intent(in) :: w0         ! w0 : 1st weight of N Gauss-Legendre quadrature weights over [-1/2,1/2],
                                   ! N is weno reconstruction order
    real, intent(in) :: qmin_g, qmax_g ! global min and max of tracer concentration at the initial time
-   real, intent(in) :: wppm
+   real, intent(in) :: wppm, mu, dis0
 
    real :: d0, d1, dm1, beta, ka
    real :: dm4, qlc, qmd, qul, qmin, qmax, md, dm
    real :: cp, qmp, mmp, tmp
-   real :: qmin2, qmax2, theta, eps, P0, s0
+   real :: qmin2, qmax2, theta, eps, P0, s0, s1
+   real :: r, slop, q0_min, q0_max, D4Q, dis, r0,r1,eps0
 
    ka = 2.0
+   !ka = (0.9/mu)-1.
    call minmod(mmp,qp-q0, ka*(q0-qm))
    qmp = q0 + mmp
 
@@ -663,8 +687,8 @@ subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp, wmr, wpl, w0, qmin_g, qmax_g, wpp
    !cp = (wpl - q0)*(wpl - qmp)
 
    dm1 = qmm - 2.0*qm + q0
-   d0 = qp - 2.0*q0 + qm
-   d1 = qpp - 2.0*qp + q0
+   d0 = qm - 2.0*q0 + qp
+   d1 = q0 - 2.0*qp + qpp
 
    call minmod3(dm4, 4.0*d0-d1, 4.0*d1-d0, d0, d1)
    call minmod3(dm, 4.0*dm1-d0, 4.0*d0-dm1, dm1, d0)
@@ -678,20 +702,42 @@ subroutine apply_MP2(wq, qmm, qm, q0, qp, qpp, wmr, wpl, w0, qmin_g, qmax_g, wpp
    qmin2 = max(min(q0,qp,qmd),min(q0,qul,qlc))
    qmax2 = min(max(q0,qp,qmd),max(q0,qul,qlc))
 
-   call median(md,wpl,qmin2,qmax2)
-   tmp = md
+   call minmod(mmp,qp-q0, ka*(q0-qm))
+   qmp = q0 + mmp
+
+   q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
+   !cp = (qmax-qmin) - (q0_max-q0_min)
+   cp = (wq - q0)*(wq - qmp)
+   
+   !dis = dis0
+
+   !if((qmax2-qmin2) > (q0_max-q0_min)) then
+   !if(cp > 0.0) then
+     !wq = wppm
+
+   !else
+     call median(md,wpl,qmin2,qmax2)
+     tmp = md
+   !endif
 
    ! MPP limiter
    P0 = (q0 - w0*(wmr + wpl))/(1.0 - 2.0*w0)
 
+   !eps = 1.0e-13
+   eps = min(1.0e-13, q0)
    qmin = min(wmr, P0, wpl)
    qmax = max(wmr, P0, wpl)
 
    !eps = min(1.0e-13, (q0 - qmin)**5, q0)
-   eps = min(1.0e-13, q0)
+   !eps = min(1.0e-13, q0)
    theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
-
+   !theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0)/(qmin-q0)), 1.0)
+   
    wq = theta*(tmp - q0) + q0
+   
+   !endif
+  
+   !wq = dis*tmp + (1.0-dis)*wppm
 
 end subroutine apply_MP2
 
@@ -833,9 +879,9 @@ subroutine PPM_reconstruction(wq, Tm1, T0, Tp1, Tp2, mu, u, mask)
   a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
 
   if (u >= 0.0) then
-     wq = aR - 0.5*mu*((aR - aL) - a6*(1.0 - (2.0/3.0)*mu))
+     wq = aR - 0.5*mu*((aR - aL) - a6*(1. - (2./3.)*mu))
   else
-     wq = aL + 0.5*mu*((aR - aL) + a6*(1.0 - (2.0/3.0)*mu))
+     wq = aL + 0.5*mu*((aR - aL) + a6*(1. - (2./3.)*mu))
   endif
 
 end subroutine PPM_reconstruction

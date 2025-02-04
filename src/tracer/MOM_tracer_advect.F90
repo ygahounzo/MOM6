@@ -613,17 +613,22 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         u = uhh(I)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
-        mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+        if(u >= 0.0) then
+            mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+        else
+           i_up = i+1
+           mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+        endif
         call PPM_reconstruction(wppm, Tm1, Tc, Tp1, Tp2, CFL(I), u, mask)
 
         dx(1) = G%dxCu(I-2,j) ; dx(2) = G%dxCu(I-1,j) ; dx(3) = G%dxCu(I,j)
         dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j) ; dx(6) = G%dxCu(I+3,j)
 
         if(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
             !call weno5_reconstruction2(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, dx)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
         else
             if(u >= 0.0) then
                wq = Tc
@@ -632,7 +637,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             endif 
         endif        
 
-        flux_x(I,j,m) = uhh(I)*wq 
+        flux_x(I,j,m) = u*wq 
 
       enddo ; enddo
 
@@ -651,15 +656,20 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         u = uhh(I)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
-        mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+        if(u >= 0.0) then
+            mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+        else
+           i_up = i+1
+           mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+        endif
         call PPM_reconstruction(wppm, Tm1, Tc, Tp1, Tp2, CFL(I), u, mask)
 
         if(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, wppm)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, wppm, CFL(I))
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
         else
             if(u >= 0.0) then
                wq = Tc
@@ -692,11 +702,11 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         if(order9 == 1.0) then
             call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, Tmin, Tmax)
         elseif(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, wppm)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, wppm, CFL(I))
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
         else
             if(u >= 0.0) then
                wq = Tc
@@ -1111,18 +1121,24 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
         v = vhh(i,J)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
+        
+        if(v >= 0.0) then
+           mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+        else
+           j_up = j+1
+           mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+        endif
 
-        mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
         call PPM_reconstruction(wppm, Tm1, Tc, Tp1, Tp2, CFL(i), v, mask)
         
         dy(1) = G%dyCv(i,J-2) ; dy(2) = G%dyCv(i,J-1) ; dy(3) = G%dyCv(i,J)
         dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2) ; dy(6) = G%dyCv(i,J+3)
 
         if(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
             !call weno5_reconstruction2(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, dy)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1150,15 +1166,20 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         v = vhh(i,J)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
         
-        mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+        if(v >= 0.0) then
+           mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+        else
+           j_up = j+1
+           mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+        endif
         call PPM_reconstruction(wppm, Tm1, Tc, Tp1, Tp2, CFL(i), v, mask)
 
         if(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, wppm)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, wppm, CFL(i))
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1191,11 +1212,11 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         if(order9 == 1.0) then
             call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, Tmin, Tmax)
         elseif(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, wppm)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, wppm, CFL(i))
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
         else
             if(v >= 0.0) then
                wq = Tc

@@ -275,7 +275,7 @@ subroutine register_gyre_tracer_segments(GV, OBC, tr_Reg, param_file)
 
   real :: T_init
 
-  T_init = 0.0
+  T_init = 90.0
 
   if (.not. associated(OBC)) return
 
