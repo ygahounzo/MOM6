@@ -315,7 +315,7 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag)
   CS%diag => diag
   CS%Time => Time
 
-  CS%g_Earth = US%L_to_Z**2*GV%g_Earth
+  CS%g_Earth = GV%g_Earth_Z_T2
   CS%I_g_Earth = 1.0 / CS%g_Earth
 
   ! Add any initializations needed here
@@ -1033,7 +1033,7 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, dz, ustar, dt, dynamics_step)
 
 end subroutine Update_Stokes_Drift
 
-!> Return the value of (1 - exp(-x))/x, using an accurate expression for small values of x.
+!> Return the value of (1 - exp(-x))/x [nondim], using an accurate expression for small values of x.
 real function one_minus_exp_x(x)
   real, intent(in) :: x !< The argument of the function ((1 - exp(-x))/x) [nondim]
   real, parameter :: C1_6 = 1.0/6.0  ! A rational fraction [nondim]
@@ -1045,7 +1045,7 @@ real function one_minus_exp_x(x)
   endif
 end function one_minus_exp_x
 
-!> Return the value of (1 - exp(-x)), using an accurate expression for small values of x.
+!> Return the value of (1 - exp(-x)) [nondim], using an accurate expression for small values of x.
 real function one_minus_exp(x)
   real, intent(in) :: x !< The argument of the function ((1 - exp(-x))/x) [nondim]
   real, parameter :: C1_6 = 1.0/6.0  ! A rational fraction [nondim]

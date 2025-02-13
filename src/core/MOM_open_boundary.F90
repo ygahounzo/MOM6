@@ -398,7 +398,7 @@ end type ocean_OBC_type
 !> Control structure for open boundaries that read from files.
 !! Probably lots to update here.
 type, public :: file_OBC_CS ; private
-  real :: tide_flow = 3.0e6         !< Placeholder for now..., perhaps in [m3 s-1]?
+  logical :: OBC_file_used = .false.     !< Placeholder for now to avoid an empty type.
 end type file_OBC_CS
 
 !> Type to carry something (what??) for the OBC registry.
@@ -1123,7 +1123,7 @@ subroutine initialize_segment_data(G, GV, US, OBC, PF)
 end subroutine initialize_segment_data
 
 !> Return an appropriate dimensional scaling factor for input data based on an OBC segment data
-!! name, or 1 for tracers or other fields that do not match one of the specified names.
+!! name [various ~> 1], or 1 for tracers or other fields that do not match one of the specified names.
 !! Note that calls to register_segment_tracer can come before or after calls to scale_factor_from_name.
 
 real function scale_factor_from_name(name, GV, US, Tr_Reg)
