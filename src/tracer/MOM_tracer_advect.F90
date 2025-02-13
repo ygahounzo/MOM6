@@ -21,7 +21,7 @@ use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_spatial_means, only : array_global_min_max
 use MOM_tracer_advect_weno, only : weno3_reconstruction, weno5_reconstruction
 use MOM_tracer_advect_weno, only : weno7_reconstruction, weno9_reconstruction
-use MOM_tracer_advect_weno, only : PPM_reconstruction, weno5_reconstruction2
+use MOM_tracer_advect_weno, only : weno5_reconstruction2
 
 implicit none ; private
 
@@ -129,6 +129,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
   landvolfill = 1.0e-20         ! This is arbitrary, but must be positive.
+  stencil = 2                   ! The scheme's stencil; 2 for PLM
 
   if (.not. associated(CS)) call MOM_error(FATAL, "MOM_tracer_advect: "// &
        "tracer_advect_init must be called before advect_tracer.")
@@ -613,22 +614,14 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         u = uhh(I)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
-        if(u >= 0.0) then
-            mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
-        else
-           i_up = i+1
-           mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
-        endif
-        call PPM_reconstruction(wppm, Tm1, Tc, Tp1, Tp2, CFL(I), u, mask)
-
-        dx(1) = G%dxCu(I-2,j) ; dx(2) = G%dxCu(I-1,j) ; dx(3) = G%dxCu(I,j)
-        dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j) ; dx(6) = G%dxCu(I+3,j)
+        !dx(1) = G%dxCu(I-2,j) ; dx(2) = G%dxCu(I-1,j) ; dx(3) = G%dxCu(I,j)
+        !dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j) ; dx(6) = G%dxCu(I+3,j)
 
         if(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
             !call weno5_reconstruction2(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, dx)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -637,7 +630,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             endif 
         endif        
 
-        flux_x(I,j,m) = u*wq 
+        flux_x(I,j,m) = uhh(I)*wq 
 
       enddo ; enddo
 
@@ -656,20 +649,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         u = uhh(I)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
 
-        if(u >= 0.0) then
-            mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
-        else
-           i_up = i+1
-           mask = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
-        endif
-        call PPM_reconstruction(wppm, Tm1, Tc, Tp1, Tp2, CFL(I), u, mask)
-
         if(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, wppm, CFL(I))
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -702,11 +687,11 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         if(order9 == 1.0) then
             call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, Tmin, Tmax)
         elseif(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, wppm, CFL(I))
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, wppm, CFL(I))
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -727,7 +712,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
          !flux_x(I,j,m) = uhh(I)*( aR - 0.5 * (aR-aL) * CFL(I) )
           ! Alternative implementation of PLM
           Tc = T_tmp(i,m)
-          flux_x(I,j,m) = uhh(I)*( Tc + 0.5 * slope_x(i,m) * ( 1. - CFL(I) ) )
+          flux_x(I,j,m) = uhh(I)* ( Tc + 0.5 * slope_x(i,m) * ( 1. - CFL(I) ) )
         else
           ! Indirect implementation of PLM
          !aL = Tr(m)%t(i+1,j,k) - 0.5 * slope_x(i+1,m)
@@ -1121,24 +1106,15 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
         v = vhh(i,J)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
-        
-        if(v >= 0.0) then
-           mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
-        else
-           j_up = j+1
-           mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
-        endif
 
-        call PPM_reconstruction(wppm, Tm1, Tc, Tp1, Tp2, CFL(i), v, mask)
-        
-        dy(1) = G%dyCv(i,J-2) ; dy(2) = G%dyCv(i,J-1) ; dy(3) = G%dyCv(i,J)
-        dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2) ; dy(6) = G%dyCv(i,J+3)
+        !dy(1) = G%dyCv(i,J-2) ; dy(2) = G%dyCv(i,J-1) ; dy(3) = G%dyCv(i,J)
+        !dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2) ; dy(6) = G%dyCv(i,J+3)
 
         if(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
             !call weno5_reconstruction2(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, dy)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1166,20 +1142,12 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         v = vhh(i,J)
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
         
-        if(v >= 0.0) then
-           mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
-        else
-           j_up = j+1
-           mask = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
-        endif
-        call PPM_reconstruction(wppm, Tm1, Tc, Tp1, Tp2, CFL(i), v, mask)
-
         if(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, wppm, CFL(i))
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1212,11 +1180,11 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         if(order9 == 1.0) then
             call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, Tmin, Tmax)
         elseif(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, wppm, CFL(i))
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, wppm, CFL(i))
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1244,7 +1212,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
          !flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * (aR-aL) * CFL(i) )
           ! Alternative implementation of PLM
           Tc = T_tmp(i,m,j+1)
-          flux_y(i,m,J) = vhh(i,J)* ( Tc - 0.5 * slope_y(i,m,j+1) * ( 1. - CFL(i) ) )
+          flux_y(i,m,J) = vhh(i,J)*( Tc - 0.5 * slope_y(i,m,j+1) * ( 1. - CFL(i) ) )
         endif
       enddo ; enddo
     endif ! usePPM

@@ -90,8 +90,15 @@ function register_gyre_tracer(G, GV, param_file, CS, tr_Reg, restart_CS)
   character(len=48)  :: flux_units ! The units for tracer fluxes, usually
                             ! kg(tracer) kg(water)-1 m3 s-1 or kg(tracer) s-1.
   real, pointer :: tr_ptr(:,:,:) => NULL() ! A pointer to a tracer array [conc]
+  real, pointer :: adx(:,:,:) => NULL() !
+  real, pointer :: ady(:,:,:) => NULL() !
+  real, pointer :: advectionxy(:,:,:) => NULL() !
+  real, pointer :: adxx(:,:,:)
+  real, pointer :: adyy(:,:,:)
+  real, pointer :: adxy(:,:,:)
   logical :: register_gyre_tracer
   integer :: isd, ied, jsd, jed, nz, m
+
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed ; nz = GV%ke
 
   if (associated(CS)) then
@@ -135,6 +142,9 @@ function register_gyre_tracer(G, GV, param_file, CS, tr_Reg, restart_CS)
 
 
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
+  !allocate(adxx(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
+  !allocate(adyy(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
+  !allocate(adxy(isd:ied,jsd:jed,nz), source=0.0)
 
   do m=1,NTR
     if (m < 10) then ; write(name,'("tr",I1.1)') m
@@ -148,7 +158,15 @@ function register_gyre_tracer(G, GV, param_file, CS, tr_Reg, restart_CS)
     ! This is needed to force the compiler not to do a copy in the registration
     ! calls.  Curses on the designers and implementers of Fortran90.
     tr_ptr => CS%tr(:,:,:,m)
+    !adx => adxx
+    !ady => adyy
+    !advectionxy => adxy
     ! Register the tracer for horizontal advection, diffusion, and restarts.
+    !call register_tracer(tr_ptr, tr_Reg, param_file, G%HI, GV, &
+    !                     name=name, longname=longname, units="kg kg-1", &
+    !                     ad_x=adx, ad_y=ady, advection_xy=adxy, registry_diags=.true., flux_units=flux_units, &
+    !                     restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+
     call register_tracer(tr_ptr, tr_Reg, param_file, G%HI, GV, &
                          name=name, longname=longname, units="kg kg-1", &
                          registry_diags=.true., flux_units=flux_units, &
@@ -275,7 +293,7 @@ subroutine register_gyre_tracer_segments(GV, OBC, tr_Reg, param_file)
 
   real :: T_init
 
-  T_init = 90.0
+  T_init = 100.0
 
   if (.not. associated(OBC)) return
 
