@@ -64,7 +64,7 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    real :: b1, b2, b3, eps
    integer :: r
 
-   eps = 1.0e-40
+   eps = 1.0e-4
    r = 2
 
    ds = 16.0
@@ -90,8 +90,8 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    O0 = O01/(O01+O11) ; O1 = 1.0-O0
    s0 = O0*(1.0 + (abs(k0-k1)**r/(k0+eps))) ; s1 = O1*(1.0 + (abs(k0-k1)**r/(k1+eps)))
-   !b3 = ((s0*(q0-qm)+s1*(qp-q0))**2)/(s0+s1)**2
-   b3 = min(k0,k1)
+   b3 = ((s0*(q0-qm)+s1*(qp-q0))**2)/(s0+s1)**2
+   !b3 = min(k0,k1)
 
    tau = ((abs(b1-b2)+abs(b1-b3))/2.0)**r
 
@@ -155,7 +155,7 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    real :: b1, b2, b3, b4, b5, eps
    integer :: r
 
-   eps = 1.0e-40
+   eps = 1.0e-4
    r = 2
 
    ds = 141.0
@@ -188,8 +188,8 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    O0 = O01/(O01+O11) ; O1 = 1.0-O0
    s0 = O0*(1.0 + (abs(k0-k1)**r/(k0+eps))) ; s1 = O1*(1.0 + (abs(k0-k1)**r/(k1+eps)))
-   !b5 = ((s0*(q0-qm)+s1*(qp-q0))**2)/(s0+s1)**2
-   b5 = min(k0,k1)
+   b5 = ((s0*(q0-qm)+s1*(qp-q0))**2)/(s0+s1)**2
+   !b5 = min(k0,k1)
 
    tau = ((abs(b1-b2)+abs(b1-b3)+abs(b1-b4)+abs(b1-b5))/4.0)**r
 
@@ -254,8 +254,8 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    real :: b1, b2, b3, b4, b5, b6, b7, eps
    integer :: r
 
-   eps = 1.0e-40
-   r = 2
+   eps = 1.0e-4
+   r = 3
 
    ds = 1266.0
    d1 = 1000.0/ds; d2 = 125.0/ds ; d3 = 100.0/ds; d4 = 25.0/ds ; d5 = 10.0/ds
@@ -301,8 +301,8 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
 
    O0 = O01/(O01+O11) ; O1 = 1.0-O0
    s0 = O0*(1.0 + (abs(k0-k1)**r/(k0+eps))) ; s1 = O1*(1.0 + (abs(k0-k1)**r/(k1+eps)))
-   !b7 = ((s0*(q0-qm)+s1*(qp-q0))**2)/(s0+s1)**2
-   b7 = min(k0,k1)
+   b7 = ((s0*(q0-qm)+s1*(qp-q0))**2)/(s0+s1)**2
+   !b7 = min(k0,k1)
    
    tau = ((abs(b1-b2)+abs(b1-b3)+abs(b1-b4)+abs(b1-b5)+abs(b1-b6)+abs(b1-b7))/6.0)**r
 
@@ -588,9 +588,9 @@ subroutine apply_MP(wq, qmm, qm, q0, qp, qpp)
 
    cp = (wq - q0)*(wq - qmp)
 
-   if(cp <= 1.0e-13) then
-      tmp = wq
-   else
+   !if(cp <= 1.0e-13) then
+   !   tmp = wq
+   !else
       dm1 = qmm - 2.0*qm + q0
       d0 = qp - 2.0*q0 + qm
       d1 = qpp - 2.0*qp + q0
@@ -612,7 +612,7 @@ subroutine apply_MP(wq, qmm, qm, q0, qp, qpp)
       md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
       tmp = wq + md
 
-   endif
+   !endif
 
    wq = tmp
 
@@ -635,11 +635,12 @@ subroutine PP_limiter(wq, q0, wmr, wpl, w0, qmin_g, qmax_g)
 
    P0 = (q0 - w0*(wmr + wpl))/(1.0 - 2.0*w0)
 
+   eps = min(1.0e-5, q0)
    qmin = min(wmr, P0, wpl)
    qmax = max(wmr, P0, wpl)
 
-   !eps = min(1.0e-13, (q0 - qmin)**5, q0)
-   eps = min(1.0e-13, q0)
+   !eps = min(1.0e-5, (q0 - qmin)**5, q0)
+   !eps = min(1.0e-5, q0)
    !eps = 1.0e-13
    theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
 
