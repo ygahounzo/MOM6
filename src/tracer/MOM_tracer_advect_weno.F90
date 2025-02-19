@@ -21,12 +21,13 @@ public weno5_reconstruction2
 contains
 
 !> 3rd weno reconstruction subroutine and limiter
-subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
+subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, mu)
 
    real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 ! tracer concentration from i-2 to  i+3 respectively
    real, intent(in) :: u                         ! advection velocity
    real, intent(in) :: qmin, qmax                ! global min and max of tracer concentration
    real, intent(out) :: wq                       ! weno reconstruction at the interface i+1/2
+   real, intent(in) :: mu
 
    real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
    real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
@@ -40,12 +41,14 @@ subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
       call weno3_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)
       call weno3_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)
       ! maximum-principle limiter
-      call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
+      !call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
+      call PPM_flux(wq, qm, q0, qp, mu, wmr, wpl)
    else
       call weno3_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
       call weno3_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
       ! maximum-principle limiter
-      call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
+      !call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
+      call PPM_flux(wq, qp2, qp, q0, mu, wmr, wpl)
    endif
 
 end subroutine weno3_reconstruction
@@ -107,17 +110,18 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    P1 = P1/d1 - d2*P2/d1 - d3*P3/d1
    wq = w1*P1 + w2*P2 + w3*P3
         
-   call apply_MP(wq, qmm, qm, q0, qp, qpp)
+   !call apply_MP(wq, qmm, qm, q0, qp, qpp)
 
 end subroutine weno3_reconstruction_interface
 
 !> 5th-order weno reconstruction subroutine and limiter
-subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
+subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, mu)
 
    real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 ! tracer concentration from i-2 to  i+3 respectively
    real, intent(in) :: u                         ! advection velocity
    real, intent(in) :: qmin, qmax                ! global min and max of tracer concentration
    real, intent(out) :: wq                       ! weno reconstruction at the interface i+1/2
+   real, intent(in) :: mu
 
    real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
    real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
@@ -131,12 +135,14 @@ subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
       call weno5_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)  ! i-1/2
       call weno5_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)  ! i+1/2
       ! maximum-principle limiter
-      call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
+      !call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
+      call PPM_flux(wq, qm, q0, qp, mu, wmr, wpl)
    else
       call weno5_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
       call weno5_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
       ! maximum-principle limiter
-      call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
+      !call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
+      call PPM_flux(wq, qp2, qp, q0, mu, wmr, wpl)
    endif
 
 end subroutine weno5_reconstruction
@@ -206,17 +212,18 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    wq = w1*P1 + w2*P2 + w3*P3 + w4*P4 + w5*P5
 
-   call apply_MP(wq, qmm, qm, q0, qp, qpp)
+   !call apply_MP(wq, qmm, qm, q0, qp, qpp)
 
 end subroutine weno5_reconstruction_interface
 
 !> 7th-order weno reconstruction subroutine and limiter
-subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qmin, qmax)
+subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qmin, qmax, mu)
 
    real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 ! tracer concentration from i-3 to  i+4 respectively
    real, intent(in) :: u                         ! advection velocity
    real, intent(in) :: qmin, qmax                ! global min and max of tracer concentration
    real, intent(out) :: wq                       ! weno reconstruction at the interface i+1/2
+   real, intent(in) :: mu
 
    real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
    real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
@@ -230,12 +237,14 @@ subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qm
       call weno7_reconstruction_interface(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
       call weno7_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
       ! maximum-principle limiter
-      call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
+      !call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
+      call PPM_flux(wq, qm1, q0, qp1, mu, wmr, wpl)
    else
       call weno7_reconstruction_interface(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2)
       call weno7_reconstruction_interface(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4)
       ! maximum-principle limiter
-      call PP_limiter(wq, qp1, wmr, wpl, w0, qmin, qmax)
+      !call PP_limiter(wq, qp1, wmr, wpl, w0, qmin, qmax)
+      call PPM_flux(wq, qp2, qp1, q0, mu, wmr, wpl)
    endif
 
 end subroutine weno7_reconstruction
@@ -721,6 +730,33 @@ subroutine tracer_min_max_init(Reg, G, GV)
   enddo
 
 end subroutine tracer_min_max_init
+
+subroutine PPM_flux(wq, qm, q0, qp, mu, aL0, aR0)
+
+  real, intent(in) :: qm, q0, qp, mu, aL0, aR0
+  real, intent(out) :: wq
+
+  real :: dA, mA, a6, aL, aR
+
+  aL = aL0 ; aR = aR0
+  aL = max(min(q0,qm), aL) ; aL = min(max(q0,qm), aL) ! Bound
+  aR = max(min(q0,qp), aR) ; aR = min(max(q0,qp), aR) ! Bound
+
+  dA = aR - aL ; mA = 0.5*(aR + aL)
+  if ((qp-q0)*(q0-qm) <= 0.0) then
+     aL = q0 ; aR = q0 ! PCM for local extrema and boundary cells
+  elseif (dA*(q0-mA) > (dA*dA)/6.0) then
+     aL = (3.0*q0) - 2.0*aR
+  elseif ( dA*(q0-mA) < - (dA*dA)/6.0) then
+     aR = (3.0*q0) - 2.0*aL
+  endif
+
+  a6 = 6.0*q0 - 3.0*(aR + aL) ! Curvature
+
+  wq =  aR - 0.5*mu*((aR - aL) - a6*(1.0 - (2.0/3.0)*mu))
+
+end subroutine PPM_flux
+
 
 !> \namespace mom_tracer_advect
 !!
