@@ -330,7 +330,7 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    P1 = P1/d1 - d2*P2/d1 - d3*P3/d1 - d4*P4/d1 - d5*P5/d1 - d6*P6/d1 - d7*P7/d1
    wq = w1*P1 + w2*P2 + w3*P3 + w4*P4 + w5*P5 + w6*P6 + w7*P7
 
-   call apply_MP(wq, qmm, qm, q0, qp, qpp)
+   !call apply_MP(wq, qmm, qm, q0, qp, qpp)
 
 end subroutine weno7_reconstruction_interface
 
