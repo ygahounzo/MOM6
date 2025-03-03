@@ -169,10 +169,8 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   ntr = Reg%ntr
   Idt = 1.0 / dt
   
-  !print*, 'dt = ', dt
-  !print*, 'CS%dt = ', CS%dt
-
   max_iter = 2*INT(CEILING(dt/CS%dt)) + 1
+  !max_iter = 1
 
   if (present(max_iter_in)) max_iter = max_iter_in
   if (present(x_first_in))  x_first = x_first_in
@@ -615,14 +613,14 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
         mu = CFL(I)
 
-        !dx(1) = G%dxCu(I-2,j) ; dx(2) = G%dxCu(I-1,j) ; dx(3) = G%dxCu(I,j)
-        !dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j) ; dx(6) = G%dxCu(I+3,j)
+        !dx(1) = G%dxCu(I_up-2,j) ; dx(2) = G%dxCu(I_up-1,j) ; dx(3) = G%dxCu(I_up,j)
+        !dx(4) = G%dxCu(I_up+1,j) ; dx(5) = G%dxCu(I_up+2,j) ; dx(6) = G%dxCu(I_up+3,j)
 
         if(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, mu)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
             !call weno5_reconstruction2(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, dx)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, mu)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -652,11 +650,11 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         mu = CFL(I)
 
         if(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, mu)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, mu)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, mu)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -690,11 +688,11 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         if(order9 == 1.0) then
             call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, Tmin, Tmax)
         elseif(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, mu)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, mu)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, mu)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
         else
             if(u >= 0.0) then
                wq = Tc
@@ -1111,14 +1109,14 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
         mu = CFL(i)
 
-        !dy(1) = G%dyCv(i,J-2) ; dy(2) = G%dyCv(i,J-1) ; dy(3) = G%dyCv(i,J)
-        !dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2) ; dy(6) = G%dyCv(i,J+3)
+        !dy(1) = G%dyCv(i,J_up-2) ; dy(2) = G%dyCv(i,J_up-1) ; dy(3) = G%dyCv(i,J_up)
+        !dy(4) = G%dyCv(i,J_up+1) ; dy(5) = G%dyCv(i,J_up+2) ; dy(6) = G%dyCv(i,J_up+3)
 
         if(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, mu)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
             !call weno5_reconstruction2(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, dy)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, mu)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1148,11 +1146,11 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         mu = CFL(i)
         
         if(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, mu)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, mu)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, mu)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
@@ -1186,11 +1184,11 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         if(order9 == 1.0) then
             call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, Tmin, Tmax)
         elseif(order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, mu)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
         elseif(order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, mu)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         elseif(order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, mu)
+            call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
         else
             if(v >= 0.0) then
                wq = Tc
