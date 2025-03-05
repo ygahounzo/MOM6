@@ -62,6 +62,7 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    real :: tau, s0, s1, O01, O11, O0, O1, k0, k1
    real :: b1, b2, b3, eps
    integer :: r
+   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2, qul, qmd, qlc, qmin, qmax, md
 
    eps = 1.0e-6
    r = 2
@@ -106,7 +107,30 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    P1 = P1/d1 - d2*P2/d1 - d3*P3/d1
    wq = w1*P1 + w2*P2 + w3*P3
         
-   call apply_MP(wq, qmm, qm, q0, qp, qpp)
+   ! Apply the monotonicity-preserving 
+
+   dm1 = qmm - 2.0*qm + q0
+   dd0 = qp - 2.0*q0 + qm
+   dd1 = qpp - 2.0*qp + q0
+
+   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
+   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(s1),abs(mm2))
+
+   qul = q0 + 2.0*(q0-qm)
+   qmd = 0.5*(q0 + qp) - 0.5*dm4p
+   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
+   !qlc = 0.5*(3.0*q0+qm) - (4.0/3.0)*dm4m
+
+   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+
+   md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
+   wq = wq + md
 
 end subroutine weno3_reconstruction_interface
 
@@ -152,6 +176,7 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    real :: tau, s0, s1, O01, O11, O0, O1, k0, k1
    real :: b1, b2, b3, b4, b5, eps
    integer :: r
+   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2, qul, qmd, qlc, qmin, qmax, md
 
    eps = 1.0e-6
    r = 2
@@ -204,7 +229,32 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    wq = w1*P1 + w2*P2 + w3*P3 + w4*P4 + w5*P5
 
-   call apply_MP(wq, qmm, qm, q0, qp, qpp)
+   ! Apply the monotonicity-preserving
+
+   dm1 = qmm - 2.0*qm + q0
+   dd0 = qp - 2.0*q0 + qm
+   dd1 = qpp - 2.0*qp + q0
+
+   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
+   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(s1),abs(mm2))
+
+   qul = q0 + 2.0*(q0-qm)
+   qmd = 0.5*(q0 + qp) - 0.5*dm4p
+   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
+   !qlc = 0.5*(3.0*q0+qm) - (4.0/3.0)*dm4m
+
+   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+
+   md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
+   wq = wq + md
+
+   !call apply_MP(wq, qmm, qm, q0, qp, qpp)
 
 end subroutine weno5_reconstruction_interface
 
@@ -250,9 +300,10 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    real :: tau, s0, s1, O01, O11, O0, O1, k0, k1
    real :: b1, b2, b3, b4, b5, b6, b7, eps
    integer :: r
+   real :: dm2, dm1, dc, dp1, dp2, dm4p, dm4m, mm1, mm2, mm3, qul, qmd, qlc, qmin, qmax, md
 
    eps = 1.0e-6
-   r = 3
+   r = 2
 
    ds = 1266.0
    d1 = 1000.0/ds; d2 = 125.0/ds ; d3 = 100.0/ds; d4 = 25.0/ds ; d5 = 10.0/ds
@@ -301,7 +352,7 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    b7 = ((s0*(q0-qm)+s1*(qp-q0))**2)/(s0+s1)**2
    !b7 = min(k0,k1)
    
-   tau = ((abs(b1-b2)+abs(b1-b3)+abs(b1-b4)+abs(b1-b5)+abs(b1-b6)+abs(b1-b7))/6.0)**r
+   tau = ((abs(b1-b2)+abs(b1-b3)+abs(b1-b4)+abs(b1-b5)+abs(b1-b6)+abs(b1-b7))/6.0)!**r
 
    w1 = d1*(1.0 + tau/(b1+eps))
    w2 = d2*(1.0 + tau/(b2+eps))
@@ -311,14 +362,42 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    w6 = d6*(1.0 + tau/(b6+eps))
    w7 = d7*(1.0 + tau/(b7+eps))
 
-   sw = w1+w2+w3+w4+w5+w6+w7
-   w1 = w1/sw ; w2 = w2/sw ; w3 = w3/sw ; w4 = w4/sw
-   w5 = w5/sw ; w6 = w6/sw ; w7 = w7/sw
+   sw = 1.0/(w1+w2+w3+w4+w5+w6+w7)
+   w1 = w1*sw ; w2 = w2*sw ; w3 = w3*sw ; w4 = w4*sw
+   w5 = w5*sw ; w6 = w6*sw ; w7 = w7*sw
 
-   P1 = P1/d1 - d2*P2/d1 - d3*P3/d1 - d4*P4/d1 - d5*P5/d1 - d6*P6/d1 - d7*P7/d1
+   !P1 = P1/d1 - d2*P2/d1 - d3*P3/d1 - d4*P4/d1 - d5*P5/d1 - d6*P6/d1 - d7*P7/d1
+   P1 = (P1 - d2*P2 - d3*P3 - d4*P4 - d5*P5 - d6*P6 - d7*P7)/d1
    wq = w1*P1 + w2*P2 + w3*P3 + w4*P4 + w5*P5 + w6*P6 + w7*P7
 
-   call apply_MP(wq, qmm, qm, q0, qp, qpp)
+   ! Apply the monotonicity-preserving
+
+   dm2 = qm3 - 2.0*qmm + qm
+   dm1 = qmm - 2.0*qm + q0
+   dc = qp - 2.0*q0 + qm
+   dp1 = qpp - 2.0*qp + q0
+   dp2 = qp3 - 2.0*qpp + qp
+
+   mm1 = 0.5*(sign(1.0,4.0*dc-dp1) + sign(1.0,4.0*dp1-dc))*min(abs(4.0*dc-dp1),abs(4.0*dp1-dc))
+   mm2 = 0.5*(sign(1.0,dc) + sign(1.0,dp1))*min(abs(dc),abs(dp1))
+   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   mm1 = 0.5*(sign(1.0,4.0*dm1-dc) + sign(1.0,4.0*dc-dm1))*min(abs(4.0*dm1-dc),abs(4.0*dc-dm1))
+   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dc))*min(abs(dm1),abs(dc))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(s1),abs(mm2))
+
+   qul = q0 + 2.0*(q0-qm)
+   qmd = 0.5*(q0 + qp) - 0.5*dm4p
+   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
+   !qlc = 0.5*(3.0*q0+qm) - (4.0/3.0)*dm4m
+
+   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+
+   md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
+   wq = wq + md
+
+   !call apply_MP(wq, qmm, qm, q0, qp, qpp)
 
 end subroutine weno7_reconstruction_interface
 
@@ -474,6 +553,7 @@ subroutine weno9_reconstruction_interface(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, 
    real :: eps, a0, a1, a2, a3, a4, wnorm, w0, w1, w2, w3, w4, tau
    real :: P0, P1, P2, P3, P4
    integer :: r
+   real :: dm1, dd0, dd1, dm4p, dm4m, s1, s2, qul, qmd, qlc, qmin, qmax, md
 
    r = 2
 
@@ -503,6 +583,31 @@ subroutine weno9_reconstruction_interface(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, 
    w4 = a4*wnorm
 
    wq = w0*P0 + w1*P1 + w2*P2 + w3*P3 + w4*P4
+
+   ! Apply the monotonicity-preserving
+
+   dm1 = qm2 - 2.0*qm1 + q0
+   dd0 = qp1 - 2.0*q0 + qm1
+   dd1 = qp2 - 2.0*qp1 + q0
+
+   s1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+   s2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
+   dm4p = 0.5*(sign(1.0,s1) + sign(1.0,s2))*min(abs(s1),abs(s2))
+
+   s1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+   s2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+   dm4m = 0.5*(sign(1.0,s1) + sign(1.0,s2))*min(abs(s1),abs(s2))
+
+   qul = q0 + 2.0*(q0-qm1)
+   qmd = 0.5*(q0 + qp1) - 0.5*dm4p
+   qlc = 0.5*(3.0*q0-qm1) + (4.0/3.0)*dm4m
+   !qlc = 0.5*(3.0*q0+qm1) - (4.0/3.0)*dm4m
+
+   qmin = max(min(q0,qp1,qmd),min(q0,qul,qlc))
+   qmax = min(max(q0,qp1,qmd),max(q0,qul,qlc))
+
+   md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
+   wq = wq + md
 
 end subroutine weno9_reconstruction_interface
 
