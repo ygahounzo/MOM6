@@ -32,11 +32,11 @@ type, public :: tracer_advect_CS ; private
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                                    !< timing of diagnostic output.
   logical :: debug                 !< If true, write verbose checksums for debugging purposes.
-  logical :: usePPM                !< If true, use PPM instead of PLM
-  logical :: useHuynh              !< If true, use the Huynh scheme for PPM interface values
   logical :: useHuynhStencilBug = .false. !< If true, use the incorrect stencil width.
                                    !! This is provided for compatibility with legacy simuations.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
+  integer :: advect_scheme = -1 !< Determines which reconstruction to use
+  integer :: advect_high_order = -1 !< Determines which reconstruction to use
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -44,6 +44,13 @@ integer :: id_clock_advect
 integer :: id_clock_pass
 integer :: id_clock_sync
 !>@}
+
+! The following are private parameter constants
+integer, parameter :: ADVECT_PLM        = 0 !< PLM advection scheme
+integer, parameter :: ADVECT_PPM        = 1 !< PPM advection scheme
+integer, parameter :: ADVECT_PPMH3      = 2 !< PPM:H3 advection scheme
+integer, parameter :: ADVECT_HIGH_PLM       = 0 !< PLM passive scheme
+integer, parameter :: ADVECT_HIGH_PPMH3     = 1 !< PPM:H3 passive scheme
 
 contains
 
@@ -108,6 +115,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz, itt, ntr, do_any
   integer :: isv, iev, jsv, jev ! The valid range of the indices.
   integer :: IsdB, IedB, JsdB, JedB
+  integer :: loc_highOrder_scheme
 
   domore_u(:,:) = .false.
   domore_v(:,:) = .false.
@@ -125,9 +133,23 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   call cpu_clock_begin(id_clock_advect)
   x_first = (MOD(G%first_direction,2) == 0)
 
-  ! increase stencil size for Colella & Woodward PPM
-  use_PPM_stencil = CS%usePPM .and. .not. CS%useHuynhStencilBug
-  if (use_PPM_stencil) stencil = 3
+  ! The total stencil extent is i-stencil-1 to i+stencil or less
+  if (CS%advect_scheme == ADVECT_PLM) then
+    stencil = 2
+  elseif (CS%advect_scheme == ADVECT_PPM) then
+    stencil = 3
+  elseif (CS%advect_scheme == ADVECT_PPMH3) then
+    if (CS%useHuynhStencilBug) then
+      stencil = 2
+    else
+      stencil = 3
+    endif
+  endif
+
+  if (min(is-isd,ied-ie,js-jsd,jed-je).lt.stencil) then
+    call MOM_error(FATAL, "MOM_tracer_advect: "//&
+      "stencil is wider than the halo.")
+  endif
 
   ntr = Reg%ntr
   Idt = 1.0 / dt
@@ -252,14 +274,16 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       do k=1,nz ; if (domore_k(k) > 0) then
         ! First, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, CS%usePPM, CS%useHuynh)
+                      isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, CS%advect_scheme, &
+                      CS%advect_high_order)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         !  Next, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, CS%usePPM, CS%useHuynh)
+                      isv, iev, jsv, jev, k, G, GV, US, CS%advect_scheme, &
+                      CS%advect_high_order)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -274,14 +298,16 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       do k=1,nz ; if (domore_k(k) > 0) then
         ! First, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, CS%usePPM, CS%useHuynh)
+                      isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, CS%advect_scheme, &
+                      CS%advect_high_order)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! Next, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, CS%usePPM, CS%useHuynh)
+                      isv, iev, jsv, jev, k, G, GV, US, CS%advect_scheme, &
+                      CS%advect_high_order)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -327,7 +353,7 @@ end subroutine advect_tracer
 !> This subroutine does 1-d flux-form advection in the zonal direction using
 !! a monotonic piecewise linear scheme.
 subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, usePPM, useHuynh)
+                    is, ie, js, je, k, G, GV, US, advec_scheme, advec_HighOrder)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr  !< The number of tracers
@@ -348,9 +374,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer,                                   intent(in)    :: je  !< The ending tracer j-index to work on
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
-  logical,                                   intent(in)    :: usePPM !< If true, use PPM instead of PLM
-  logical,                                   intent(in)    :: useHuynh !< If true, use the Huynh scheme
-                                                                     !! for PPM interface values
+  integer,                                   intent(in)    :: advec_scheme !< Advection scheme to use
+  integer,                                   intent(in)    :: advec_HighOrder !< Advection scheme to use
 
   real, dimension(SZI_(G),ntr) :: &
     slope_x             ! The concentration slope per grid point [conc].
@@ -388,15 +413,18 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer :: i, j, m, n, i_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
+  integer :: local_advect_scheme
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
   domore_u_initial = domore_u
 
-  usePLMslope = .not. (usePPM .and. useHuynh)
+  usePLMslope = .false.
+  if(advec_scheme == ADVECT_PLM .or. advec_scheme == ADVECT_PPM) usePLMslope = .true.
+  if(advec_HighOrder == ADVECT_PLM .or. advec_HighOrder == ADVECT_PPM) usePLMslope = .true.
   ! stencil for calculating slope values
   stencil = 1
-  if (usePPM .and. .not. useHuynh) stencil = 2
+  if (advec_scheme == ADVECT_PPM .or. advec_HighOrder == ADVECT_PPM) stencil = 2
 
   min_h = 0.1*GV%Angstrom_H
   tiny_h = tiny(min_h)
@@ -514,68 +542,74 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
     enddo
 
 
-    if (usePPM) then
-      do m=1,ntr ; do I=is-1,ie
-        ! centre cell depending on upstream direction
-        if (uhh(I) >= 0.0) then
-          i_up = i
-        else
-          i_up = i+1
-        endif
+    do m=1,ntr
+      
+      local_advect_scheme = advec_scheme
+      if(Tr(m)%name /= 'temp' .or. Tr(m)%name /= 'salt') local_advect_scheme = advec_HighOrder
 
-        ! Implementation of PPM-H3
-        Tp = T_tmp(i_up+1,m) ; Tc = T_tmp(i_up,m) ; Tm = T_tmp(i_up-1,m)
+      if (local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) then
+        do I=is-1,ie
+          ! centre cell depending on upstream direction
+          if (uhh(I) >= 0.0) then
+            i_up = i
+          else
+            i_up = i+1
+          endif
 
-        if (useHuynh) then
-          aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
-          aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
-          aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
-          aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR) ! Bound
-        else
-          aL = 0.5 * ((Tm + Tc) + (slope_x(i_up-1,m) - slope_x(i_up,m)) / 3.)
-          aR = 0.5 * ((Tc + Tp) + (slope_x(i_up,m) - slope_x(i_up+1,m)) / 3.)
-        endif
+          ! Implementation of PPM-H3
+          Tp = T_tmp(i_up+1,m) ; Tc = T_tmp(i_up,m) ; Tm = T_tmp(i_up-1,m)
 
-        dA = aR - aL ; mA = 0.5*( aR + aL )
-        if (G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)*(Tp-Tc)*(Tc-Tm) <= 0.) then
-          aL = Tc ; aR = Tc ! PCM for local extrema and boundary cells
-        elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
-          aL = (3.*Tc) - 2.*aR
-        elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
-          aR = (3.*Tc) - 2.*aL
-        endif
+          if (local_advect_scheme == ADVECT_PPMH3) then
+            aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
+            aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
+            aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
+            aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR) ! Bound
+          else
+            aL = 0.5 * ((Tm + Tc) + (slope_x(i_up-1,m) - slope_x(i_up,m)) / 3.)
+            aR = 0.5 * ((Tc + Tp) + (slope_x(i_up,m) - slope_x(i_up+1,m)) / 3.)
+          endif
 
-        a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
+          dA = aR - aL ; mA = 0.5*( aR + aL )
+          if (G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)*(Tp-Tc)*(Tc-Tm) <= 0.) then
+            aL = Tc ; aR = Tc ! PCM for local extrema and boundary cells
+          elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
+            aL = (3.*Tc) - 2.*aR
+          elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
+            aR = (3.*Tc) - 2.*aL
+          endif
 
-        if (uhh(I) >= 0.0) then
-          flux_x(I,j,m) = uhh(I)*( aR - 0.5 * CFL(I) * ( &
-               ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
-        else
-          flux_x(I,j,m) = uhh(I)*( aL + 0.5 * CFL(I) * ( &
-               ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
-        endif
-      enddo ; enddo
-    else ! PLM
-      do m=1,ntr ; do I=is-1,ie
-        if (uhh(I) >= 0.0) then
-          ! Indirect implementation of PLM
-         !aL = Tr(m)%t(i,j,k) - 0.5 * slope_x(i,m)
-         !aR = Tr(m)%t(i,j,k) + 0.5 * slope_x(i,m)
-         !flux_x(I,j,m) = uhh(I)*( aR - 0.5 * (aR-aL) * CFL(I) )
-          ! Alternative implementation of PLM
-          Tc = T_tmp(i,m)
-          flux_x(I,j,m) = uhh(I)*( Tc + 0.5 * slope_x(i,m) * ( 1. - CFL(I) ) )
-        else
-          ! Indirect implementation of PLM
-         !aL = Tr(m)%t(i+1,j,k) - 0.5 * slope_x(i+1,m)
-         !aR = Tr(m)%t(i+1,j,k) + 0.5 * slope_x(i+1,m)
-         !flux_x(I,j,m) = uhh(I)*( aL + 0.5 * (aR-aL) * CFL(I) )
-          ! Alternative implementation of PLM
-          Tc = T_tmp(i+1,m)
-          flux_x(I,j,m) = uhh(I)*( Tc - 0.5 * slope_x(i+1,m) * ( 1. - CFL(I) ) )
-        endif
-      enddo ; enddo
-    endif ! usePPM
+          a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
+
+          if (uhh(I) >= 0.0) then
+            flux_x(I,j,m) = uhh(I)*( aR - 0.5 * CFL(I) * ( &
+                 ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
+          else
+            flux_x(I,j,m) = uhh(I)*( aL + 0.5 * CFL(I) * ( &
+                 ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
+          endif
+        enddo
+      else ! PLM
+        do I=is-1,ie
+          if (uhh(I) >= 0.0) then
+            ! Indirect implementation of PLM
+           !aL = Tr(m)%t(i,j,k) - 0.5 * slope_x(i,m)
+           !aR = Tr(m)%t(i,j,k) + 0.5 * slope_x(i,m)
+           !flux_x(I,j,m) = uhh(I)*( aR - 0.5 * (aR-aL) * CFL(I) )
+            ! Alternative implementation of PLM
+            Tc = T_tmp(i,m)
+            flux_x(I,j,m) = uhh(I)*( Tc + 0.5 * slope_x(i,m) * ( 1. - CFL(I) ) )
+          else
+            ! Indirect implementation of PLM
+           !aL = Tr(m)%t(i+1,j,k) - 0.5 * slope_x(i+1,m)
+           !aR = Tr(m)%t(i+1,j,k) + 0.5 * slope_x(i+1,m)
+           !flux_x(I,j,m) = uhh(I)*( aL + 0.5 * (aR-aL) * CFL(I) )
+            ! Alternative implementation of PLM
+            Tc = T_tmp(i+1,m)
+            flux_x(I,j,m) = uhh(I)*( Tc - 0.5 * slope_x(i+1,m) * ( 1. - CFL(I) ) )
+          endif
+        enddo
+      endif ! usePPM
+    enddo
 
     if (associated(OBC)) then ; if (OBC%OBC_pe) then
       if (OBC%specified_u_BCs_exist_globally .or. OBC%open_u_BCs_exist_globally) then
@@ -718,7 +752,7 @@ end subroutine advect_x
 !> This subroutine does 1-d flux-form advection using a monotonic piecewise
 !! linear scheme.
 subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, usePPM, useHuynh)
+                    is, ie, js, je, k, G, GV, US, advec_scheme, advec_HighOrder)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr !< The number of tracers
@@ -739,9 +773,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer,                                   intent(in)    :: je  !< The ending tracer j-index to work on
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
-  logical,                                   intent(in)    :: usePPM !< If true, use PPM instead of PLM
-  logical,                                   intent(in)    :: useHuynh !< If true, use the Huynh scheme
-                                                                     !! for PPM interface values
+  integer,                                   intent(in)    :: advec_scheme !< Advection scheme to use
+  integer,                                   intent(in)    :: advec_HighOrder !< Advection scheme to use
 
   real, dimension(SZI_(G),ntr,SZJ_(G)) :: &
     slope_y                     ! The concentration slope per grid point [conc].
@@ -779,11 +812,14 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer :: i, j, j2, m, n, j_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
+  integer :: local_advect_scheme
 
-  usePLMslope = .not. (usePPM .and. useHuynh)
+  usePLMslope = .false.
+  if(advec_scheme == ADVECT_PLM .or. advec_scheme == ADVECT_PPM) usePLMslope = .true.
+  if(advec_HighOrder == ADVECT_PLM .or. advec_HighOrder == ADVECT_PPM) usePLMslope = .true.
   ! stencil for calculating slope values
   stencil = 1
-  if (usePPM .and. .not. useHuynh) stencil = 2
+  if (advec_scheme == ADVECT_PPM .or. advec_HighOrder == ADVECT_PPM) stencil = 2
 
   min_h = 0.1*GV%Angstrom_H
   tiny_h = tiny(min_h)
@@ -914,68 +950,74 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
       endif
     enddo
 
-    if (usePPM) then
-      do m=1,ntr ; do i=is,ie
-        ! centre cell depending on upstream direction
-        if (vhh(i,J) >= 0.0) then
-          j_up = j
-        else
-          j_up = j + 1
-        endif
+    do m=1,ntr
+      
+      local_advect_scheme = advec_scheme
+      if(Tr(m)%name /= 'temp' .or. Tr(m)%name /= 'salt') local_advect_scheme = advec_HighOrder
 
-        ! Implementation of PPM-H3
-        Tp = T_tmp(i,m,j_up+1) ; Tc = T_tmp(i,m,j_up) ; Tm = T_tmp(i,m,j_up-1)
+      if (local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) then
+        do i=is,ie
+          ! centre cell depending on upstream direction
+          if (vhh(i,J) >= 0.0) then
+            j_up = j
+          else
+            j_up = j + 1
+          endif
 
-        if (useHuynh) then
-          aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
-          aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
-          aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
-          aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR) ! Bound
-        else
-          aL = 0.5 * ((Tm + Tc) + (slope_y(i,m,j_up-1) - slope_y(i,m,j_up)) / 3.)
-          aR = 0.5 * ((Tc + Tp) + (slope_y(i,m,j_up) - slope_y(i,m,j_up+1)) / 3.)
-        endif
+          ! Implementation of PPM-H3
+          Tp = T_tmp(i,m,j_up+1) ; Tc = T_tmp(i,m,j_up) ; Tm = T_tmp(i,m,j_up-1)
 
-        dA = aR - aL ; mA = 0.5*( aR + aL )
-        if (G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)*(Tp-Tc)*(Tc-Tm) <= 0.) then
-          aL = Tc ; aR = Tc ! PCM for local extrema and boundary cells
-        elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
-          aL = (3.*Tc) - 2.*aR
-        elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
-          aR = (3.*Tc) - 2.*aL
-        endif
+          if (local_advect_scheme == ADVECT_PPMH3) then
+            aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
+            aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
+            aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
+            aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR) ! Bound
+          else
+            aL = 0.5 * ((Tm + Tc) + (slope_y(i,m,j_up-1) - slope_y(i,m,j_up)) / 3.)
+            aR = 0.5 * ((Tc + Tp) + (slope_y(i,m,j_up) - slope_y(i,m,j_up+1)) / 3.)
+          endif
 
-        a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
+          dA = aR - aL ; mA = 0.5*( aR + aL )
+          if (G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)*(Tp-Tc)*(Tc-Tm) <= 0.) then
+            aL = Tc ; aR = Tc ! PCM for local extrema and boundary cells
+          elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
+            aL = (3.*Tc) - 2.*aR
+          elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
+            aR = (3.*Tc) - 2.*aL
+          endif
 
-        if (vhh(i,J) >= 0.0) then
-          flux_y(i,m,J) = vhh(i,J)*( aR - 0.5 * CFL(i) * ( &
-               ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
-        else
-          flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * CFL(i) * ( &
-               ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
-        endif
-      enddo ; enddo
-    else ! PLM
-      do m=1,ntr ; do i=is,ie
-        if (vhh(i,J) >= 0.0) then
-          ! Indirect implementation of PLM
-         !aL = Tr(m)%t(i,j,k) - 0.5 * slope_y(i,m,j)
-         !aR = Tr(m)%t(i,j,k) + 0.5 * slope_y(i,m,j)
-         !flux_y(i,m,J) = vhh(i,J)*( aR - 0.5 * (aR-aL) * CFL(i) )
-          ! Alternative implementation of PLM
-          Tc = T_tmp(i,m,j)
-          flux_y(i,m,J) = vhh(i,J)*( Tc + 0.5 * slope_y(i,m,j) * ( 1. - CFL(i) ) )
-        else
-          ! Indirect implementation of PLM
-         !aL = Tr(m)%t(i,j+1,k) - 0.5 * slope_y(i,m,j+1)
-         !aR = Tr(m)%t(i,j+1,k) + 0.5 * slope_y(i,m,j+1)
-         !flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * (aR-aL) * CFL(i) )
-          ! Alternative implementation of PLM
-          Tc = T_tmp(i,m,j+1)
-          flux_y(i,m,J) = vhh(i,J)*( Tc - 0.5 * slope_y(i,m,j+1) * ( 1. - CFL(i) ) )
-        endif
-      enddo ; enddo
-    endif ! usePPM
+          a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
+
+          if (vhh(i,J) >= 0.0) then
+            flux_y(i,m,J) = vhh(i,J)*( aR - 0.5 * CFL(i) * ( &
+                 ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
+          else
+            flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * CFL(i) * ( &
+                 ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
+          endif
+        enddo
+      else ! PLM
+        do i=is,ie
+          if (vhh(i,J) >= 0.0) then
+            ! Indirect implementation of PLM
+            !aL = Tr(m)%t(i,j,k) - 0.5 * slope_y(i,m,j)
+            !aR = Tr(m)%t(i,j,k) + 0.5 * slope_y(i,m,j)
+            !flux_y(i,m,J) = vhh(i,J)*( aR - 0.5 * (aR-aL) * CFL(i) )
+            ! Alternative implementation of PLM
+            Tc = T_tmp(i,m,j)
+            flux_y(i,m,J) = vhh(i,J)*( Tc + 0.5 * slope_y(i,m,j) * ( 1. - CFL(i) ) )
+          else
+            ! Indirect implementation of PLM
+            !aL = Tr(m)%t(i,j+1,k) - 0.5 * slope_y(i,m,j+1)
+            !aR = Tr(m)%t(i,j+1,k) + 0.5 * slope_y(i,m,j+1)
+            !flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * (aR-aL) * CFL(i) )
+            ! Alternative implementation of PLM
+            Tc = T_tmp(i,m,j+1)
+            flux_y(i,m,J) = vhh(i,J)*( Tc - 0.5 * slope_y(i,m,j+1) * ( 1. - CFL(i) ) )
+          endif
+        enddo
+      endif ! usePPM
+    enddo
 
     if (associated(OBC)) then ; if (OBC%OBC_pe) then
       if (OBC%specified_v_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally) then
@@ -1133,7 +1175,7 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl = "MOM_tracer_advect" ! This module's name.
-  character(len=256) :: mesg    ! Message for error messages.
+  character(len=256) :: mesg, mesg1    ! Message for error messages.
 
   if (associated(CS)) then
     call MOM_error(WARNING, "tracer_advect_init called with associated control structure.")
@@ -1156,20 +1198,33 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
           , default='PLM')
   select case (trim(mesg))
     case ("PLM")
-      CS%usePPM = .false.
+      CS%advect_scheme = ADVECT_PLM
     case ("PPM:H3")
-      CS%usePPM = .true.
-      CS%useHuynh = .true.
+      CS%advect_scheme = ADVECT_PPMH3
     case ("PPM")
-      CS%usePPM = .true.
-      CS%useHuynh = .false.
+      CS%advect_scheme = ADVECT_PPM
     case default
       call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
            "Unknown TRACER_ADVECTION_SCHEME = "//trim(mesg))
   end select
 
-  if (CS%usePPM) then
-    if (CS%useHuynh) then
+  !CS%advect_high_order = CS%advect_scheme
+  call get_param(param_file, mdl, "TRACER_ADVECTION_HIGH_ORDER_SCHEME", mesg1, &
+          desc="The horizontal high-order transport scheme for tracers:\n"//&
+          "  PLM    - Piecewise Linear Method\n"//&
+          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)" &
+          , default=mesg)
+  select case (trim(mesg1))
+    case ("PLM")
+      CS%advect_high_order = ADVECT_HIGH_PLM
+    case ("PPM:H3")
+      CS%advect_high_order = ADVECT_HIGH_PPMH3
+    case default
+      call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
+           "Unknown TRACER_ADVECTION_HIGH_ORDER_SCHEME = "//trim(mesg1))
+  end select
+
+  if (CS%advect_scheme == ADVECT_PPMH3) then
       call get_param(param_file, mdl, "USE_HUYNH_STENCIL_BUG", &
         CS%useHuynhStencilBug, &
         desc="If true, use a stencil width of 2 in PPM:H3 tracer advection. " &
@@ -1177,7 +1232,6 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
         // "configurations, but may be required to reproduce results in " &
         // "legacy simulations.", &
         default=.false.)
-    endif
   endif
 
   id_clock_advect = cpu_clock_id('(Ocean advect tracer)', grain=CLOCK_MODULE)
@@ -1204,19 +1258,15 @@ end subroutine tracer_advect_end
 !!
 !!  * advect_tracer advects tracer concentrations using a combination
 !!  of the modified flux advection scheme from Easter (Mon. Wea. Rev.,
-!!  1993) with tracer distributions given by the monotonic modified
-!!  van Leer scheme proposed by Lin et al. (Mon. Wea. Rev., 1994).
+!!  1993) with tracer distributions given by the monotonic piecewise 
+!!  parabolic method, as described in Carpenter et al. (MWR, 1990).
 !!  This scheme conserves the total amount of tracer while avoiding
-!!  spurious maxima and minima of the tracer concentration.  If a
-!!  higher order accuracy scheme is needed, suggest monotonic
-!!  piecewise parabolic method, as described in Carpenter et al.
-!!  (MWR, 1990).
+!!  spurious maxima and minima of the tracer concentration.
 !!
-!!  * advect_tracer has 4 arguments, described below. This
-!!  subroutine determines the volume of a layer in a grid cell at the
-!!  previous instance when the tracer concentration was changed, so
-!!  it is essential that the volume fluxes should be correct.  It is
-!!  also important that the tracer advection occurs before each
-!!  calculation of the diabatic forcing.
+!!  * advect_tracer subroutine determines the volume of a layer in
+!!  a grid cell at the previous instance when the tracer concentration
+!!  was changed, so it is essential that the volume fluxes should be
+!!  correct.  It is also important that the tracer advection occurs
+!!  before each calculation of the diabatic forcing.
 
 end module MOM_tracer_advect
