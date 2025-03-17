@@ -161,8 +161,8 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   allocate(CS%tr(isd:ied,jsd:jed,nz,CS%ntr), source=0.0)
 
   do m = 1, CS%ntr
-    write(var_name(:),'(A,I3.3)') "dye",m
-    write(desc_name(:),'(A,I3.3)') "Dye Tracer ",m
+    write(var_name(:),'(A,I2.2)') "dye",m
+    write(desc_name(:),'(A,I2.2)') "Dye Tracer ",m
     CS%tr_desc(m) = var_desc(trim(var_name), "conc", trim(desc_name), caller=mdl)
 
     ! This is needed to force the compiler not to do a copy in the registration

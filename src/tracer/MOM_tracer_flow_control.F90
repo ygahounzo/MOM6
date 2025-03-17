@@ -57,6 +57,7 @@ use advection_test_tracer, only : advection_test_stock, advection_test_tracer_en
 use dyed_obc_tracer, only : register_dyed_obc_tracer, initialize_dyed_obc_tracer
 use dyed_obc_tracer, only : dyed_obc_tracer_column_physics
 use dyed_obc_tracer, only : dyed_obc_tracer_end, dyed_obc_tracer_CS
+use dyed_obc_tracer, only : register_dyed_obc_tracer_segments
 use MOM_generic_tracer, only : register_MOM_generic_tracer, initialize_MOM_generic_tracer
 use MOM_generic_tracer, only : MOM_generic_tracer_column_physics, MOM_generic_tracer_surface_state
 use MOM_generic_tracer, only : end_MOM_generic_tracer, MOM_generic_tracer_get, MOM_generic_flux_init
@@ -391,6 +392,8 @@ subroutine call_tracer_register_obc_segments(GV, param_file, CS, tr_Reg, OBC)
       call register_MOM_generic_tracer_segments(CS%MOM_generic_tracer_CSp, GV, OBC, tr_Reg, param_file)
   if (CS%use_gyre_tracer) &
       call register_gyre_tracer_segments(GV, OBC, tr_Reg, param_file)
+  if (CS%use_dyed_obc_tracer) &
+      call register_dyed_obc_tracer_segments(GV, OBC, tr_Reg, param_file)
 
 end subroutine call_tracer_register_obc_segments
 

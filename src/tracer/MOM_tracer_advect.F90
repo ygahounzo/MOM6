@@ -36,7 +36,8 @@ type, public :: tracer_advect_CS ; private
                                    !! This is provided for compatibility with legacy simuations.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
   integer :: advect_scheme = -1 !< Determines which reconstruction to use
-  integer :: advect_high_order = -1 !< Determines which reconstruction to use
+  integer :: gyre_advect_scheme = -1 !< Determines which reconstruction to use
+  integer :: dye_advect_scheme = -1 !< Determines which reconstruction to use
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -47,10 +48,11 @@ integer :: id_clock_sync
 
 ! The following are private parameter constants
 integer, parameter :: ADVECT_PLM        = 0 !< PLM advection scheme
-integer, parameter :: ADVECT_PPM        = 1 !< PPM advection scheme
-integer, parameter :: ADVECT_PPMH3      = 2 !< PPM:H3 advection scheme
-integer, parameter :: ADVECT_HIGH_PLM       = 0 !< PLM passive scheme
-integer, parameter :: ADVECT_HIGH_PPMH3     = 1 !< PPM:H3 passive scheme
+integer, parameter :: ADVECT_PPMH3      = 1 !< PPM:H3 advection scheme
+integer, parameter :: ADVECT_PPM        = 2 !< PPM advection scheme
+!integer, parameter :: ADVECT_WENO5      = 3 !< WENO5 advection scheme
+!integer, parameter :: ADVECT_WENO7      = 4 !< WENO7 advection scheme
+!integer, parameter :: ADVECT_WENO9      = 5 !< WENO9 advection scheme
 
 contains
 
@@ -115,7 +117,9 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz, itt, ntr, do_any
   integer :: isv, iev, jsv, jev ! The valid range of the indices.
   integer :: IsdB, IedB, JsdB, JedB
-  integer :: loc_highOrder_scheme
+  integer :: stencil1, isDye
+  integer :: local_advect_scheme(Reg%ntr)
+  character(len=48)  :: dye_name ! The dye tracer's name.
 
   domore_u(:,:) = .false.
   domore_v(:,:) = .false.
@@ -124,6 +128,9 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
   landvolfill = 1.0e-20         ! This is arbitrary, but must be positive.
   stencil = 2                   ! The scheme's stencil; 2 for PLM
+
+  ntr = Reg%ntr
+  Idt = 1.0 / dt
 
   if (.not. associated(CS)) call MOM_error(FATAL, "MOM_tracer_advect: "// &
        "tracer_advect_init must be called before advect_tracer.")
@@ -146,13 +153,34 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     endif
   endif
 
+  if (CS%dye_advect_scheme == ADVECT_PLM .or. CS%gyre_advect_scheme == ADVECT_PLM) then
+    stencil1 = 2
+  elseif (CS%dye_advect_scheme == ADVECT_PPM .or. CS%gyre_advect_scheme == ADVECT_PPM) then
+    stencil1 = 3
+  elseif (CS%dye_advect_scheme == ADVECT_PPMH3 .or. CS%gyre_advect_scheme == ADVECT_PPMH3) then
+    if (CS%useHuynhStencilBug) then
+      stencil1 = 2
+    else
+      stencil1 = 3
+    endif
+  endif
+
+  stencil = max(stencil, stencil1)
+
   if (min(is-isd,ied-ie,js-jsd,jed-je).lt.stencil) then
     call MOM_error(FATAL, "MOM_tracer_advect: "//&
       "stencil is wider than the halo.")
   endif
 
-  ntr = Reg%ntr
-  Idt = 1.0 / dt
+  do m = 1,ntr
+     local_advect_scheme(m) = CS%advect_scheme
+     isDye = INDEX(Reg%Tr(m)%name, "dye")
+     if(Reg%Tr(m)%name == 'tr1') then
+        local_advect_scheme(m) = CS%gyre_advect_scheme ! gyre tracer
+     elseif(isDye > 0) then
+        local_advect_scheme(m) = CS%dye_advect_scheme ! dye tracer
+     endif
+  enddo
 
   max_iter = 2*INT(CEILING(dt/CS%dt)) + 1
 
@@ -274,16 +302,15 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       do k=1,nz ; if (domore_k(k) > 0) then
         ! First, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, CS%advect_scheme, &
-                      CS%advect_high_order)
+                      isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, &
+                      local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         !  Next, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, CS%advect_scheme, &
-                      CS%advect_high_order)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -298,16 +325,15 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       do k=1,nz ; if (domore_k(k) > 0) then
         ! First, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, CS%advect_scheme, &
-                      CS%advect_high_order)
+                      isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, &
+                      local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! Next, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, CS%advect_scheme, &
-                      CS%advect_high_order)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -353,7 +379,7 @@ end subroutine advect_tracer
 !> This subroutine does 1-d flux-form advection in the zonal direction using
 !! a monotonic piecewise linear scheme.
 subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advec_scheme, advec_HighOrder)
+                    is, ie, js, je, k, G, GV, US, advect_schemes)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr  !< The number of tracers
@@ -374,8 +400,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer,                                   intent(in)    :: je  !< The ending tracer j-index to work on
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
-  integer,                                   intent(in)    :: advec_scheme !< Advection scheme to use
-  integer,                                   intent(in)    :: advec_HighOrder !< Advection scheme to use
+  integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
 
   real, dimension(SZI_(G),ntr) :: &
     slope_x             ! The concentration slope per grid point [conc].
@@ -413,18 +438,19 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer :: i, j, m, n, i_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
-  integer :: local_advect_scheme
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
   domore_u_initial = domore_u
 
-  usePLMslope = .false.
-  if(advec_scheme == ADVECT_PLM .or. advec_scheme == ADVECT_PPM) usePLMslope = .true.
-  if(advec_HighOrder == ADVECT_PLM .or. advec_HighOrder == ADVECT_PPM) usePLMslope = .true.
-  ! stencil for calculating slope values
-  stencil = 1
-  if (advec_scheme == ADVECT_PPM .or. advec_HighOrder == ADVECT_PPM) stencil = 2
+  do m = 1,ntr
+    usePLMslope = .false.
+    if(advect_schemes(m) == ADVECT_PLM .or. advect_schemes(m) == ADVECT_PPM) usePLMslope = .true.
+
+    ! stencil for calculating slope values
+    stencil = 1
+    if (advect_schemes(m) == ADVECT_PPM) stencil = 2
+  enddo
 
   min_h = 0.1*GV%Angstrom_H
   tiny_h = tiny(min_h)
@@ -541,13 +567,9 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
       endif
     enddo
 
-
     do m=1,ntr
       
-      local_advect_scheme = advec_scheme
-      if(Tr(m)%name /= 'temp' .or. Tr(m)%name /= 'salt') local_advect_scheme = advec_HighOrder
-
-      if (local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) then
+      if (advect_schemes(m) == ADVECT_PPM .or. advect_schemes(m) == ADVECT_PPMH3) then
         do I=is-1,ie
           ! centre cell depending on upstream direction
           if (uhh(I) >= 0.0) then
@@ -559,7 +581,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           ! Implementation of PPM-H3
           Tp = T_tmp(i_up+1,m) ; Tc = T_tmp(i_up,m) ; Tm = T_tmp(i_up-1,m)
 
-          if (local_advect_scheme == ADVECT_PPMH3) then
+          if (advect_schemes(m) == ADVECT_PPMH3) then
             aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
             aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
             aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
@@ -752,7 +774,7 @@ end subroutine advect_x
 !> This subroutine does 1-d flux-form advection using a monotonic piecewise
 !! linear scheme.
 subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advec_scheme, advec_HighOrder)
+                    is, ie, js, je, k, G, GV, US, advect_schemes)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr !< The number of tracers
@@ -773,8 +795,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer,                                   intent(in)    :: je  !< The ending tracer j-index to work on
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
-  integer,                                   intent(in)    :: advec_scheme !< Advection scheme to use
-  integer,                                   intent(in)    :: advec_HighOrder !< Advection scheme to use
+  integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
 
   real, dimension(SZI_(G),ntr,SZJ_(G)) :: &
     slope_y                     ! The concentration slope per grid point [conc].
@@ -812,14 +833,15 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer :: i, j, j2, m, n, j_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
-  integer :: local_advect_scheme
 
-  usePLMslope = .false.
-  if(advec_scheme == ADVECT_PLM .or. advec_scheme == ADVECT_PPM) usePLMslope = .true.
-  if(advec_HighOrder == ADVECT_PLM .or. advec_HighOrder == ADVECT_PPM) usePLMslope = .true.
-  ! stencil for calculating slope values
-  stencil = 1
-  if (advec_scheme == ADVECT_PPM .or. advec_HighOrder == ADVECT_PPM) stencil = 2
+  do m = 1,ntr
+    usePLMslope = .false.
+    if(advect_schemes(m) == ADVECT_PLM .or. advect_schemes(m) == ADVECT_PPM) usePLMslope = .true.
+
+    ! stencil for calculating slope values
+    stencil = 1
+    if (advect_schemes(m) == ADVECT_PPM) stencil = 2
+  enddo
 
   min_h = 0.1*GV%Angstrom_H
   tiny_h = tiny(min_h)
@@ -952,10 +974,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
     do m=1,ntr
       
-      local_advect_scheme = advec_scheme
-      if(Tr(m)%name /= 'temp' .or. Tr(m)%name /= 'salt') local_advect_scheme = advec_HighOrder
-
-      if (local_advect_scheme == ADVECT_PPM .or. local_advect_scheme == ADVECT_PPMH3) then
+      if (advect_schemes(m) == ADVECT_PPM .or. advect_schemes(m) == ADVECT_PPMH3) then
         do i=is,ie
           ! centre cell depending on upstream direction
           if (vhh(i,J) >= 0.0) then
@@ -967,7 +986,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           ! Implementation of PPM-H3
           Tp = T_tmp(i,m,j_up+1) ; Tc = T_tmp(i,m,j_up) ; Tm = T_tmp(i,m,j_up-1)
 
-          if (local_advect_scheme == ADVECT_PPMH3) then
+          if (advect_schemes(m) == ADVECT_PPMH3) then
             aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
             aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
             aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
@@ -1175,7 +1194,7 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl = "MOM_tracer_advect" ! This module's name.
-  character(len=256) :: mesg, mesg1    ! Message for error messages.
+  character(len=256) :: mesg, gyre_mesg, dye_mesg    ! Message for error messages.
 
   if (associated(CS)) then
     call MOM_error(WARNING, "tracer_advect_init called with associated control structure.")
@@ -1209,19 +1228,42 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
   end select
 
   !CS%advect_high_order = CS%advect_scheme
-  call get_param(param_file, mdl, "TRACER_ADVECTION_HIGH_ORDER_SCHEME", mesg1, &
-          desc="The horizontal high-order transport scheme for tracers:\n"//&
+  call get_param(param_file, mdl, "GYRE_TRACER_ADVECTION_SCHEME", gyre_mesg, &
+          desc="The horizontal transport scheme for the gyre tracer. \n"// &
+          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
           "  PLM    - Piecewise Linear Method\n"//&
-          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)" &
+          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)" &
           , default=mesg)
-  select case (trim(mesg1))
+  select case (trim(gyre_mesg))
     case ("PLM")
-      CS%advect_high_order = ADVECT_HIGH_PLM
+      CS%gyre_advect_scheme = ADVECT_PLM
     case ("PPM:H3")
-      CS%advect_high_order = ADVECT_HIGH_PPMH3
+      CS%gyre_advect_scheme = ADVECT_PPMH3
+    case ("PPM")
+      CS%gyre_advect_scheme = ADVECT_PPM
     case default
       call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
-           "Unknown TRACER_ADVECTION_HIGH_ORDER_SCHEME = "//trim(mesg1))
+           "Unknown GYRE_TRACER_ADVECTION_SCHEME = "//trim(gyre_mesg))
+  end select
+
+  call get_param(param_file, mdl, "DYE_TRACER_ADVECTION_SCHEME", dye_mesg, &
+          desc="The horizontal transport scheme for the dye tracer. \n"// &
+          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
+          "  PLM    - Piecewise Linear Method\n"//&
+          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)" &
+          , default=mesg)
+  select case (trim(dye_mesg))
+    case ("PLM")
+      CS%dye_advect_scheme = ADVECT_PLM
+    case ("PPM:H3")
+      CS%dye_advect_scheme = ADVECT_PPMH3
+    case ("PPM")
+      CS%dye_advect_scheme = ADVECT_PPM
+    case default
+      call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
+           "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
   end select
 
   if (CS%advect_scheme == ADVECT_PPMH3) then
