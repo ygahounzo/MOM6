@@ -38,6 +38,7 @@ type, public :: tracer_advect_CS ; private
   integer :: advect_scheme = -1 !< Determines which reconstruction to use
   integer :: gyre_advect_scheme = -1 !< Determines which reconstruction to use
   integer :: dye_advect_scheme = -1 !< Determines which reconstruction to use
+  integer :: ts_advect_scheme = -1 !< Determines which reconstruction to use
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -50,9 +51,6 @@ integer :: id_clock_sync
 integer, parameter :: ADVECT_PLM        = 0 !< PLM advection scheme
 integer, parameter :: ADVECT_PPMH3      = 1 !< PPM:H3 advection scheme
 integer, parameter :: ADVECT_PPM        = 2 !< PPM advection scheme
-!integer, parameter :: ADVECT_WENO5      = 3 !< WENO5 advection scheme
-!integer, parameter :: ADVECT_WENO7      = 4 !< WENO7 advection scheme
-!integer, parameter :: ADVECT_WENO9      = 5 !< WENO9 advection scheme
 
 contains
 
@@ -117,9 +115,8 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz, itt, ntr, do_any
   integer :: isv, iev, jsv, jev ! The valid range of the indices.
   integer :: IsdB, IedB, JsdB, JedB
-  integer :: stencil1, isDye
+  integer :: stencil1, isDye, isTemp, isSalt
   integer :: local_advect_scheme(Reg%ntr)
-  character(len=48)  :: dye_name ! The dye tracer's name.
 
   domore_u(:,:) = .false.
   domore_v(:,:) = .false.
@@ -141,46 +138,37 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   x_first = (MOD(G%first_direction,2) == 0)
 
   ! The total stencil extent is i-stencil-1 to i+stencil or less
-  if (CS%advect_scheme == ADVECT_PLM) then
-    stencil = 2
-  elseif (CS%advect_scheme == ADVECT_PPM) then
-    stencil = 3
-  elseif (CS%advect_scheme == ADVECT_PPMH3) then
-    if (CS%useHuynhStencilBug) then
-      stencil = 2
-    else
-      stencil = 3
-    endif
-  endif
+  do m = 1,ntr
+     local_advect_scheme(m) = CS%advect_scheme
+     isDye = INDEX(Reg%Tr(m)%name, "dye")
+     isTemp = INDEX(Reg%Tr(m)%name, "temp")
+     isSalt = INDEX(Reg%Tr(m)%name, "salt")
+     if(Reg%Tr(m)%name == 'tr1') then
+        local_advect_scheme(m) = CS%gyre_advect_scheme ! gyre tracer
+     elseif(isDye > 0) then
+        local_advect_scheme(m) = CS%dye_advect_scheme ! dye tracer
+     elseif(isTemp > 0 .or. isSalt > 0) then
+        local_advect_scheme(m) = CS%ts_advect_scheme !  tracer
+     endif
 
-  if (CS%dye_advect_scheme == ADVECT_PLM .or. CS%gyre_advect_scheme == ADVECT_PLM) then
-    stencil1 = 2
-  elseif (CS%dye_advect_scheme == ADVECT_PPM .or. CS%gyre_advect_scheme == ADVECT_PPM) then
-    stencil1 = 3
-  elseif (CS%dye_advect_scheme == ADVECT_PPMH3 .or. CS%gyre_advect_scheme == ADVECT_PPMH3) then
-    if (CS%useHuynhStencilBug) then
-      stencil1 = 2
-    else
-      stencil1 = 3
-    endif
-  endif
-
-  stencil = max(stencil, stencil1)
+     if (local_advect_scheme(m) == ADVECT_PLM) then
+       stencil1 = 2
+     elseif (local_advect_scheme(m) == ADVECT_PPM) then
+       stencil1 = 3
+     elseif (local_advect_scheme(m) == ADVECT_PPMH3) then
+       if (CS%useHuynhStencilBug) then
+         stencil1 = 2
+       else
+         stencil1 = 3
+       endif
+     endif
+     stencil = max(stencil, stencil1)
+  enddo
 
   if (min(is-isd,ied-ie,js-jsd,jed-je).lt.stencil) then
     call MOM_error(FATAL, "MOM_tracer_advect: "//&
       "stencil is wider than the halo.")
   endif
-
-  do m = 1,ntr
-     local_advect_scheme(m) = CS%advect_scheme
-     isDye = INDEX(Reg%Tr(m)%name, "dye")
-     if(Reg%Tr(m)%name == 'tr1') then
-        local_advect_scheme(m) = CS%gyre_advect_scheme ! gyre tracer
-     elseif(isDye > 0) then
-        local_advect_scheme(m) = CS%dye_advect_scheme ! dye tracer
-     endif
-  enddo
 
   max_iter = 2*INT(CEILING(dt/CS%dt)) + 1
 
@@ -1227,7 +1215,6 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
            "Unknown TRACER_ADVECTION_SCHEME = "//trim(mesg))
   end select
 
-  !CS%advect_high_order = CS%advect_scheme
   call get_param(param_file, mdl, "GYRE_TRACER_ADVECTION_SCHEME", gyre_mesg, &
           desc="The horizontal transport scheme for the gyre tracer. \n"// &
           "  The default is TRACER_ADVECTION_SCHEME:\n"//&
@@ -1252,8 +1239,8 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
           "  The default is TRACER_ADVECTION_SCHEME:\n"//&
           "  PLM    - Piecewise Linear Method\n"//&
           "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)" &
-          , default=mesg)
+          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
+          , default=mesg)!,do_not_log=just_read)
   select case (trim(dye_mesg))
     case ("PLM")
       CS%dye_advect_scheme = ADVECT_PLM
@@ -1261,6 +1248,25 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
       CS%dye_advect_scheme = ADVECT_PPMH3
     case ("PPM")
       CS%dye_advect_scheme = ADVECT_PPM
+    case default
+      call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
+           "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
+  end select
+
+  call get_param(param_file, mdl, "TS_TRACER_ADVECTION_SCHEME", dye_mesg, &
+          desc="The horizontal transport scheme for the TS tracer. \n"// &
+          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
+          "  PLM    - Piecewise Linear Method\n"//&
+          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
+          , default=mesg)!,do_not_log=just_read)
+  select case (trim(dye_mesg))
+    case ("PLM")
+      CS%ts_advect_scheme = ADVECT_PLM
+    case ("PPM:H3")
+      CS%ts_advect_scheme = ADVECT_PPMH3
+    case ("PPM")
+      CS%ts_advect_scheme = ADVECT_PPM
     case default
       call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
            "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
