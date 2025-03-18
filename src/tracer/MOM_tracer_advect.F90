@@ -35,10 +35,7 @@ type, public :: tracer_advect_CS ; private
   logical :: useHuynhStencilBug = .false. !< If true, use the incorrect stencil width.
                                    !! This is provided for compatibility with legacy simuations.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
-  integer :: advect_scheme = -1 !< Determines which reconstruction to use
-  integer :: gyre_advect_scheme = -1 !< Determines which reconstruction to use
-  integer :: dye_advect_scheme = -1 !< Determines which reconstruction to use
-  integer :: ts_advect_scheme = -1 !< Determines which reconstruction to use
+  integer :: default_advect_scheme = -1 !< Determines which reconstruction to use
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -115,7 +112,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz, itt, ntr, do_any
   integer :: isv, iev, jsv, jev ! The valid range of the indices.
   integer :: IsdB, IedB, JsdB, JedB
-  integer :: stencil1, isDye, isTemp, isSalt
+  integer :: stencil1
   integer :: local_advect_scheme(Reg%ntr)
 
   domore_u(:,:) = .false.
@@ -139,17 +136,9 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
 
   ! The total stencil extent is i-stencil-1 to i+stencil or less
   do m = 1,ntr
-     local_advect_scheme(m) = CS%advect_scheme
-     isDye = INDEX(Reg%Tr(m)%name, "dye")
-     isTemp = INDEX(Reg%Tr(m)%name, "temp")
-     isSalt = INDEX(Reg%Tr(m)%name, "salt")
-     if(Reg%Tr(m)%name == 'tr1') then
-        local_advect_scheme(m) = CS%gyre_advect_scheme ! gyre tracer
-     elseif(isDye > 0) then
-        local_advect_scheme(m) = CS%dye_advect_scheme ! dye tracer
-     elseif(isTemp > 0 .or. isSalt > 0) then
-        local_advect_scheme(m) = CS%ts_advect_scheme !  tracer
-     endif
+
+     local_advect_scheme(m) = Reg%Tr(m)%advect_scheme
+     if(local_advect_scheme(m) < 0) local_advect_scheme(m) = CS%default_advect_scheme
 
      if (local_advect_scheme(m) == ADVECT_PLM) then
        stencil1 = 2
@@ -1205,74 +1194,17 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
           , default='PLM')
   select case (trim(mesg))
     case ("PLM")
-      CS%advect_scheme = ADVECT_PLM
+      CS%default_advect_scheme = ADVECT_PLM
     case ("PPM:H3")
-      CS%advect_scheme = ADVECT_PPMH3
+      CS%default_advect_scheme = ADVECT_PPMH3
     case ("PPM")
-      CS%advect_scheme = ADVECT_PPM
+      CS%default_advect_scheme = ADVECT_PPM
     case default
       call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
            "Unknown TRACER_ADVECTION_SCHEME = "//trim(mesg))
   end select
 
-  call get_param(param_file, mdl, "GYRE_TRACER_ADVECTION_SCHEME", gyre_mesg, &
-          desc="The horizontal transport scheme for the gyre tracer. \n"// &
-          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
-          "  PLM    - Piecewise Linear Method\n"//&
-          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)" &
-          , default=mesg)
-  select case (trim(gyre_mesg))
-    case ("PLM")
-      CS%gyre_advect_scheme = ADVECT_PLM
-    case ("PPM:H3")
-      CS%gyre_advect_scheme = ADVECT_PPMH3
-    case ("PPM")
-      CS%gyre_advect_scheme = ADVECT_PPM
-    case default
-      call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
-           "Unknown GYRE_TRACER_ADVECTION_SCHEME = "//trim(gyre_mesg))
-  end select
-
-  call get_param(param_file, mdl, "DYE_TRACER_ADVECTION_SCHEME", dye_mesg, &
-          desc="The horizontal transport scheme for the dye tracer. \n"// &
-          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
-          "  PLM    - Piecewise Linear Method\n"//&
-          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
-          , default=mesg)!,do_not_log=just_read)
-  select case (trim(dye_mesg))
-    case ("PLM")
-      CS%dye_advect_scheme = ADVECT_PLM
-    case ("PPM:H3")
-      CS%dye_advect_scheme = ADVECT_PPMH3
-    case ("PPM")
-      CS%dye_advect_scheme = ADVECT_PPM
-    case default
-      call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
-           "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
-  end select
-
-  call get_param(param_file, mdl, "TS_TRACER_ADVECTION_SCHEME", dye_mesg, &
-          desc="The horizontal transport scheme for the TS tracer. \n"// &
-          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
-          "  PLM    - Piecewise Linear Method\n"//&
-          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
-          , default=mesg)!,do_not_log=just_read)
-  select case (trim(dye_mesg))
-    case ("PLM")
-      CS%ts_advect_scheme = ADVECT_PLM
-    case ("PPM:H3")
-      CS%ts_advect_scheme = ADVECT_PPMH3
-    case ("PPM")
-      CS%ts_advect_scheme = ADVECT_PPM
-    case default
-      call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
-           "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
-  end select
-
-  if (CS%advect_scheme == ADVECT_PPMH3) then
+  if (CS%default_advect_scheme == ADVECT_PPMH3) then
       call get_param(param_file, mdl, "USE_HUYNH_STENCIL_BUG", &
         CS%useHuynhStencilBug, &
         desc="If true, use a stencil width of 2 in PPM:H3 tracer advection. " &

@@ -89,7 +89,9 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
 # include "version_variable.h"
   real, pointer :: tr_ptr(:,:,:) => NULL() ! A pointer to one of the tracers [CU ~> conc]
   logical :: register_dye_tracer
-  integer :: isd, ied, jsd, jed, nz, m
+  integer :: isd, ied, jsd, jed, nz, m, dye_advect_scheme
+  character(len=256) :: dye_mesg
+
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
   if (associated(CS)) then
@@ -158,6 +160,27 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   if (minval(CS%dye_source_maxdepth(:)) < -1.e29*US%m_to_Z) &
     call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXDEPTH ")
 
+  call get_param(param_file, mdl, "DYE_TRACER_ADVECTION_SCHEME", dye_mesg, &
+          desc="The horizontal transport scheme for the dye tracer. \n"// &
+          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
+          "  PLM    - Piecewise Linear Method\n"//&
+          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
+          , default="")
+  select case (trim(dye_mesg))
+    case ("")
+      dye_advect_scheme = -1
+    case ("PLM")
+      dye_advect_scheme = 0
+    case ("PPM:H3")
+      dye_advect_scheme = 1
+    case ("PPM")
+      dye_advect_scheme = 2
+    case default
+      call MOM_error(FATAL, "dye_example, register_dye_tracer: "//&
+           "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
+  end select
+
   allocate(CS%tr(isd:ied,jsd:jed,nz,CS%ntr), source=0.0)
 
   do m = 1, CS%ntr
@@ -173,7 +196,8 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
     ! Register the tracer for horizontal advection, diffusion, and restarts.
     call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, &
                          tr_desc=CS%tr_desc(m), registry_diags=.true., &
-                         restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+                         restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit,&
+                         advect_scheme=dye_advect_scheme)
 
     !   Set coupled_tracers to be true (hard-coded above) to provide the surface
     ! values to the coupler (if any).  This is meta-code and its arguments will

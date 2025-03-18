@@ -55,7 +55,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                            df_x, df_y, ad_2d_x, ad_2d_y, df_2d_x, df_2d_y, advection_xy, registry_diags, &
                            conc_scale, flux_nameroot, flux_longname, flux_units, flux_scale, &
                            convergence_units, convergence_scale, cmor_tendprefix, diag_form, &
-                           restart_CS, mandatory, underflow_conc, Tr_out)
+                           restart_CS, mandatory, underflow_conc, Tr_out, advect_scheme)
   type(hor_index_type),           intent(in)    :: HI           !< horizontal index type
   type(verticalGrid_type),        intent(in)    :: GV           !< ocean vertical grid structure
   type(tracer_registry_type),     pointer       :: Reg          !< pointer to the tracer registry
@@ -128,6 +128,9 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
   real,                 optional, intent(in)    :: underflow_conc !< A tiny concentration, below which the tracer
                                                                 !! concentration underflows to 0 [CU ~> conc].
   type(tracer_type),    optional, pointer       :: Tr_out       !< If present, returns pointer into registry
+
+  integer,                 optional, intent(in) :: advect_scheme !< Advection scheme for specific tracer the default is -1
+                                                                 !! indicating to use the scheme from MOM_tracer_advect                  
 
   logical :: mand
   type(tracer_type), pointer :: Tr=>NULL()
@@ -228,6 +231,9 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
 
   Tr%diag_form = 1
   if (present(diag_form)) Tr%diag_form = diag_form
+  
+  Tr%advect_scheme = -1
+  if(present(advect_scheme)) Tr%advect_scheme = advect_scheme
 
   Tr%t => tr_ptr
 

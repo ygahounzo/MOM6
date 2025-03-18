@@ -97,7 +97,8 @@ function register_gyre_tracer(G, GV, param_file, CS, tr_Reg, restart_CS)
   real, pointer :: adyy(:,:,:)
   real, pointer :: adxy(:,:,:)
   logical :: register_gyre_tracer
-  integer :: isd, ied, jsd, jed, nz, m
+  integer :: isd, ied, jsd, jed, nz, m, gyre_advect_scheme
+  character(len=256) :: gyre_mesg
 
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed ; nz = GV%ke
 
@@ -141,6 +142,27 @@ function register_gyre_tracer(G, GV, param_file, CS, tr_Reg, restart_CS)
                  "restart files of a restarted run.", default=.false.)
 
 
+  call get_param(param_file, mdl, "GYRE_TRACER_ADVECTION_SCHEME", gyre_mesg, &
+          desc="The horizontal transport scheme for the dye tracer. \n"// &
+          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
+          "  PLM    - Piecewise Linear Method\n"//&
+          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
+          , default="")
+  select case (trim(gyre_mesg))
+    case ("")
+      gyre_advect_scheme = -1
+    case ("PLM")
+      gyre_advect_scheme = 0
+    case ("PPM:H3")
+      gyre_advect_scheme = 1
+    case ("PPM")
+      gyre_advect_scheme = 2
+    case default
+      call MOM_error(FATAL, "gyre_tracer, register_gyre_tracer: "//&
+           "Unknown GYRE_TRACER_ADVECTION_SCHEME = "//trim(gyre_mesg))
+  end select
+
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
   !allocate(adxx(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
   !allocate(adyy(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
@@ -170,7 +192,8 @@ function register_gyre_tracer(G, GV, param_file, CS, tr_Reg, restart_CS)
     call register_tracer(tr_ptr, tr_Reg, param_file, G%HI, GV, &
                          name=name, longname=longname, units="kg kg-1", &
                          registry_diags=.true., flux_units=flux_units, &
-                         restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+                         restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit, &
+                         advect_scheme=gyre_advect_scheme)
 
     !   Set coupled_tracers to be true (hard-coded above) to provide the surface
     ! values to the coupler (if any).  This is meta-code and its arguments will

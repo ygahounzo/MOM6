@@ -72,7 +72,8 @@ function register_dyed_obc_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
                             ! kg(tracer) kg(water)-1 m3 s-1 or kg(tracer) s-1.
   real, pointer :: tr_ptr(:,:,:) => NULL() ! The tracer concentration [conc]
   logical :: register_dyed_obc_tracer
-  integer :: isd, ied, jsd, jed, nz, m
+  integer :: isd, ied, jsd, jed, nz, m, dye_advect_scheme
+  character(len=256) :: dye_mesg
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
   if (associated(CS)) then
@@ -101,6 +102,27 @@ function register_dyed_obc_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
                    CS%tracer_IC_file)
   endif
 
+  call get_param(param_file, mdl, "DYE_TRACER_ADVECTION_SCHEME", dye_mesg, &
+          desc="The horizontal transport scheme for the dye tracer. \n"// &
+          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
+          "  PLM    - Piecewise Linear Method\n"//&
+          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
+          , default="")
+  select case (trim(dye_mesg))
+    case ("")
+      dye_advect_scheme = -1
+    case ("PLM")
+      dye_advect_scheme = 0
+    case ("PPM:H3")
+      dye_advect_scheme = 1
+    case ("PPM")
+      dye_advect_scheme = 2
+    case default
+      call MOM_error(FATAL, "dyed_obc_tracer, register_dyed_obc_tracer: "//&
+           "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
+  end select
+
   allocate(CS%tr(isd:ied,jsd:jed,nz,CS%ntr), source=0.0)
 
   do m=1,CS%ntr
@@ -117,7 +139,7 @@ function register_dyed_obc_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
     call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, &
                          name=name, longname=longname, units="kg kg-1", &
                          registry_diags=.true., flux_units=flux_units, &
-                         restart_CS=restart_CS)
+                         restart_CS=restart_CS, advect_scheme=dye_advect_scheme)
 
     !   Set coupled_tracers to be true (hard-coded above) to provide the surface
     ! values to the coupler (if any).  This is meta-code and its arguments will
