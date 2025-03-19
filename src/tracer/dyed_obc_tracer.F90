@@ -22,6 +22,7 @@ use MOM_verticalGrid,       only : verticalGrid_type
 use MOM_open_boundary,      only : OBC_segment_type, register_segment_tracer
 use MOM_tracer_registry,    only : tracer_type
 use MOM_tracer_registry,    only : tracer_name_lookup
+use MOM_tracer_consts,      only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
 
 implicit none ; private
 
@@ -103,25 +104,11 @@ function register_dyed_obc_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   endif
 
   call get_param(param_file, mdl, "DYE_TRACER_ADVECTION_SCHEME", dye_mesg, &
-          desc="The horizontal transport scheme for the dye tracer. \n"// &
-          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
-          "  PLM    - Piecewise Linear Method\n"//&
-          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
-          , default="")
-  select case (trim(dye_mesg))
-    case ("")
-      dye_advect_scheme = -1
-    case ("PLM")
-      dye_advect_scheme = 0
-    case ("PPM:H3")
-      dye_advect_scheme = 1
-    case ("PPM")
-      dye_advect_scheme = 2
-    case default
-      call MOM_error(FATAL, "dyed_obc_tracer, register_dyed_obc_tracer: "//&
-           "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
-  end select
+          desc="The horizontal transport scheme for the dye tracer:\n"//&
+          trim(TracerAdvectionSchemeDoc), default="")
+
+  ! Get the integer value of the tracer scheme
+  call set_tracer_advect_scheme(dye_advect_scheme, dye_mesg)
 
   allocate(CS%tr(isd:ied,jsd:jed,nz,CS%ntr), source=0.0)
 
@@ -221,8 +208,7 @@ subroutine register_dyed_obc_tracer_segments(GV, OBC, tr_Reg, param_file)
 
   real :: T_obc
 
-  T_obc = 100.0
-
+  T_obc = 100.0  ! inflow value
 
   if (.not. associated(OBC)) return
 

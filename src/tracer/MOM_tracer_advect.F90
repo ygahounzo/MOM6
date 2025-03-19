@@ -18,6 +18,8 @@ use MOM_open_boundary,   only : OBC_segment_type
 use MOM_tracer_registry, only : tracer_registry_type, tracer_type
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_verticalGrid,    only : verticalGrid_type
+use MOM_tracer_consts,   only : ADVECT_PLM, ADVECT_PPMH3, ADVECT_PPM
+use MOM_tracer_consts,   only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -43,11 +45,6 @@ integer :: id_clock_advect
 integer :: id_clock_pass
 integer :: id_clock_sync
 !>@}
-
-! The following are private parameter constants
-integer, parameter :: ADVECT_PLM        = 0 !< PLM advection scheme
-integer, parameter :: ADVECT_PPMH3      = 1 !< PPM:H3 advection scheme
-integer, parameter :: ADVECT_PPM        = 2 !< PPM advection scheme
 
 contains
 
@@ -112,8 +109,8 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz, itt, ntr, do_any
   integer :: isv, iev, jsv, jev ! The valid range of the indices.
   integer :: IsdB, IedB, JsdB, JedB
-  integer :: stencil1
-  integer :: local_advect_scheme(Reg%ntr)
+  integer :: stencil_local          ! Stencil for the local adection scheme
+  integer :: local_advect_scheme(Reg%ntr) ! contains the list of the advection for each tracer
 
   domore_u(:,:) = .false.
   domore_v(:,:) = .false.
@@ -134,24 +131,24 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   call cpu_clock_begin(id_clock_advect)
   x_first = (MOD(G%first_direction,2) == 0)
 
-  ! The total stencil extent is i-stencil-1 to i+stencil or less
+  ! Choose the maximum stencil from all the local advection scheme
   do m = 1,ntr
 
      local_advect_scheme(m) = Reg%Tr(m)%advect_scheme
      if(local_advect_scheme(m) < 0) local_advect_scheme(m) = CS%default_advect_scheme
 
      if (local_advect_scheme(m) == ADVECT_PLM) then
-       stencil1 = 2
+       stencil_local = 2
      elseif (local_advect_scheme(m) == ADVECT_PPM) then
-       stencil1 = 3
+       stencil_local = 3
      elseif (local_advect_scheme(m) == ADVECT_PPMH3) then
        if (CS%useHuynhStencilBug) then
-         stencil1 = 2
+         stencil_local = 2
        else
-         stencil1 = 3
+         stencil_local = 3
        endif
      endif
-     stencil = max(stencil, stencil1)
+     stencil = max(stencil, stencil_local)
   enddo
 
   if (min(is-isd,ied-ie,js-jsd,jed-je).lt.stencil) then
@@ -1188,21 +1185,10 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
   call get_param(param_file, mdl, "DEBUG", CS%debug, default=.false.)
   call get_param(param_file, mdl, "TRACER_ADVECTION_SCHEME", mesg, &
           desc="The horizontal transport scheme for tracers:\n"//&
-          "  PLM    - Piecewise Linear Method\n"//&
-          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)" &
-          , default='PLM')
-  select case (trim(mesg))
-    case ("PLM")
-      CS%default_advect_scheme = ADVECT_PLM
-    case ("PPM:H3")
-      CS%default_advect_scheme = ADVECT_PPMH3
-    case ("PPM")
-      CS%default_advect_scheme = ADVECT_PPM
-    case default
-      call MOM_error(FATAL, "MOM_tracer_advect, tracer_advect_init: "//&
-           "Unknown TRACER_ADVECTION_SCHEME = "//trim(mesg))
-  end select
+          trim(TracerAdvectionSchemeDoc), default='PLM')
+  
+  ! Get the integer value of the tracer scheme
+  call set_tracer_advect_scheme(CS%default_advect_scheme, mesg)
 
   if (CS%default_advect_scheme == ADVECT_PPMH3) then
       call get_param(param_file, mdl, "USE_HUYNH_STENCIL_BUG", &

@@ -24,6 +24,7 @@ use MOM_tracer_Z_init,      only : tracer_Z_init
 use MOM_unit_scaling,       only : unit_scale_type
 use MOM_variables,          only : surface, thermo_var_ptrs
 use MOM_verticalGrid,       only : verticalGrid_type
+use MOM_tracer_consts,      only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
 
 implicit none ; private
 
@@ -161,25 +162,11 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
     call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXDEPTH ")
 
   call get_param(param_file, mdl, "DYE_TRACER_ADVECTION_SCHEME", dye_mesg, &
-          desc="The horizontal transport scheme for the dye tracer. \n"// &
-          "  The default is TRACER_ADVECTION_SCHEME:\n"//&
-          "  PLM    - Piecewise Linear Method\n"//&
-          "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-          "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n" &
-          , default="")
-  select case (trim(dye_mesg))
-    case ("")
-      dye_advect_scheme = -1
-    case ("PLM")
-      dye_advect_scheme = 0
-    case ("PPM:H3")
-      dye_advect_scheme = 1
-    case ("PPM")
-      dye_advect_scheme = 2
-    case default
-      call MOM_error(FATAL, "dye_example, register_dye_tracer: "//&
-           "Unknown DYE_TRACER_ADVECTION_SCHEME = "//trim(dye_mesg))
-  end select
+          desc="The horizontal transport scheme for the dye tracer:\n"//&
+          trim(TracerAdvectionSchemeDoc), default="")
+
+  ! Get the integer value of the tracer scheme
+  call set_tracer_advect_scheme(dye_advect_scheme, dye_mesg)
 
   allocate(CS%tr(isd:ied,jsd:jed,nz,CS%ntr), source=0.0)
 
