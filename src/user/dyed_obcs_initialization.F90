@@ -23,6 +23,7 @@ public dyed_obcs_set_OBC_data
 
 integer :: ntr = 0 !< Number of dye tracers
                    !! \todo This is a module variable. Move this variable into the control structure.
+real :: dye_obc_inflow = 0.0
 
 contains
 
@@ -36,6 +37,7 @@ subroutine dyed_obcs_set_OBC_data(OBC, G, GV, param_file, tr_Reg)
   type(param_file_type),      intent(in) :: param_file !< A structure indicating the open file
                                                 !! to parse for model parameter values.
   type(tracer_registry_type), pointer    :: tr_Reg !< Tracer registry.
+
   ! Local variables
   character(len=40)  :: mdl = "dyed_obcs_set_OBC_data" ! This subroutine's name.
   character(len=80)  :: name, longname
@@ -55,6 +57,11 @@ subroutine dyed_obcs_set_OBC_data(OBC, G, GV, param_file, tr_Reg)
                  "should have a separate boundary segment.", default=0,   &
                  do_not_log=.true.)
 
+  call get_param(param_file, mdl, "DYE_OBC_INFLOW", dye_obc_inflow, &
+                 "The OBC inflow value of dye tracers.", units="kg kg-1", &
+                 default=1.0, do_not_log=.true.)
+
+
   if (OBC%number_of_segments < ntr) then
     call MOM_error(WARNING, "Error in dyed_obc segment setup")
     return   !!! Need a better error message here
@@ -69,7 +76,7 @@ subroutine dyed_obcs_set_OBC_data(OBC, G, GV, param_file, tr_Reg)
 
     do n=1,OBC%number_of_segments
       if (n == m) then
-        dye = 1.0
+        dye = dye_obc_inflow
       else
         dye = 0.0
       endif

@@ -30,7 +30,6 @@ implicit none ; private
 
 public register_dyed_obc_tracer, initialize_dyed_obc_tracer
 public dyed_obc_tracer_column_physics, dyed_obc_tracer_end
-public register_dyed_obc_tracer_segments
 
 !> The control structure for the dyed_obc tracer package
 type, public :: dyed_obc_tracer_CS ; private
@@ -49,6 +48,7 @@ type, public :: dyed_obc_tracer_CS ; private
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< A pointer to the restart control structure
 
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
+
 end type dyed_obc_tracer_CS
 
 contains
@@ -191,39 +191,6 @@ subroutine initialize_dyed_obc_tracer(restart, day, G, GV, h, diag, OBC, CS)
   endif ! restart
 
 end subroutine initialize_dyed_obc_tracer
-
-subroutine register_dyed_obc_tracer_segments(GV, OBC, tr_Reg, param_file)
-  type(verticalGrid_type),    intent(in)    :: GV         !< ocean vertical grid structure
-  type(ocean_OBC_type),       pointer       :: OBC        !< Open boundary structure
-  type(tracer_registry_type), pointer       :: tr_Reg     !< Tracer registry
-  type(param_file_type),      intent(in)    :: param_file !< file to parse for  model parameter values
-  !type(dyed_obc_tracer_CS),              pointer    :: CS      !< The control structure returned by a previous
-                                                               !! call to dyed_obc_register_tracer.
-
-! Local variables
-  integer :: n, ntr_id, m
-  character(len=32) :: name
-  type(OBC_segment_type), pointer :: segment => NULL() ! pointer to segment type list
-  type(tracer_type), pointer :: tr_ptr => NULL()
-
-  real :: T_obc
-
-  T_obc = 100.0  ! inflow value
-
-  if (.not. associated(OBC)) return
-
-  ! Added for the south OBC for the Caribbean sea for GOM simulations
-  !do m=1,CS%ntr
-    segment=>OBC%segment(1)
-    if (.not. segment%on_pe) return
-
-    write(name,'("dye_",I2.2)') 1
-    !if(m < 10) T_obc = 100.0
-    call tracer_name_lookup(tr_Reg, ntr_id, tr_ptr, name)
-    call register_segment_tracer(tr_ptr, ntr_id, param_file, GV, segment, OBC_scalar=T_obc)
-  !enddo 
-
-end subroutine register_dyed_obc_tracer_segments
 
 !> This subroutine applies diapycnal diffusion and any other column
 !! tracer physics or chemistry to the tracers from this file.
