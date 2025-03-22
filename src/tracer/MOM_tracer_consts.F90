@@ -14,9 +14,9 @@ integer, parameter :: ADVECT_PPM        = 2 !< PPM advection scheme
 
 !> Documentation for tracer advection schemes
 character(len=*), parameter :: TracerAdvectionSchemeDoc = &
-                 " PLM    - Piecewise Linear Method\n"//&
-                 " PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-                 " PPM    - Piecewise Parabolic Method (Colella-Woodward)"
+  " PLM    - Piecewise Linear Method\n"//&
+  " PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+  " PPM    - Piecewise Parabolic Method (Colella-Woodward)"
 
 contains
 
@@ -35,8 +35,8 @@ subroutine set_tracer_advect_scheme(scheme_value, advect_scheme_name)
     case ("PPM")
       scheme_value = ADVECT_PPM
     case default
-      call MOM_error(FATAL, "tracer_advect_schemes, set_tracer_advect_scheme: "//&
-           "Unknown TRACER_ADVECTION_SCHEME = "//trim(advect_scheme_name))
+      call MOM_error(FATAL, "MOM_tracer_consts, set_tracer_advect_scheme: "//&
+      "Unknown TRACER_ADVECTION_SCHEME = "//trim(advect_scheme_name))
   end select
 end subroutine set_tracer_advect_scheme
 

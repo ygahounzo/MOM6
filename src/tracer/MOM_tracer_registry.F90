@@ -129,8 +129,9 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                                                                 !! concentration underflows to 0 [CU ~> conc].
   type(tracer_type),    optional, pointer       :: Tr_out       !< If present, returns pointer into registry
 
-  integer,                 optional, intent(in) :: advect_scheme !< Advection scheme for specific tracer the default is -1
-                                                                 !! indicating to use the scheme from MOM_tracer_advect                  
+  integer,                 optional, intent(in) :: advect_scheme !< Advection scheme for specific tracer the default
+                                                                 !! is -1 indicating to use the scheme 
+                                                                 !! from MOM_tracer_advect
 
   logical :: mand
   type(tracer_type), pointer :: Tr=>NULL()

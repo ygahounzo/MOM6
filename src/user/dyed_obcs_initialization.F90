@@ -23,7 +23,7 @@ public dyed_obcs_set_OBC_data
 
 integer :: ntr = 0 !< Number of dye tracers
                    !! \todo This is a module variable. Move this variable into the control structure.
-real :: dye_obc_inflow = 0.0
+real, allocatable, dimension(:) :: dye_obc_inflow !< Inflow dye concentration
 
 contains
 
@@ -57,10 +57,11 @@ subroutine dyed_obcs_set_OBC_data(OBC, G, GV, param_file, tr_Reg)
                  "should have a separate boundary segment.", default=0,   &
                  do_not_log=.true.)
 
+  allocate(dye_obc_inflow(ntr))
+
   call get_param(param_file, mdl, "DYE_OBC_INFLOW", dye_obc_inflow, &
                  "The OBC inflow value of dye tracers.", units="kg kg-1", &
-                 default=1.0, do_not_log=.true.)
-
+                 default=1.0)
 
   if (OBC%number_of_segments < ntr) then
     call MOM_error(WARNING, "Error in dyed_obc segment setup")
@@ -75,8 +76,9 @@ subroutine dyed_obcs_set_OBC_data(OBC, G, GV, param_file, tr_Reg)
     call tracer_name_lookup(tr_Reg, ntr_id, tr_ptr, name)
 
     do n=1,OBC%number_of_segments
-      if (n == m) then
-        dye = dye_obc_inflow
+      !if (n == m) then
+      if (n == 1) then
+        dye = dye_obc_inflow(m)
       else
         dye = 0.0
       endif
@@ -84,6 +86,8 @@ subroutine dyed_obcs_set_OBC_data(OBC, G, GV, param_file, tr_Reg)
                                    OBC%segment(n), OBC_scalar=dye)
     enddo
   enddo
+
+  deallocate(dye_obc_inflow)
 
 end subroutine dyed_obcs_set_OBC_data
 

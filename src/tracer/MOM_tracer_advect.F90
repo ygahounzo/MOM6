@@ -1224,7 +1224,7 @@ end subroutine tracer_advect_end
 !!
 !!  * advect_tracer advects tracer concentrations using a combination
 !!  of the modified flux advection scheme from Easter (Mon. Wea. Rev.,
-!!  1993) with tracer distributions given by the monotonic piecewise 
+!!  1993) with tracer distributions given by the monotonic piecewise
 !!  parabolic method, as described in Carpenter et al. (MWR, 1990).
 !!  This scheme conserves the total amount of tracer while avoiding
 !!  spurious maxima and minima of the tracer concentration.
