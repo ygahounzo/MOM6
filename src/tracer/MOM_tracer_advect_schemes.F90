@@ -17,12 +17,12 @@ integer, parameter :: ADVECT_WENO9      = 5 !< WENO9 advection scheme
 
 !> Documentation for tracer advection schemes
 character(len=*), parameter :: TracerAdvectionSchemeDoc = &
-                 " PLM    - Piecewise Linear Method\n"//&
-                 " PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-                 " PPM    - Piecewise Parabolic Method (Colella-Woodward)\n"//&
-                 " WENO5  - Weighted Essentially Non-Oscillatory, 5th order\n"//&
-                 " WENO7  - Weighted Essentially Non-Oscillatory, 7th order\n"//&
-                 " WENO9  - Weighted Essentially Non-Oscillatory, 9th order"
+                 "  PLM    - Piecewise Linear Method\n"//&
+                 "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+                 "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n"//&
+                 "  WENO5  - Weighted Essentially Non-Oscillatory, 5th order\n"//&
+                 "  WENO7  - Weighted Essentially Non-Oscillatory, 7th order\n"//&
+                 "  WENO9  - Weighted Essentially Non-Oscillatory, 9th order"
 
 contains
 

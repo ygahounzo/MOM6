@@ -35,22 +35,23 @@ subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
                ! N is weno reconstruction order
 
    w0 = 1.0
+   wq = 0.0
 
-   if(u >= 0.0) then 
-      call weno3_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)
-      call weno3_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)
+   if (u > 0.0) then 
+      call weno3z_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)
+      call weno3z_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)
       ! maximum-principle limiter
       call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-   else
-      call weno3_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
-      call weno3_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
+   elseif (u < 0.0) then
+      call weno3z_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
+      call weno3z_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
       ! maximum-principle limiter
       call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
    endif
 
 end subroutine weno3_reconstruction
 
-!> 3rd-order weno reconstruction subroutine
+!> 3rd-order weno reconstruction flux
 subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
@@ -88,7 +89,7 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    k0 = (q0-qm)**2 ; k1 = (qp-q0)**2
    O01 = 10.0
-   if(k0 >= k1) O01 = 1.0
+   if (k0 >= k1) O01 = 1.0
    O11 = 11.0-O01
 
    O0 = O01/(O01+O11) ; O1 = 1.0-O0
@@ -122,7 +123,7 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
    mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(s1),abs(mm2))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
 
    qul = q0 + 2.0*(q0-qm)
    qmd = 0.5*(q0 + qp) - 0.5*dm4p
@@ -136,6 +137,70 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    wq = wq + md
 
 end subroutine weno3_reconstruction_interface
+
+!> 3rd-order weno z-type reconstruction flux
+subroutine weno3z_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
+
+   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
+   real, intent(out) :: wq                  !< reconstructed weno flux
+
+   real :: b1, b2    ! smoothness indicator
+   real :: d1, d2    ! linear weights
+   real :: P1, P2    ! reconstructed polynomials
+   real :: w1, w2    ! nonlinear weights
+   real :: a1, a2
+   real :: eps, wnorm, tau
+   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
+   real :: qul, qmd, qlc, qmin, qmax, md
+
+   ! reconstructed polynomials
+   P1 = 0.5*(-qm + 3.0*q0)
+   P2 = 0.5*(q0 + qp)
+
+   ! smoothness indicator
+   b1 = (q0-qm)*(q0-qm)
+   b2 = (qp-q0)*(qp-q0)
+
+   d1 = 1.0/3.0 ; d2 = 2.0/3.0
+
+   ! Alpha values
+   eps = 1.0e-6
+   tau = abs(b2-b1)
+   a1 = d1*(1.0 + (tau/(b1+eps))**2)
+   a2 = d2*(1.0 + (tau/(b2+eps))**2)
+
+   ! Normalization
+   wnorm = a1+a2
+   w1 = a1 / wnorm
+   w2 = a2 / wnorm
+
+   wq = w1*P1 + w2*P2
+
+   ! Monotonicity Preserving
+   dm1 = qmm - 2.0*qm + q0
+   dd0 = qp - 2.0*q0 + qm
+   dd1 = qpp - 2.0*qp + q0
+
+   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
+   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   qul = q0 + 2.0*(q0-qm)
+   qmd = 0.5*(q0 + qp) - 0.5*dm4p
+   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
+   !qlc = 0.5*(3.0*q0+qm) - (4.0/3.0)*dm4m
+
+   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+
+   md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
+   wq = wq + md
+
+end subroutine weno3z_reconstruction_interface
 
 !> 5th-order weno reconstruction subroutine and limiter
 subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
@@ -151,22 +216,23 @@ subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
                ! N is weno reconstruction order
 
    w0 = 5.0/18.0
+   wq = 0.0
 
-   if(u >= 0.0) then
-      call weno5_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)  ! i-1/2
-      call weno5_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)  ! i+1/2
+   if (u > 0.0) then
+      call weno5z_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)  ! i-1/2
+      call weno5z_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)  ! i+1/2
       ! maximum-principle limiter
       call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-   else
-      call weno5_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
-      call weno5_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
+   elseif (u < 0.0) then
+      call weno5z_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
+      call weno5z_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
       ! maximum-principle limiter
       call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
    endif
 
 end subroutine weno5_reconstruction
 
-!> 5th-order weno reconstruction subroutine
+!> 5th-order weno reconstruction flux
 subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
@@ -212,7 +278,7 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    k0 = (q0-qm)**2 ; k1 = (qp-q0)**2
    O01 = 10.0
-   if(k0 >= k1) O01 = 1.0
+   if (k0 >= k1) O01 = 1.0
    O11 = 11.0-O01
 
    O0 = O01/(O01+O11) ; O1 = 1.0-O0
@@ -238,7 +304,7 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    ! Apply the monotonicity-preserving
 
    dm1 = qmm - 2.0*qm + q0
-   dd0 = qp - 2.0*q0 + qm
+   dd0 = qp  - 2.0*q0 + qm
    dd1 = qpp - 2.0*qp + q0
 
    mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
@@ -247,7 +313,7 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
    mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(s1),abs(mm2))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
 
    qul = q0 + 2.0*(q0-qm)
    qmd = 0.5*(q0 + qp) - 0.5*dm4p
@@ -261,6 +327,81 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    wq = wq + md
 
 end subroutine weno5_reconstruction_interface
+
+!> 5th-order weno z-type reconstruction flux
+subroutine weno5z_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
+
+   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
+   real, intent(out) :: wq                  !< reconstructed weno flux
+
+   real :: P0, P1, P2         ! reconstructed polynomials
+   real :: b0, b1, b2         ! smoothness indicator
+   real :: w0, w1, w2         ! nonlinear weights
+   real :: d0, d1, d2         ! linear weights
+   real :: a0, a1, a2
+   real :: eps,  wnorm, tau
+   integer :: r
+   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
+   real :: qul, qmd, qlc, qmin, qmax, md
+
+   r = 2
+
+   ! Gamma values in Weno reconstruction
+   d0 = 1.0/10.0
+   d1 = 6.0/10.0
+   d2 = 3.0/10.0
+
+   ! First stencil
+   P0 = (2.0*qmm - 7.0*qm + 11.0*q0)/6.0
+   b0 = (13.0/12.0)*(qmm - 2.0*qm + q0)**2 + 0.25*(qmm - 4.0*qm + 3.0*q0)**2
+
+   ! Second stencil
+   P1 = (-qm + 5.0*q0 + 2.0*qp)/6.0
+   b1 = (13.0/12.0)*(qm - 2.0*q0 + qp)**2 + 0.25*(qm - qp)**2
+
+   ! Third stencil
+   P2 = (2.0*q0 + 5.0*qp - qpp)/6.0
+   b2 = (13.0/12.0)*(q0 - 2.0*qp + qpp)**2 + 0.25*(3.0*q0 - 4.0*qp + qpp)**2
+
+   ! Alpha values
+   eps = 1.0e-6
+   tau = abs(b2-b0)
+   a0 = d0*(1.0 + (tau/(b0+eps))**r)
+   a1 = d1*(1.0 + (tau/(b1+eps))**r)
+   a2 = d2*(1.0 + (tau/(b2+eps))**r)
+
+   wnorm = a0+a1+a2
+   w0 = a0/wnorm
+   w1 = a1/wnorm
+   w2 = a2/wnorm
+
+   wq = w0*P0 + w1*P1 + w2*P2
+
+   ! Monotonicity Preserving
+   dm1 = qmm - 2.0*qm + q0
+   dd0 = qp - 2.0*q0 + qm
+   dd1 = qpp - 2.0*qp + q0
+
+   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
+   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   qul = q0 + 2.0*(q0-qm)
+   qmd = 0.5*(q0 + qp) - 0.5*dm4p
+   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
+   !qlc = 0.5*(3.0*q0+qm) - (4.0/3.0)*dm4m
+
+   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+
+   md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
+   wq = wq + md
+
+end subroutine weno5z_reconstruction_interface
 
 !> 7th-order weno reconstruction subroutine and limiter
 subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qmin, qmax)
@@ -277,22 +418,23 @@ subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qm
                ! N is weno reconstruction order
 
    w0 = (322.0-13.0*sqrt(70.0))/1800.0
+   wq = 0.0
 
-   if(u >= 0.0) then
-      call weno7_reconstruction_interface(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
-      call weno7_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+   if (u > 0.0) then
+      call weno7z_reconstruction_interface(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
+      call weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
       ! maximum-principle limiter
       call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-   else
-      call weno7_reconstruction_interface(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2)
-      call weno7_reconstruction_interface(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4)
+   elseif (u < 0.0) then
+      call weno7z_reconstruction_interface(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2)
+      call weno7z_reconstruction_interface(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4)
       ! maximum-principle limiter
       call PP_limiter(wq, qp1, wmr, wpl, w0, qmin, qmax)
    endif
 
 end subroutine weno7_reconstruction
 
-!> 7th-order weno reconstruction subroutine
+!> 7th-order weno reconstruction flux
 subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
 
    real, intent(in) :: qm3, qmm, qm, q0, qp, qpp, qp3 !< tracer concentration for 7-stencil wide
@@ -308,11 +450,11 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    real :: tau, s0, s1, O01, O11, O0, O1
    real :: eps, k0, k1
    integer :: r
-   real :: dm2, dm1, dc, dp1, dp2, dm4p, dm4m
-   real :: mm1, mm2, mm3, qul, qmd, qlc, qmin, qmax, md
+   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
+   real :: qul, qmd, qlc, qmin, qmax, md
 
-   eps = 1.0e-10
-   r = 3
+   eps = 1.0e-6
+   r = 2
 
    ds = 1266.0
    d1 = 1000.0/ds; d2 = 125.0/ds ; d3 = 100.0/ds; d4 = 25.0/ds ; d5 = 10.0/ds
@@ -353,7 +495,7 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
 
    k0 = (q0-qm)**2 ; k1 = (qp-q0)**2
    O01 = 10.0
-   if(k0 >= k1) O01 = 1.0
+   if (k0 >= k1) O01 = 1.0
    O11 = 11.0-O01
 
    O0 = O01/(O01+O11) ; O1 = 1.0-O0
@@ -380,24 +522,17 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    wq = w1*P1 + w2*P2 + w3*P3 + w4*P4 + w5*P5 + w6*P6 + w7*P7
 
    ! Apply the monotonicity-preserving
-
-   dm2 = qm3 - 2.0*qmm + qm
    dm1 = qmm - 2.0*qm + q0
-   dc = qp - 2.0*q0 + qm
-   dp1 = qpp - 2.0*qp + q0
-   dp2 = qp3 - 2.0*qpp + qp
+   dd0 = qm  - 2.0*q0 + qp
+   dd1 = qp  - 2.0*qp + qpp
 
-   mm1 = 0.5*(sign(1.0,4.0*dc-dp1) + sign(1.0,4.0*dp1-dc))*min(abs(4.0*dc-dp1),abs(4.0*dp1-dc))
-   mm2 = 0.5*(sign(1.0,dc) + sign(1.0,dp1))*min(abs(dc),abs(dp1))
-   mm3 = 0.5*(sign(1.0,dm1) + sign(1.0,dp2))*min(abs(dm1),abs(dp2))
-   mm2 = 0.5*(sign(1.0,mm2) + sign(1.0,mm3))*min(abs(mm2),abs(mm3))
+   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
    dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
 
-   mm1 = 0.5*(sign(1.0,4.0*dm1-dc) + sign(1.0,4.0*dc-dm1))*min(abs(4.0*dm1-dc),abs(4.0*dc-dm1))
-   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dc))*min(abs(dm1),abs(dc))
-   mm3 = 0.5*(sign(1.0,dm2) + sign(1.0,dp1))*min(abs(dm2),abs(dp1))
-   mm2 = 0.5*(sign(1.0,mm2) + sign(1.0,mm3))*min(abs(mm2),abs(mm3))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(s1),abs(mm2))
+   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
 
    qul = q0 + 2.0*(q0-qm)
    qmd = 0.5*(q0 + qp) - 0.5*dm4p
@@ -411,6 +546,96 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    wq = wq + md
 
 end subroutine weno7_reconstruction_interface
+
+!> 7th-order weno z-type reconstruction flux
+subroutine weno7z_reconstruction_interface(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+
+   real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3 !< tracer concentration for 7-stencil wide
+   real, intent(out) :: wq                              !< reconstructed weno flux
+
+   real :: P0, P1, P2, P3     ! reconstructed polynomials
+   real :: b0, b1, b2, b3     ! smoothness indicator
+   real :: w0, w1, w2, w3     ! nonlinear weights
+   real :: d0, d1, d2, d3     ! nonlinear weights
+   real :: a0, a1, a2, a3
+   real :: eps, tau, wnorm
+   integer :: r
+   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
+   real :: qul, qmd, qlc, qmin, qmax, md
+
+   r = 2
+
+   d0 = 1.0/35.0
+   d1 = 12.0/35.0
+   d2 = 18.0/35.0
+   d3 = 4.0/35.0
+
+   ! 1st stencil
+   P0 = (-3.0*qm3 + 13.0*qm2 - 23.0*qm1 + 25.0*q0)/12.0
+   b0 = qm3*(547.0*qm3 - 3882.0*qm2 + 4642.0*qm1 - 1854.0*q0) + &
+        qm2*(7043.0*qm2 - 17246.0*qm1 + 7042.0*q0) + &
+        qm1*(11003.0*qm1 - 9402.0*q0) + 2107.0*q0**2
+
+   ! 2nd stencil
+   P1 = (qm2 - 5.0*qm1 + 13.0*q0 + 3.0*qp1)/12.0
+   b1 = qm2*(267.0*qm2 - 1642.0*qm1 + 1602.0*q0 - 494.0*qp1) + &
+           qm1*(2843.0*qm1 - 5966.0*q0 + 1922.0*qp1) &
+           + q0*(3443.0*q0 - 2522.0*qp1) + 547.0*qp1**2
+
+   ! 3rd stencil
+   P2 = (-qm1 + 7.0*q0 + 7.0*qp1 - qp2)/12.0
+   b2 = qm1*(547.0*qm1 - 2522.0*q0 + 1922.0*qp1 - 494.0*qp2) + &
+           q0*(3443.0*q0 - 5966.0*qp1 + 1602.0*qp2) &
+           + qp1*(2843.0*qp1 - 1642.0*qp2) + 267.0*qp2**2
+
+   ! 4rd stencil
+   P3 = (3.0*q0 + 13.0*qp1 - 5.0*qp2 + qp3)/12.0
+   b3 = q0*(2107.0*q0 - 9402.0*qp1 + 7042.0*qp2 - 1854.0*qp3) + &
+           qp1*(11003.0*qp1 - 17246.0*qp2 + 4642.0*qp3) &
+           + qp2*(7043.0*qp2 - 3882.0*qp3) + 547.0*qp3**2
+
+   ! Alpha values
+   eps = 1.0e-6
+   tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
+   a0 = d0*(1.0 + (tau/(b0+eps))**r)
+   a1 = d1*(1.0 + (tau/(b1+eps))**r)
+   a2 = d2*(1.0 + (tau/(b2+eps))**r)
+   a3 = d3*(1.0 + (tau/(b3+eps))**r)
+
+   ! Normalization
+   wnorm = a0+a1+a2+a3
+   w0 = a0/wnorm
+   w1 = a1/wnorm
+   w2 = a2/wnorm
+   w3 = a3/wnorm
+
+   wq = w0*P0 + w1*P1 + w2*P2 + w3*P3
+
+   ! Monotonicity Preserving
+   dm1 = qm2 - 2.0*qm1 + q0
+   dd0 = qm1 - 2.0*q0  + qp1
+   dd1 = q0 - 2.0*qp1 + qp2
+
+   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
+   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+   qul = q0 + 2.0*(q0-qm1)
+   qmd = 0.5*(q0 + qp1) - 0.5*dm4p
+   qlc = 0.5*(3.0*q0-qm1) + (4.0/3.0)*dm4m
+   !qlc = 0.5*(3.0*q0+qm1) - (4.0/3.0)*dm4m
+
+   qmin = max(min(q0,qp1,qmd),min(q0,qul,qlc))
+   qmax = min(max(q0,qp1,qmd),max(q0,qul,qlc))
+
+   md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
+   wq = wq + md
+
+end subroutine weno7z_reconstruction_interface
 
 subroutine weno9_reconstruction(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5, u, qmin, qmax)
 
@@ -426,13 +651,14 @@ subroutine weno9_reconstruction(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, 
                ! N is weno reconstruction order
 
    w0 = 0.5*0.1294849661688697
+   wq = 0.0
 
-   if(u >= 0.0) then
+   if (u > 0.0) then
       call weno9_reconstruction_interface(wmr, qp4, qp3, qp2, qp1, q0, qm1, qm2, qm3, qm4)
       call weno9_reconstruction_interface(wpl, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
       ! maximum-principle limiter
       call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
-   else
+   elseif (u < 0.0) then
       call weno9_reconstruction_interface(wpl, qp5, qp4, qp3, qp2, qp1, q0, qm1, qm2, qm3)
       call weno9_reconstruction_interface(wmr, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5)
       ! maximum-principle limiter
@@ -468,7 +694,7 @@ subroutine weno9_reconstruction_interface(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, 
    d4 = 5.0/126.0
 
    ! Alpha values
-   eps = 1.0e-20
+   eps = 1.0e-6
    tau = abs(b0 - b4)
    a0 = d0*(1.0 + (tau/(b0+eps))**r)
    a1 = d1*(1.0 + (tau/(b1+eps))**r)
@@ -487,7 +713,6 @@ subroutine weno9_reconstruction_interface(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, 
    wq = w0*P0 + w1*P1 + w2*P2 + w3*P3 + w4*P4
 
    ! Apply the monotonicity-preserving
-
    dm1 = qm2 - 2.0*qm1 + q0
    dd0 = qp1 - 2.0*q0 + qm1
    dd1 = qp2 - 2.0*qp1 + q0
@@ -524,7 +749,7 @@ subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1
 
    L1 = 0.5 ; L2 = 1.0/6.0 ; L3 = 1.0/20.0 ; L4 = 1.0/70.0
 
-   ! stencil 1
+   ! 1st stencil
    qx = (27.0*qm4 - 146.0*qm3 + 336.0*qm2 - 462.0*qm1 + 245.0*q0)/120.0
    qx2 = (25.0*qm4 - 128.0*qm3 + 262.0*qm2 - 240.0*qm1 + 81.0*q0)/56.0
    qx3 = (3.0*qm4 - 14.0*qm3 + 24.0*qm2 - 18.0*qm1 + 5.0*q0)/12.0
@@ -534,7 +759,7 @@ subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1
    b0 = (qx+ 0.1*qx3)**2 + (13.0/3.0)*(qx2 + (123.0/455.0)*qx4)**2 + &
           (781.0/20.0)*(qx3)**2 + (1421461.0/2275.0)*(qx4)**4
 
-   ! stencil 2
+   ! 2nd stencil
    qx = (-11.0*qm3 + 66.0*qm2 - 192.0*qm1 + 110.0*q0 + 27.0*qp1)/120.0
    qx2 = (-3.0*qm3 + 12.0*qm2 + 10.0*qm1 - 44.0*q0 + 25.0*qp1)/56.0
    qx3 = (qm3 - 6.0*qm2 + 12.0*qm1 - 10.0*q0 + 3.0*qp1)/12.0
@@ -544,7 +769,7 @@ subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1
    b1 = (qx+ 0.1*qx3)**2 + (13.0/3.0)*(qx2 + (123.0/455.0)*qx4)**2 + &
            (781.0/20.0)*(qx3)**2 + (1421461.0/2275.0)*(qx4)**4
 
-   ! stencil 3
+   ! 3rd stencil
    qx = (11.0*qm2 - 82.0*qm1 + 82.0*qp1 - 11.0*qp2)/120.0
    qx2 = (-3.0*qm2 + 40.0*qm1 - 74.0*q0 + 40.0*qp1 - 3.0*qp2)/56.0
    qx3 = (-qm2 + 2.0*qm1 - 2.0*qp1 + qp2)/12.0
@@ -554,7 +779,7 @@ subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1
    b2 = (qx+ 0.1*qx3)**2 + (13.0/3.0)*(qx2 + (123.0/455.0)*qx4)**2 + &
            (781.0/20.0)*(qx3)**2 + (1421461.0/2275.0)*(qx4)**4
 
-   ! stencil 4
+   ! 4th stencil
    qx = (-27.0*qm1 - 110.0*q0 + 192.0*qp1 - 66.0*qp2 + 11.0*qp3)/120.0
    qx2 = (25.0*qm1 - 44.0*q0 + 10.0*qp1 + 12.0*qp2 - 3.0*qp3)/56.0
    qx3 = (-3.0*qm1 + 10.0*q0 - 12.0*qp1 + 6.0*qp2 - qp3)/12.0
@@ -564,7 +789,7 @@ subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1
    b3 = (qx+ 0.1*qx3)**2 + (13.0/3.0)*(qx2 + (123.0/455.0)*qx4)**2 + &
            (781.0/20.0)*(qx3)**2 + (1421461.0/2275.0)*(qx4)**4
 
-   ! stencil 5
+   ! 5th stencil
    qx = (-245.0*q0 + 462.0*qp1 - 336.0*qp2 + 146.0*qp3 - 27.0*qp4)/120.0
    qx2 = (81.0*q0 - 240.0*qp1 + 262.0*qp2 - 128.0*qp3 + 25.0*qp4)/56.0
    qx3 = (-5.0*q0 + 18.0*qp1 - 24.0*qp2 + 14.0*qp3 - 3.0*qp4)/24.0
@@ -575,6 +800,50 @@ subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1
            (781.0/20.0)*(qx3)**2 + (1421461.0/2275.0)*(qx4)**4
 
 end subroutine weno9_poly
+
+!> This is the subroutine for the monotonic-preserving limiter
+subroutine apply_MP(wq, qmm, qm, q0, qp, qpp)
+
+   real, intent(in) :: qmm, qm, q0, qp, qpp ! tracer concentration from i-2 to i+2 respectively
+   real, intent(inout) :: wq                ! weno reconstruction at the interface i+1/2 after MP limiter
+
+   real :: d0, d1, dm1, beta, ka
+   real :: dm4, qlc, qmd, qul, qmin, qmax, md, dm
+
+   ka = 2.0
+
+   dm1 = qmm - 2.0*qm + q0
+   d0 = qp - 2.0*q0 + qm
+   d1 = qpp - 2.0*qp + q0
+
+   call minmod3(dm4, 4.0*d0-d1, 4.0*d1-d0, d0, d1)
+   call minmod3(dm, 4.0*dm1-d0, 4.0*d0-dm1, dm1, d0)
+
+   beta = 4.0
+   qul = q0 + ka*(q0-qm)
+   qmd = 0.5*(q0 + qp) - 0.5*dm4
+   qlc = 0.5*(3.0*q0-qm) + (beta/3.0)*dm
+
+   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+
+   md = 0.5*(sign(1.0,qmin-wq) + sign(1.0,qmax-wq))*min(abs(qmin-wq),abs(qmax-wq))
+   wq = wq+md
+
+end subroutine apply_MP
+
+!> This subroutine computes the minmod of four variables
+subroutine minmod3(mab,a1,a2,a3,a4)
+
+   real, intent(in) :: a1,a2,a3,a4
+   real, intent(out) :: mab
+   real :: s1,s2,s3,s4
+
+   s1 = 0.5*(sign(1.0,a1) + sign(1.0,a2))*min(abs(a1),abs(a2))
+   s2 = 0.5*(sign(1.0,a3) + sign(1.0,a4))*min(abs(a3),abs(a4))
+   mab = 0.5*(sign(1.0,s1) + sign(1.0,s2))*min(abs(s1),abs(s2))
+
+end subroutine minmod3
 
 !> This is the subroutine for the maximum-principle preserving limiter
 subroutine PP_limiter(wq, q0, wmr, wpl, w0, qmin_g, qmax_g)
@@ -621,7 +890,7 @@ subroutine tracer_min_max_init(Reg, G, GV)
   nz = GV%ke ; ntr = Reg%ntr
 
   do m=1,ntr
-    if(Reg%Tr(m)%advect_scheme > 2) then
+    if (Reg%Tr(m)%advect_scheme > 2) then
       Tr => Reg%Tr(m)
       do k=1,nz
         call array_global_min_max(Tr%t(:,:,k), G, 1, Tmin, Tmax)
