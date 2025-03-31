@@ -41,6 +41,7 @@ type, public :: tracer_advect_CS ; private
                                    !! This is provided for compatibility with legacy simuations.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
   integer :: default_advect_scheme = -1 !< Determines which reconstruction to use
+  logical :: check_tracer
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -286,14 +287,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
         ! First, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                       isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, &
-                      local_advect_scheme)
+                      CS, local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         !  Next, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
+                      isv, iev, jsv, jev, k, G, GV, US, CS, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -309,14 +310,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
         ! First, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                       isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, &
-                      local_advect_scheme)
+                      CS, local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! Next, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
+                      isv, iev, jsv, jev, k, G, GV, US, CS, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -362,7 +363,7 @@ end subroutine advect_tracer
 !> This subroutine does 1-d flux-form advection in the zonal direction using
 !! a monotonic piecewise linear scheme.
 subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advect_schemes)
+                    is, ie, js, je, k, G, GV, US, CS, advect_schemes)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr  !< The number of tracers
@@ -384,6 +385,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
+  type(tracer_advect_CS),  pointer       :: CS    !< control structure for module
 
   real, dimension(SZI_(G),ntr) :: &
     slope_x             ! The concentration slope per grid point [conc].
@@ -424,6 +426,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   real :: order3, order5, order7, order9
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: u, Tmin, Tmax, wq
+  integer :: ig, jg, numberOfErrors
+  character(240) :: msg
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -433,7 +437,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   ! stencil for calculating slope values
   stencil = 1
   do m = 1,ntr
-    if(advect_schemes(m) == ADVECT_PLM .or. advect_schemes(m) == ADVECT_PPM) usePLMslope = .true.
+    if (advect_schemes(m) == ADVECT_PLM .or. advect_schemes(m) == ADVECT_PPM) usePLMslope = .true.
     if (advect_schemes(m) == ADVECT_PPM) stencil = 2
   enddo
 
@@ -516,15 +520,16 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
       enddo
     endif ; endif
 
-
     ! Calculate the i-direction fluxes of each tracer, using as much
     ! the minimum of the remaining mass flux (uhr) and the half the mass
     ! in the cell plus whatever part of its half of the mass flux that
     ! the flux through the other side does not require.
     do I=is-1,ie
       if ((uhr(I,j,k) == 0.0) .or. &
-          ((uhr(I,j,k) < 0.0) .and. (hprev(i+1,j,k) <= tiny_h)) .or. &
-          ((uhr(I,j,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
+          !((uhr(I,j,k) < 0.0) .and. (hprev(i+1,j,k) <= tiny_h)) .or. &
+          !((uhr(I,j,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
+          ((uhr(I,j,k) < 0.0) .and. (hprev(i+1,j,k) <= G%areaT(i+1,j)*min_h)) .or. &
+          ((uhr(I,j,k) > 0.0) .and. (hprev(i,j,k) <= G%areaT(i,j)*min_h)) ) then
         uhh(I) = 0.0
         CFL(I) = 0.0
       elseif (uhr(I,j,k) < 0.0) then
@@ -554,7 +559,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
     do m=1,ntr
 
-      if (advect_schemes(m) == ADVECT_PPM .or. advect_schemes(m) == ADVECT_PPMH3) then
+      if ((advect_schemes(m) == ADVECT_PPM) .or. (advect_schemes(m) == ADVECT_PPMH3)) then
         do I=is-1,ie
           ! centre cell depending on upstream direction
           if (uhh(I) >= 0.0) then
@@ -599,24 +604,24 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
               (advect_schemes(m) == ADVECT_WENO9)) then
         do I=is-1,ie
 
-          i_up = i
+          !i_up = i
 
-          order3 = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up+1,j)* &
-                   G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up+2,j)
-          order5 = order3*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+3,j)
+          order3 = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)*G%mask2dCu(I+1,j)* &
+                   G%mask2dCu(I-2,j)*G%mask2dCu(I+2,j)
+          order5 = order3*G%mask2dCu(I-3,j)*G%mask2dCu(I+3,j)
 
-          Tm2 = T_tmp(i_up-2,m); Tm1 = T_tmp(i_up-1,m); Tc = T_tmp(i_up,m) ;
-          Tp1 = T_tmp(i_up+1,m); Tp2 = T_tmp(i_up+2,m); Tp3 = T_tmp(i_up+3,m)
+          Tm2 = T_tmp(i-2,m); Tm1 = T_tmp(i-1,m); Tc = T_tmp(i,m) ;
+          Tp1 = T_tmp(i+1,m); Tp2 = T_tmp(i+2,m); Tp3 = T_tmp(i+3,m)
 
           order7 = 0.0 ; order9 = 0.0
           if (advect_schemes(m) == ADVECT_WENO7) then
-            order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+4,j)
-            Tm3 = T_tmp(i_up-3,m); Tp4 = T_tmp(i_up+4,m)
+            order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
+            Tm3 = T_tmp(i-3,m); Tp4 = T_tmp(i+4,m)
           elseif (advect_schemes(m) == ADVECT_WENO9) then
-            order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+4,j)
-            order9 = order7*G%mask2dCu(I_up-5,j)*G%mask2dCu(I_up+5,j)
-            Tm3 = T_tmp(i_up-3,m); Tp4 = T_tmp(i_up+4,m)
-            Tm4 = T_tmp(i_up-4,m); Tp5 = T_tmp(i_up+5,m)
+            order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
+            order9 = order7*G%mask2dCu(I-5,j)*G%mask2dCu(I+5,j)
+            Tm3 = T_tmp(i-3,m); Tp4 = T_tmp(i+4,m)
+            Tm4 = T_tmp(i-4,m); Tp5 = T_tmp(i+5,m)
           endif
 
           u = uhh(I)
@@ -781,6 +786,34 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
   endif ; enddo ! End of j-loop.
 
+  ! Checks that tracer satisfy bounds
+  if (CS%check_tracer) then
+  numberOfErrors=0 ! count number of errors
+  do m=1,ntr
+    do j=js,je ; do i=is,ie
+      if (G%mask2dCu(I,j)>0.) then
+        if (Tr(m)%t(i,j,k) < Tr(m)%Tmingg .or. Tr(m)%t(i,j,k) > 1.0 ) then
+          numberOfErrors=numberOfErrors+1
+          if(numberOfErrors < 9) then
+            ig = i + G%HI%idg_offset ! Global i-index
+            jg = j + G%HI%jdg_offset ! Global j-index
+            write(msg(1:240),'(2(a,i4,1x),4(a,f8.3,1x),3(a,es11.4))') &
+              'Extreme tracer concentration detected in advect_x: i=',ig,'j=',jg, &
+              'lon=',G%geoLonT(i,j), 'lat=',G%geoLatT(i,j), &
+              'x=',G%gridLonT(ig), 'y=',G%gridLatT(jg), &
+              'dye=', Tr(m)%t(i,j,k), &
+              ' H-=',hprev(i,j,k)/G%areaT(i,j), ' H+=',hprev(i+1,j,k)/G%areaT(i+1,j)
+
+            call MOM_error(WARNING, trim(msg), all_print=.true.)
+          elseif (numberOfErrors==9) then ! Indicate once that there are more errors
+            call MOM_error(WARNING, 'There were more unreported extreme events in advect_x!', all_print=.true.)
+          endif
+        endif 
+      endif
+    enddo; enddo
+  enddo
+  endif 
+
   ! Do user controlled underflow of the tracer concentrations.
   do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
     do j=js,je ; do i=is,ie
@@ -805,7 +838,7 @@ end subroutine advect_x
 !> This subroutine does 1-d flux-form advection using a monotonic piecewise
 !! linear scheme.
 subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advect_schemes)
+                    is, ie, js, je, k, G, GV, US, CS, advect_schemes)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr !< The number of tracers
@@ -827,6 +860,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
+  type(tracer_advect_CS),  pointer       :: CS    !< control structure for module
 
   real, dimension(SZI_(G),ntr,SZJ_(G)) :: &
     slope_y                     ! The concentration slope per grid point [conc].
@@ -867,12 +901,14 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   real :: order3, order5, order7, order9
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: v, Tmin, Tmax, wq
+  integer :: ig, jg, numberOfErrors
+  character(240) :: msg
 
   usePLMslope = .false.
   ! stencil for calculating slope values
   stencil = 1
   do m = 1,ntr
-    if ((advect_schemes(m)) == ADVECT_PLM .or. (advect_schemes(m) == ADVECT_PPM)) &
+    if ((advect_schemes(m) == ADVECT_PLM) .or. (advect_schemes(m) == ADVECT_PPM)) &
             usePLMslope = .true.
     if (advect_schemes(m) == ADVECT_PPM) stencil = 2
   enddo
@@ -979,8 +1015,10 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
     do i=is,ie
       if ((vhr(i,J,k) == 0.0) .or. &
-          ((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= tiny_h)) .or. &
-          ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
+          !((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= tiny_h)) .or. &
+          !((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
+          ((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= G%areaT(i,j+1)*min_h)) .or. &
+          ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= G%areaT(i,j)*min_h)) ) then
         vhh(i,J) = 0.0
         CFL(i) = 0.0
       elseif (vhr(i,J,k) < 0.0) then
@@ -1055,24 +1093,23 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             (advect_schemes(m) == ADVECT_WENO9)) then
         do i=is,ie
 
-          j_up = j
+          !j_up = j
+          order3 = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)*G%mask2dCv(i,J+1)* &
+                   G%mask2dCv(i,J-2)*G%mask2dCv(i,J+2)
+          order5 = order3*G%mask2dCv(i,J-3)*G%mask2dCv(i,J+3)
 
-          order3 = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up+1)* &
-                   G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up+2)
-          order5 = order3*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+3)
-
-          Tm2 = T_tmp(i,m,j_up-2); Tm1 = T_tmp(i,m,j_up-1); Tc = T_tmp(i,m,j_up) ;
-          Tp1 = T_tmp(i,m,j_up+1); Tp2 = T_tmp(i,m,j_up+2); Tp3 = T_tmp(i,m,j_up+3)
+          Tm2 = T_tmp(i,m,j-2); Tm1 = T_tmp(i,m,j-1); Tc = T_tmp(i,m,j) ;
+          Tp1 = T_tmp(i,m,j+1); Tp2 = T_tmp(i,m,j+2); Tp3 = T_tmp(i,m,j+3)
 
           order7 = 0.0 ; order9 = 0.0
           if (advect_schemes(m) == ADVECT_WENO7) then
-            order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+4)
-            Tm3 = T_tmp(i,m,j_up-3); Tp4 = T_tmp(i,m,j_up+4)
+            order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
+            Tm3 = T_tmp(i,m,j-3); Tp4 = T_tmp(i,m,j+4)
           elseif (advect_schemes(m) == ADVECT_WENO9) then
-            order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+4)
-            order9 = order7*G%mask2dCv(i,J_up-5)*G%mask2dCv(i,J_up+5)
-            Tm3 = T_tmp(i,m,j_up-3); Tp4 = T_tmp(i,m,j_up+4)
-            Tm4 = T_tmp(i,m,j_up-4); Tp5 = T_tmp(i,m,j_up+5)
+            order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
+            order9 = order7*G%mask2dCv(i,J-5)*G%mask2dCv(i,J+5)
+            Tm3 = T_tmp(i,m,j-3); Tp4 = T_tmp(i,m,j+4)
+            Tm4 = T_tmp(i,m,j-4); Tp5 = T_tmp(i,m,j+5)
           endif
 
           v = vhh(i,J)
@@ -1094,8 +1131,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             endif
           endif
 
-          !if (v < 0.0) Tc = Tp1
-          !if (abs(wq) > 0) print*, 'k = ', k, m, wq, Tc
           flux_y(i,m,J) = v*wq
         enddo
       else ! PLM
@@ -1240,6 +1275,34 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
     enddo
   endif ; enddo ! End of j-loop.
 
+  ! Checks that tracer satisfy bounds
+  if (CS%check_tracer) then
+  numberOfErrors=0 ! count number of errors
+  do m=1,ntr
+    do j=js,je ; do i=is,ie
+      if (G%mask2dCv(i,J)>0.) then
+        if (Tr(m)%t(i,j,k) < Tr(m)%Tmingg .or. Tr(m)%t(i,j,k) > 1.0 ) then
+          numberOfErrors=numberOfErrors+1
+          if(numberOfErrors < 9) then
+            ig = i + G%HI%idg_offset ! Global i-index
+            jg = j + G%HI%jdg_offset ! Global j-index
+            write(msg(1:240),'(2(a,i4,1x),4(a,f8.3,1x),3(a,es11.4))') &
+              'Extreme tracer concentration detected in advect_y: i=',ig,'j=',jg, &
+              'lon=',G%geoLonT(i,j), 'lat=',G%geoLatT(i,j), &
+              'x=',G%gridLonT(ig), 'y=',G%gridLatT(jg), &
+              'dye=', Tr(m)%t(i,j,k), &
+              ' H-=',hprev(i,j,k)/G%areaT(i,j), ' H+=',hprev(i,j+1,k)/G%areaT(i,j+1)
+
+            call MOM_error(WARNING, trim(msg), all_print=.true.)
+          elseif (numberOfErrors==9) then ! Indicate once that there are more errors
+            call MOM_error(WARNING, 'There were more unreported extreme events in advect_y!', all_print=.true.)
+          endif
+        endif
+      endif
+    enddo; enddo
+  enddo
+  endif
+
   ! Do user controlled underflow of the tracer concentrations.
   do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
     do j=js,je ; do i=is,ie
@@ -1298,6 +1361,8 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
   call get_param(param_file, mdl, "TRACER_ADVECTION_SCHEME", mesg, &
           desc="The horizontal transport scheme for tracers:\n"//&
           trim(TracerAdvectionSchemeDoc), default='PLM')
+  call get_param(param_file, mdl, "CHECK_TRACER", CS%check_tracer, &
+          desc="Check if tracer in undershoot or overshoot:\n", default=.false.)
 
   ! Get the integer value of the tracer scheme
   call set_tracer_advect_scheme(CS%default_advect_scheme, mesg)

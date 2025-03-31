@@ -38,13 +38,13 @@ subroutine weno3_reconstruction(wq,  qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
    wq = 0.0
 
    if (u > 0.0) then 
-      call weno3z_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)
-      call weno3z_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)
+      call weno3_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)
+      call weno3_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)
       ! maximum-principle limiter
       call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
    elseif (u < 0.0) then
-      call weno3z_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
-      call weno3z_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
+      call weno3_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
+      call weno3_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
       ! maximum-principle limiter
       call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
    endif
@@ -68,7 +68,7 @@ subroutine weno3_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    real :: dm1, dd0, dd1, dm4p, dm4m, mm1
    real :: mm2, qul, qmd, qlc, qmin, qmax, md
 
-   eps = 1.0e-6
+   eps = 1.0e-4
    r = 2
 
    ds = 16.0
@@ -219,13 +219,13 @@ subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax)
    wq = 0.0
 
    if (u > 0.0) then
-      call weno5z_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)  ! i-1/2
-      call weno5z_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)  ! i+1/2
+      call weno5_reconstruction_interface(wmr, qp2, qp, q0, qm, qm2)  ! i-1/2
+      call weno5_reconstruction_interface(wpl, qm2, qm, q0, qp, qp2)  ! i+1/2
       ! maximum-principle limiter
       call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
    elseif (u < 0.0) then
-      call weno5z_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
-      call weno5z_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
+      call weno5_reconstruction_interface(wpl, qp3, qp2, qp, q0, qm)
+      call weno5_reconstruction_interface(wmr, qm, q0, qp, qp2, qp3)
       ! maximum-principle limiter
       call PP_limiter(wq, qp, wmr, wpl, w0, qmin, qmax)
    endif
@@ -250,7 +250,7 @@ subroutine weno5_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
    real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
    real :: qul, qmd, qlc, qmin, qmax, md
 
-   eps = 1.0e-6
+   eps = 1.0e-4
    r = 2
 
    ds = 141.0
@@ -379,7 +379,7 @@ subroutine weno5z_reconstruction_interface(wq, qmm, qm, q0, qp, qpp)
 
    ! Monotonicity Preserving
    dm1 = qmm - 2.0*qm + q0
-   dd0 = qp - 2.0*q0 + qm
+   dd0 = qp  - 2.0*q0 + qm
    dd1 = qpp - 2.0*qp + q0
 
    mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
@@ -421,13 +421,13 @@ subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qm
    wq = 0.0
 
    if (u > 0.0) then
-      call weno7z_reconstruction_interface(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
-      call weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+      call weno7_reconstruction_interface(wmr, qp3, qp2, qp1, q0, qm1, qm2, qm3)
+      call weno7_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
       ! maximum-principle limiter
       call PP_limiter(wq, q0, wmr, wpl, w0, qmin, qmax)
    elseif (u < 0.0) then
-      call weno7z_reconstruction_interface(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2)
-      call weno7z_reconstruction_interface(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4)
+      call weno7_reconstruction_interface(wpl, qp4, qp3, qp2, qp1, q0, qm1, qm2)
+      call weno7_reconstruction_interface(wmr, qm2, qm1, q0, qp1, qp2, qp3, qp4)
       ! maximum-principle limiter
       call PP_limiter(wq, qp1, wmr, wpl, w0, qmin, qmax)
    endif
@@ -453,8 +453,8 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
    real :: qul, qmd, qlc, qmin, qmax, md
 
-   eps = 1.0e-6
-   r = 2
+   eps = 1.0e-4
+   r = 3
 
    ds = 1266.0
    d1 = 1000.0/ds; d2 = 125.0/ds ; d3 = 100.0/ds; d4 = 25.0/ds ; d5 = 10.0/ds
@@ -505,26 +505,26 @@ subroutine weno7_reconstruction_interface(wq, qm3, qmm, qm, q0, qp, qpp, qp3)
    
    tau = ((abs(b1-b2)+abs(b1-b3)+abs(b1-b4)+abs(b1-b5)+abs(b1-b6)+abs(b1-b7))/6.0)**r
 
-   w1 = d1*(1.0 + tau/(b1+eps)**r)
-   w2 = d2*(1.0 + tau/(b2+eps)**r)
-   w3 = d3*(1.0 + tau/(b3+eps)**r)
-   w4 = d4*(1.0 + tau/(b4+eps)**r)
-   w5 = d5*(1.0 + tau/(b5+eps)**r)
-   w6 = d6*(1.0 + tau/(b6+eps)**r)
-   w7 = d7*(1.0 + tau/(b7+eps)**r)
+   w1 = d1*(1.0 + tau/(b1+eps))
+   w2 = d2*(1.0 + tau/(b2+eps))
+   w3 = d3*(1.0 + tau/(b3+eps))
+   w4 = d4*(1.0 + tau/(b4+eps))
+   w5 = d5*(1.0 + tau/(b5+eps))
+   w6 = d6*(1.0 + tau/(b6+eps))
+   w7 = d7*(1.0 + tau/(b7+eps))
 
-   sw = 1.0/(w1+w2+w3+w4+w5+w6+w7)
-   w1 = w1*sw ; w2 = w2*sw ; w3 = w3*sw ; w4 = w4*sw
-   w5 = w5*sw ; w6 = w6*sw ; w7 = w7*sw
+   sw = w1+w2+w3+w4+w5+w6+w7
+   w1 = w1/sw ; w2 = w2/sw ; w3 = w3/sw ; w4 = w4/sw
+   w5 = w5/sw ; w6 = w6/sw ; w7 = w7/sw
 
-   !P1 = P1/d1 - d2*P2/d1 - d3*P3/d1 - d4*P4/d1 - d5*P5/d1 - d6*P6/d1 - d7*P7/d1
-   P1 = (P1 - d2*P2 - d3*P3 - d4*P4 - d5*P5 - d6*P6 - d7*P7)/d1
+   P1 = P1/d1 - d2*P2/d1 - d3*P3/d1 - d4*P4/d1 - d5*P5/d1 - d6*P6/d1 - d7*P7/d1
+   !P1 = (P1 - d2*P2 - d3*P3 - d4*P4 - d5*P5 - d6*P6 - d7*P7)/d1
    wq = w1*P1 + w2*P2 + w3*P3 + w4*P4 + w5*P5 + w6*P6 + w7*P7
 
    ! Apply the monotonicity-preserving
    dm1 = qmm - 2.0*qm + q0
    dd0 = qm  - 2.0*q0 + qp
-   dd1 = qp  - 2.0*qp + qpp
+   dd1 = q0  - 2.0*qp + qpp
 
    mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
    mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
@@ -640,7 +640,7 @@ end subroutine weno7z_reconstruction_interface
 subroutine weno9_reconstruction(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5, u, qmin, qmax)
 
    real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5 !< tracer concentration
-                                                                       !! !! from i-4 to i+5
+                                                                       !! from i-4 to i+5
    real, intent(in) :: u                         !< advection velocity
    real, intent(in) :: qmin, qmax                !< global min and max of tracer concentration
    real, intent(out) :: wq                       !< weno reconstruction at the interface i+1/2
@@ -868,11 +868,15 @@ subroutine PP_limiter(wq, q0, wmr, wpl, w0, qmin_g, qmax_g)
    qmin = min(wmr, P0, wpl)
    qmax = max(wmr, P0, wpl)
 
-   eps = min(1.0e-8, q0)
-   !eps = 1.0e-13
+   eps = min(1.0e-2, q0)
+   !eps = 1.0e-2
    theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
 
    wq = theta*(wpl - q0) + q0
+
+   if(wq < 0.0) print*, wq, wpl, theta, qmin, q0
+
+   !if (abs(wq) <= 1.0e-2) wq = 0.0
 
 end subroutine PP_limiter
 
