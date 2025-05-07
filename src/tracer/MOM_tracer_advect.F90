@@ -42,6 +42,7 @@ type, public :: tracer_advect_CS ; private
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
   integer :: default_advect_scheme = -1 !< Determines which reconstruction to use
   logical :: check_tracer
+
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -233,7 +234,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   !$OMP end parallel
 
   isv = is ; iev = ie ; jsv = js ; jev = je
-
+  
   do itt=1,max_iter
 
     if (isv > is-stencil) then
@@ -333,7 +334,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     if (itt >= max_iter) then
       exit
     endif
-
+    
     ! Exit if there are no layers that need more iterations.
     if (isv > is-stencil) then
       do_any = 0
@@ -426,8 +427,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   real :: order3, order5, order7, order9
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: u, Tmin, Tmax, wq
-  integer :: ig, jg, numberOfErrors
-  character(240) :: msg
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -526,10 +525,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
     ! the flux through the other side does not require.
     do I=is-1,ie
       if ((uhr(I,j,k) == 0.0) .or. &
-          !((uhr(I,j,k) < 0.0) .and. (hprev(i+1,j,k) <= tiny_h)) .or. &
-          !((uhr(I,j,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
-          ((uhr(I,j,k) < 0.0) .and. (hprev(i+1,j,k) <= G%areaT(i+1,j)*min_h)) .or. &
-          ((uhr(I,j,k) > 0.0) .and. (hprev(i,j,k) <= G%areaT(i,j)*min_h)) ) then
+          ((uhr(I,j,k) < 0.0) .and. (hprev(i+1,j,k) <= tiny_h)) .or. &
+          ((uhr(I,j,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
         uhh(I) = 0.0
         CFL(I) = 0.0
       elseif (uhr(I,j,k) < 0.0) then
@@ -603,8 +600,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
       elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
               (advect_schemes(m) == ADVECT_WENO9)) then
         do I=is-1,ie
-
-          !i_up = i
 
           order3 = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)*G%mask2dCu(I+1,j)* &
                    G%mask2dCu(I-2,j)*G%mask2dCu(I+2,j)
@@ -786,34 +781,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
   endif ; enddo ! End of j-loop.
 
-  ! Checks that tracer satisfy bounds
-  if (CS%check_tracer) then
-  numberOfErrors=0 ! count number of errors
-  do m=1,ntr
-    do j=js,je ; do i=is,ie
-      if (G%mask2dCu(I,j)>0.) then
-        if (Tr(m)%t(i,j,k) < Tr(m)%Tmingg .or. Tr(m)%t(i,j,k) > 1.0 ) then
-          numberOfErrors=numberOfErrors+1
-          if(numberOfErrors < 9) then
-            ig = i + G%HI%idg_offset ! Global i-index
-            jg = j + G%HI%jdg_offset ! Global j-index
-            write(msg(1:240),'(2(a,i4,1x),4(a,f8.3,1x),3(a,es11.4))') &
-              'Extreme tracer concentration detected in advect_x: i=',ig,'j=',jg, &
-              'lon=',G%geoLonT(i,j), 'lat=',G%geoLatT(i,j), &
-              'x=',G%gridLonT(ig), 'y=',G%gridLatT(jg), &
-              'dye=', Tr(m)%t(i,j,k), &
-              ' H-=',hprev(i,j,k)/G%areaT(i,j), ' H+=',hprev(i+1,j,k)/G%areaT(i+1,j)
-
-            call MOM_error(WARNING, trim(msg), all_print=.true.)
-          elseif (numberOfErrors==9) then ! Indicate once that there are more errors
-            call MOM_error(WARNING, 'There were more unreported extreme events in advect_x!', all_print=.true.)
-          endif
-        endif 
-      endif
-    enddo; enddo
-  enddo
-  endif 
-
   ! Do user controlled underflow of the tracer concentrations.
   do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
     do j=js,je ; do i=is,ie
@@ -901,8 +868,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   real :: order3, order5, order7, order9
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: v, Tmin, Tmax, wq
-  integer :: ig, jg, numberOfErrors
-  character(240) :: msg
 
   usePLMslope = .false.
   ! stencil for calculating slope values
@@ -1015,10 +980,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
     do i=is,ie
       if ((vhr(i,J,k) == 0.0) .or. &
-          !((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= tiny_h)) .or. &
-          !((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
-          ((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= G%areaT(i,j+1)*min_h)) .or. &
-          ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= G%areaT(i,j)*min_h)) ) then
+          ((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= tiny_h)) .or. &
+          ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
         vhh(i,J) = 0.0
         CFL(i) = 0.0
       elseif (vhr(i,J,k) < 0.0) then
@@ -1093,7 +1056,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             (advect_schemes(m) == ADVECT_WENO9)) then
         do i=is,ie
 
-          !j_up = j
           order3 = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)*G%mask2dCv(i,J+1)* &
                    G%mask2dCv(i,J-2)*G%mask2dCv(i,J+2)
           order5 = order3*G%mask2dCv(i,J-3)*G%mask2dCv(i,J+3)
@@ -1274,34 +1236,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
     enddo
   endif ; enddo ! End of j-loop.
-
-  ! Checks that tracer satisfy bounds
-  if (CS%check_tracer) then
-  numberOfErrors=0 ! count number of errors
-  do m=1,ntr
-    do j=js,je ; do i=is,ie
-      if (G%mask2dCv(i,J)>0.) then
-        if (Tr(m)%t(i,j,k) < Tr(m)%Tmingg .or. Tr(m)%t(i,j,k) > 1.0 ) then
-          numberOfErrors=numberOfErrors+1
-          if(numberOfErrors < 9) then
-            ig = i + G%HI%idg_offset ! Global i-index
-            jg = j + G%HI%jdg_offset ! Global j-index
-            write(msg(1:240),'(2(a,i4,1x),4(a,f8.3,1x),3(a,es11.4))') &
-              'Extreme tracer concentration detected in advect_y: i=',ig,'j=',jg, &
-              'lon=',G%geoLonT(i,j), 'lat=',G%geoLatT(i,j), &
-              'x=',G%gridLonT(ig), 'y=',G%gridLatT(jg), &
-              'dye=', Tr(m)%t(i,j,k), &
-              ' H-=',hprev(i,j,k)/G%areaT(i,j), ' H+=',hprev(i,j+1,k)/G%areaT(i,j+1)
-
-            call MOM_error(WARNING, trim(msg), all_print=.true.)
-          elseif (numberOfErrors==9) then ! Indicate once that there are more errors
-            call MOM_error(WARNING, 'There were more unreported extreme events in advect_y!', all_print=.true.)
-          endif
-        endif
-      endif
-    enddo; enddo
-  enddo
-  endif
 
   ! Do user controlled underflow of the tracer concentrations.
   do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
