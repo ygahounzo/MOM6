@@ -41,8 +41,6 @@ type, public :: tracer_advect_CS ; private
                                    !! This is provided for compatibility with legacy simuations.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
   integer :: default_advect_scheme = -1 !< Determines which reconstruction to use
-  logical :: check_tracer
-
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -162,7 +160,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
      stencil = max(stencil, stencil_local)
   enddo
 
-  if (min(is-isd,ied-ie,js-jsd,jed-je).lt.stencil) then
+  if (min(is-isd,ied-ie,js-jsd,jed-je) < stencil) then
     call MOM_error(FATAL, "MOM_tracer_advect: "//&
       "stencil is wider than the halo.")
   endif
@@ -288,14 +286,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
         ! First, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                       isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, &
-                      CS, local_advect_scheme)
+                      local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         !  Next, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, CS, local_advect_scheme)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -311,14 +309,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
         ! First, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                       isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, &
-                      CS, local_advect_scheme)
+                      local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! Next, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, CS, local_advect_scheme)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -364,7 +362,7 @@ end subroutine advect_tracer
 !> This subroutine does 1-d flux-form advection in the zonal direction using
 !! a monotonic piecewise linear scheme.
 subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, CS, advect_schemes)
+                    is, ie, js, je, k, G, GV, US, advect_schemes)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr  !< The number of tracers
@@ -386,7 +384,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
-  type(tracer_advect_CS),  pointer       :: CS    !< control structure for module
 
   real, dimension(SZI_(G),ntr) :: &
     slope_x             ! The concentration slope per grid point [conc].
@@ -436,7 +433,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   ! stencil for calculating slope values
   stencil = 1
   do m = 1,ntr
-    if (advect_schemes(m) == ADVECT_PLM .or. advect_schemes(m) == ADVECT_PPM) usePLMslope = .true.
+    if ((advect_schemes(m) == ADVECT_PLM) .or. (advect_schemes(m) == ADVECT_PPM)) &
+            usePLMslope = .true.
     if (advect_schemes(m) == ADVECT_PPM) stencil = 2
   enddo
 
@@ -805,7 +803,7 @@ end subroutine advect_x
 !> This subroutine does 1-d flux-form advection using a monotonic piecewise
 !! linear scheme.
 subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, CS, advect_schemes)
+                    is, ie, js, je, k, G, GV, US, advect_schemes)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr !< The number of tracers
@@ -827,7 +825,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
-  type(tracer_advect_CS),  pointer       :: CS    !< control structure for module
 
   real, dimension(SZI_(G),ntr,SZJ_(G)) :: &
     slope_y                     ! The concentration slope per grid point [conc].
@@ -1295,8 +1292,6 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
   call get_param(param_file, mdl, "TRACER_ADVECTION_SCHEME", mesg, &
           desc="The horizontal transport scheme for tracers:\n"//&
           trim(TracerAdvectionSchemeDoc), default='PLM')
-  call get_param(param_file, mdl, "CHECK_TRACER", CS%check_tracer, &
-          desc="Check if tracer in undershoot or overshoot:\n", default=.false.)
 
   ! Get the integer value of the tracer scheme
   call set_tracer_advect_scheme(CS%default_advect_scheme, mesg)
