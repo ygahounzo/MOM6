@@ -12,8 +12,9 @@ integer, parameter :: ADVECT_PLM        = 0 !< PLM advection scheme
 integer, parameter :: ADVECT_PPMH3      = 1 !< PPM:H3 advection scheme
 integer, parameter :: ADVECT_PPM        = 2 !< PPM advection scheme
 integer, parameter :: ADVECT_WENO5      = 3 !< WENO5 advection scheme
-integer, parameter :: ADVECT_WENO7      = 4 !< WENO7 advection scheme
-integer, parameter :: ADVECT_WENO9      = 5 !< WENO9 advection scheme
+integer, parameter :: ADVECT_WENO5NM    = 4 !< WENO5NM advection scheme
+integer, parameter :: ADVECT_WENO7      = 5 !< WENO7 advection scheme
+integer, parameter :: ADVECT_WENO9      = 6 !< WENO9 advection scheme
 
 !> Documentation for tracer advection schemes
 character(len=*), parameter :: TracerAdvectionSchemeDoc = &
@@ -42,6 +43,8 @@ subroutine set_tracer_advect_scheme(scheme_value, advect_scheme_name)
       scheme_value = ADVECT_PPM
     case ("WENO5")
       scheme_value = ADVECT_WENO5
+    case ("WENO5NM")
+      scheme_value = ADVECT_WENO5NM
     case ("WENO7")
       scheme_value = ADVECT_WENO7
     case ("WENO9")

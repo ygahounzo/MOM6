@@ -862,12 +862,12 @@ subroutine write_energy(u, v, h, tv, day, n, G, GV, US, CS, tracer_CSp, dt_forci
 
   if (is_root_pe()) then  ! Only the root PE actually writes anything.
     if (CS%use_temperature) then
-        write(stdout,'(A," ",A,": En ",ES12.6, ", MaxCFL ", F8.5, ", Mass ", &
+        write(stdout,'(A," ",A,": En ",ES12.6, ", MaxCFL ", ES8.1, ", Mass ", &
                     & ES18.12, ", Salt ", F15.11,", Temp ", F15.11)') &
             trim(date_str), trim(n_str), US%L_T_to_m_s**2*En_mass, max_CFL(1), US%RZL2_to_kg*mass_tot, &
             salin, US%C_to_degC*temp
     else
-        write(stdout,'(A," ",A,": En ",ES12.6, ", MaxCFL ", F8.5, ", Mass ", ES18.12)') &
+        write(stdout,'(A," ",A,": En ",ES12.6, ", MaxCFL ", ES8.1, ", Mass ", ES18.12)') &
             trim(date_str), trim(n_str), US%L_T_to_m_s**2*En_mass, max_CFL(1), US%RZL2_to_kg*mass_tot
     endif
 

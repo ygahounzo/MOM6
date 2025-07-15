@@ -69,6 +69,8 @@ use sloshing_initialization, only : sloshing_initialize_thickness
 use sloshing_initialization, only : sloshing_initialize_temperature_salinity
 use seamount_initialization, only : seamount_initialize_thickness
 use seamount_initialization, only : seamount_initialize_temperature_salinity
+use seamount_telescoping_initialization, only : seamount_telescoping_initialize_thickness
+use seamount_telescoping_initialization, only : seamount_telescoping_initialize_temperature_salinity
 use dumbbell_initialization, only : dumbbell_initialize_thickness
 use dumbbell_initialization, only : dumbbell_initialize_temperature_salinity
 use Phillips_initialization, only : Phillips_initialize_thickness
@@ -292,6 +294,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
              " \t adjustment2d - 2D lock exchange thickness ICs. \n"//&
              " \t sloshing - sloshing gravity thickness ICs. \n"//&
              " \t seamount - no motion test with seamount ICs. \n"//&
+             " \t seamount_telescoping - no motion test with seamount_telescoping ICs. \n"//&
              " \t dumbbell - sloshing channel ICs. \n"//&
              " \t soliton - Equatorial Rossby soliton. \n"//&
              " \t rossby_front - a mixed layer front in thermal wind balance.\n"//&
@@ -344,6 +347,8 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
                                   just_read=just_read)
       case ("seamount"); call seamount_initialize_thickness(dz, depth_tot, G, GV, US, PF, &
                                   just_read=just_read)
+      case ("seamount_telescoping"); call seamount_telescoping_initialize_thickness(dz, &
+                                  depth_tot, G, GV, US, PF, just_read=just_read)
       case ("dumbbell"); call dumbbell_initialize_thickness(dz, depth_tot, G, GV, US, PF, &
                                   just_read=just_read)
       case ("soliton"); call soliton_initialize_thickness(dz, depth_tot, G, GV, US, PF, &
@@ -377,6 +382,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
              " \t adjustment2d - 2d lock exchange T/S ICs. \n"//&
              " \t sloshing - sloshing mode T/S ICs. \n"//&
              " \t seamount - no motion test with seamount ICs. \n"//&
+             " \t seamount_telescoping - no motion test with seamount_telescoping ICs. \n"//&
              " \t dumbbell - sloshing channel ICs. \n"//&
              " \t rossby_front - a mixed layer front in thermal wind balance.\n"//&
              " \t SCM_CVMix_tests - used in the SCM CVMix tests.\n"//&
@@ -387,7 +393,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
       ! Check for incompatible THICKNESS_CONFIG and TS_CONFIG settings
       if (new_sim .and. (.not.convert)) then ; select case (trim(config))
         case ("DOME2D", "ISOMIP", "adjustment2d", "baroclinic_zone", "sloshing", &
-              "seamount", "dumbbell", "SCM_CVMix_tests", "dense")
+              "seamount", "telescoping", "dumbbell", "SCM_CVMix_tests", "dense")
           call MOM_error(FATAL, "TS_CONFIG = "//trim(config)//" does not work with thicknesses "//&
               "that have already been converted to thickness units, as is the case with "//&
               "THICKNESS_CONFIG = "//trim(h_config)//".")
@@ -415,6 +421,9 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
         case ("sloshing"); call sloshing_initialize_temperature_salinity(tv%T, &
                                     tv%S, dz, G, GV, US, PF, just_read=just_read)
         case ("seamount"); call seamount_initialize_temperature_salinity(tv%T, &
+                                    tv%S, dz, G, GV, US, PF, just_read=just_read)
+        case ("seamount_telescoping"); &
+                           call seamount_telescoping_initialize_temperature_salinity(tv%T, &
                                     tv%S, dz, G, GV, US, PF, just_read=just_read)
         case ("dumbbell"); call dumbbell_initialize_temperature_salinity(tv%T, &
                                     tv%S, dz, G, GV, US, PF, just_read=just_read)

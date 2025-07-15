@@ -1,5 +1,5 @@
 !> Configures the model for the idealized seamount test case.
-module seamount_initialization
+module seamount_telescoping_initialization
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
@@ -25,9 +25,9 @@ implicit none ; private
 character(len=40) :: mdl = "seamount_initialization" !< This module's name.
 
 ! The following routines are visible to the outside world
-public seamount_initialize_topography
-public seamount_initialize_thickness
-public seamount_initialize_temperature_salinity
+public seamount_telescoping_initialize_topography
+public seamount_telescoping_initialize_thickness
+public seamount_telescoping_initialize_temperature_salinity
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -37,7 +37,7 @@ public seamount_initialize_temperature_salinity
 contains
 
 !> Initialization of topography.
-subroutine seamount_initialize_topography( D, G, param_file, max_depth )
+subroutine seamount_telescoping_initialize_topography( D, G, param_file, max_depth )
   type(dyn_horgrid_type),  intent(in)  :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
                            intent(out) :: D !< Ocean bottom depth [Z ~> m]
@@ -75,11 +75,11 @@ subroutine seamount_initialize_topography( D, G, param_file, max_depth )
     D(i,j) = G%max_depth * ( 1.0 - delta * exp(-((rLx*x)**2) - ((rLy*y)**2)) )
   enddo ; enddo
 
-end subroutine seamount_initialize_topography
+end subroutine seamount_telescoping_initialize_topography
 
 !> Initialization of thicknesses.
 !! This subroutine initializes the layer thicknesses to be uniform.
-subroutine seamount_initialize_thickness (h, depth_tot, G, GV, US, param_file, just_read)
+subroutine seamount_telescoping_initialize_thickness (h, depth_tot, G, GV, US, param_file, just_read)
   type(ocean_grid_type),   intent(in)  :: G           !< The ocean's grid structure.
   type(verticalGrid_type), intent(in)  :: GV          !< The ocean's vertical grid structure.
   type(unit_scale_type),   intent(in)  :: US          !< A dimensional unit scaling type
@@ -101,6 +101,7 @@ subroutine seamount_initialize_thickness (h, depth_tot, G, GV, US, param_file, j
   real :: eta_IC_quanta   ! The granularity of quantization of intial interface heights [Z-1 ~> m-1].
   character(len=20) :: verticalCoordinate
   integer :: i, j, k, is, ie, js, je, nz
+  real :: dz(SZK_(GV)), dz_min, prec, power
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -124,35 +125,31 @@ subroutine seamount_initialize_thickness (h, depth_tot, G, GV, US, param_file, j
   !  e0(k) = -G%max_depth * real(k-1) / real(nz)
   !enddo
 
+  dz_min = 2.0 ; prec = 0.01 ; power = 4.5 
+  do k = 1,nz
+    dz(k) = (real(k-1)/real(nz-1))**power
+  end do
+
+  dz(:) = (G%max_depth - real(nz) * dz_min) * dz(:) / sum(dz(:)) !Normalize to desired total thickness
+  dz(:) = nint(dz(:) / prec) * prec !Round to specified precision
+  dz(:) = (G%max_depth - real(nz) * dz_min) * dz(:) / sum(dz(:)) !Rescale again after rounding
+  dz(:) = nint(dz(:) / prec) * prec !Round again
+  dz(nz) = dz(nz) + (G%max_depth - sum(dz + dz_min)) !Adjust bottom layer
+  dz(:) = nint(dz(:) / prec) * prec !Final rounding
+  dz(:) = dz(:) + dz_min !Add dz_min
+
   select case ( coordinateMode(verticalCoordinate) )
 
-  case ( REGRIDDING_LAYER,REGRIDDING_RHO, REGRIDDING_HYCOM1 ) ! Initial thicknesses for isopycnal coordinates
-    call get_param(param_file, mdl,"INITIAL_SSS", S_surf, &
-                   units="ppt", default=34., scale=US%ppt_to_S, do_not_log=.true.)
-    call get_param(param_file, mdl,"INITIAL_S_RANGE", S_range, &
-                   units="ppt", default=2., scale=US%ppt_to_S, do_not_log=.true.)
-    call get_param(param_file, mdl, "S_REF", S_ref, &
-                   units="ppt", default=35.0, scale=US%ppt_to_S, do_not_log=.true.)
-    call get_param(param_file, mdl, "TS_RANGE_S_LIGHT", S_light, &
-                   units="ppt", default=US%S_to_ppt*S_Ref, scale=US%ppt_to_S, do_not_log=.true.)
-    call get_param(param_file, mdl, "TS_RANGE_S_DENSE", S_dense, &
-                   units="ppt", default=US%S_to_ppt*S_Ref, scale=US%ppt_to_S, do_not_log=.true.)
-    call get_param(param_file, mdl, "INTERFACE_IC_QUANTA", eta_IC_quanta, &
-                   "The granularity of initial interface height values "//&
-                   "per meter, to avoid sensivity to order-of-arithmetic changes.", &
-                   default=2048.0, units="m-1", scale=US%Z_to_m, do_not_log=just_read)
+  case ( REGRIDDING_LAYER, REGRIDDING_RHO, REGRIDDING_ZSTAR, REGRIDDING_HYCOM1 ) ! Initial thicknesses for isopycnal coordinates
+
     if (just_read) return ! All run-time parameters have been read, so return.
 
+    e0(nz+1) = -G%max_depth
+    do K=nz,1,-1
+      e0(k) = e0(k+1) + dz(k)
+    enddo
+
     do K=1,nz+1
-      ! Salinity of layer k is S_light + (k-1)/(nz-1) * (S_dense - S_light)
-      ! Salinity of interface K is S_light + (K-3/2)/(nz-1) * (S_dense - S_light)
-      ! Salinity at depth z should be S(z) = S_surf - S_range * z/max_depth
-      ! Equating: S_surf - S_range * z/max_depth = S_light + (K-3/2)/(nz-1) * (S_dense - S_light)
-      ! Equating: - S_range * z/max_depth = S_light - S_surf + (K-3/2)/(nz-1) * (S_dense - S_light)
-      ! Equating: z/max_depth = - ( S_light - S_surf + (K-3/2)/(nz-1) * (S_dense - S_light) ) / S_range
-      e0(K) = - G%max_depth * ( ( S_light  - S_surf ) + ( S_dense - S_light ) * &
-                              ( (real(K)-1.5) / real(nz-1) ) ) / S_range
-      ! Force round numbers ... the above expression has irrational factors ...
       if (eta_IC_quanta > 0.0) &
         e0(K) = nint(eta_IC_quanta*e0(K)) / eta_IC_quanta
       e0(K) = min(real(1-K)*GV%Angstrom_Z, e0(K)) ! Bound by surface
@@ -172,33 +169,18 @@ subroutine seamount_initialize_thickness (h, depth_tot, G, GV, US, param_file, j
       enddo
     enddo ; enddo
 
-  case ( REGRIDDING_ZSTAR )                       ! Initial thicknesses for z coordinates
-    if (just_read) return ! All run-time parameters have been read, so return.
-    do j=js,je ; do i=is,ie
-      eta1D(nz+1) = -depth_tot(i,j)
-      do k=nz,1,-1
-        eta1D(k) =  -G%max_depth * real(k-1) / real(nz)
-        if (eta1D(k) < (eta1D(k+1) + min_thickness)) then
-          eta1D(k) = eta1D(k+1) + min_thickness
-          h(i,j,k) = min_thickness
-        else
-          h(i,j,k) = eta1D(k) - eta1D(k+1)
-        endif
-      enddo
-    enddo ; enddo
-
   case ( REGRIDDING_SIGMA )             ! Initial thicknesses for sigma coordinates
     if (just_read) return ! All run-time parameters have been read, so return.
     do j=js,je ; do i=is,ie
-      h(i,j,:) = depth_tot(i,j) / real(nz)
+      h(i,j,:) = dz(k)
     enddo ; enddo
 
 end select
 
-end subroutine seamount_initialize_thickness
+end subroutine seamount_telescoping_initialize_thickness
 
 !> Initial values for temperature and salinity
-subroutine seamount_initialize_temperature_salinity(T, S, h, G, GV, US, param_file, just_read)
+subroutine seamount_telescoping_initialize_temperature_salinity(T, S, h, G, GV, US, param_file, just_read)
   type(ocean_grid_type),                     intent(in)  :: G !< Ocean grid structure
   type(verticalGrid_type),                   intent(in)  :: GV !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: T !< Potential temperature [C ~> degC]
@@ -222,6 +204,7 @@ subroutine seamount_initialize_temperature_salinity(T, S, h, G, GV, US, param_fi
                     ! the denser water [nondim].
   real :: a1, frac_dense, k_frac  ! Nondimensional temporary variables [nondim]
   integer :: i, j, k, is, ie, js, je, nz, k_light
+  real :: xm
 
   character(len=20) :: verticalCoordinate, density_profile
 
@@ -270,8 +253,11 @@ subroutine seamount_initialize_temperature_salinity(T, S, h, G, GV, US, param_fi
         T(i,j,k_light) = T_light ; S(i,j,k_light) = S_light
       enddo ; enddo
       a1 = 2.0 * res_rat / (1.0 + res_rat)
+      xi0 = h(is,js,0) 
       do k=k_light+1,nz
-        k_frac = real(k-k_light)/real(nz-k_light)
+        !k_frac = real(k-k_light)/real(nz-k_light)
+        xi0 = xi0 + h(is,js,k) 
+        k_frac = xi0 / G%max_depth
         frac_dense = a1 * k_frac + (1.0 - a1) * k_frac**2
         do j=js,je ; do i=is,ie
           T(i,j,k) = frac_dense * (T_Dense - T_Light) + T_Light
@@ -291,17 +277,14 @@ subroutine seamount_initialize_temperature_salinity(T, S, h, G, GV, US, param_fi
               S(i,j,k) = S_surf + ( 0.5 * S_range ) * (xi0 + xi1) ! Coded this way to reproduce old hard-coded answers
               T(i,j,k) = T_surf + T_range * 0.5 * (xi0 + xi1)
             case ('parabolic')
-              !S(i,j,k) = S_surf + S_range * (2.0 / 3.0) * (xi1**3 - xi0**3) / (xi1 - xi0)
-              !T(i,j,k) = T_surf + T_range * (2.0 / 3.0) * (xi1**3 - xi0**3) / (xi1 - xi0)
-              S(i,j,k) = S_surf + S_range * (0.5*(xi0+xi1)) * (2.0 - 0.5*(xi0+xi1))
-              T(i,j,k) = T_surf + T_range * (0.5*(xi0+xi1)) * (2.0 - 0.5*(xi0+xi1))
+              xm = 0.5*(xi1+xi0)
+              S(i,j,k) = S_surf + S_range * xm * (2.0 - xm)
+              T(i,j,k) = T_surf + T_range * xm * (2.0 - xm)
             case ('exponential')
-              !r = 0.8 ! small values give sharp profiles
-              !S(i,j,k) = S_surf + S_range * (exp(xi1/r)-exp(xi0/r)) / (xi1 - xi0)
-              !T(i,j,k) = T_surf + T_range * (exp(xi1/r)-exp(xi0/r)) / (xi1 - xi0)
-              r = 5.0
-              S(i,j,k) = S_surf + S_range*(1.0 - exp(-r*0.5*(xi0+xi1)))
-              T(i,j,k) = T_surf + T_range*(1.0 - exp(-r*0.5*(xi0+xi1)))
+              r = 3.8 
+              xm = 0.5*(xi1+xi0)
+              S(i,j,k) = S_surf + S_range*(1.0 - exp(-r*xm))
+              T(i,j,k) = T_surf + T_range*(1.0 - exp(-r*xm))
             case default
               call MOM_error(FATAL, 'Unknown value for "INITIAL_DENSITY_PROFILE"')
           end select
@@ -310,6 +293,6 @@ subroutine seamount_initialize_temperature_salinity(T, S, h, G, GV, US, param_fi
       enddo ; enddo
   end select
 
-end subroutine seamount_initialize_temperature_salinity
+end subroutine seamount_telescoping_initialize_temperature_salinity
 
-end module seamount_initialization
+end module seamount_telescoping_initialization
