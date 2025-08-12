@@ -1,0 +1,355 @@
+!> Solve the layer continuity equation using the WENO method for layer fluxes.
+module MOM_continuity_WENO
+
+! This file is part of MOM6. See LICENSE.md for the license.
+
+use MOM_cpu_clock, only : cpu_clock_id, cpu_clock_begin, cpu_clock_end, CLOCK_ROUTINE
+use MOM_diag_mediator, only : time_type, diag_ctrl
+use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
+use MOM_file_parser, only : get_param, log_version, param_file_type
+use MOM_grid, only : ocean_grid_type
+use MOM_open_boundary, only : ocean_OBC_type, OBC_segment_type, OBC_NONE
+use MOM_open_boundary, only : OBC_DIRECTION_E, OBC_DIRECTION_W, OBC_DIRECTION_N, OBC_DIRECTION_S
+use MOM_unit_scaling, only : unit_scale_type
+use MOM_variables, only : BT_cont_type, porous_barrier_type
+use MOM_verticalGrid, only : verticalGrid_type
+
+implicit none ; private
+
+#include <MOM_memory.h>
+
+public weno3_reconstruction_interface
+public weno5_reconstruction_interface
+public weno7_reconstruction_interface
+
+contains
+
+!> 3th-order weno z-type reconstruction flux
+subroutine weno3_reconstruction_interface(wmR, wpL, qm, q0, qp, h_min, ds)
+
+   real, intent(in) :: qm, q0, qp !< tracer concentration for 3-stencil wide
+   real, intent(in)  :: h_min     !< The minimum thickness
+   real, intent(in) :: ds         !< grid size
+   real, intent(out) :: wmR, wpL  !< weno reconstruction at the cell interfaces i-1/2 and i+1/2
+
+   real :: P1, P2         ! reconstructed polynomials
+   real :: b1, b2         ! smoothness indicator
+   real :: w1, w2         ! nonlinear weights
+   real :: d1, d2         ! linear weights
+   real :: eps,  wnorm, tau
+   integer, parameter :: r = 2
+
+   ! linear weights
+   d1 = 1.0/3.0 ; d2 = 2.0/3.0
+   eps = 1.0e-20
+
+   ! Compute flux at the right side of i+1/2
+   ! reconstructed polynomials
+   P1 = 0.5*(-qm + 3.0*q0)
+   P2 = 0.5*(q0 + qp)
+
+   ! smoothness indicator
+   b1 = (q0-qm)*(q0-qm)
+   b2 = (qp-q0)*(qp-q0)
+
+   ! Alpha values
+   !tau = abs(b1-b2)
+   tau = abs(qm - 2.0*q0 + qp)
+   w1 = d1*(1.0 + (tau/(b1+eps))**2)
+   w2 = d2*(1.0 + (tau/(b2+eps))**2)
+
+   ! Normalization
+   wnorm = w1+w2
+   wpL = (w1*P1 + w2*P2)/wnorm
+
+   ! Compute flux at the right side of i-1/2
+   ! reconstructed polynomials
+   P1 = 0.5*(-qp + 3.0*q0)
+   P2 = 0.5*(q0 + qm)
+
+   ! smoothness indicator
+   b1 = (q0-qp)*(q0-qp)
+   b2 = (qm-q0)*(qm-q0)
+
+   d1 = 1.0/3.0 ; d2 = 2.0/3.0
+
+   ! Alpha values
+   !tau = abs(b1-b2)
+   tau = abs(qp - 2.0*q0 + qm)
+   w1 = d1*(1.0 + (tau/(b1+eps))**2)
+   w2 = d2*(1.0 + (tau/(b2+eps))**2)
+
+   ! Normalization
+   wnorm = w1+w2
+   wmR = (w1*P1 + w2*P2)/wnorm
+
+   !call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
+   call PP_limiter_w50(q0, wmR, wpL, h_min)
+
+end subroutine weno3_reconstruction_interface
+
+!> 5th-order weno z-type reconstruction flux
+subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min, ds)
+
+   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
+   real, intent(in)  :: h_min     !< The minimum thickness
+   real, intent(in) :: ds         !< grid size
+   real, intent(out) :: wmR, wpL  !< weno reconstruction at the cell interfaces i-1/2 and i+1/2
+
+   real :: P0, P1, P2         ! reconstructed polynomials
+   real :: b0, b1, b2         ! smoothness indicator
+   real :: w0, w1, w2         ! nonlinear weights
+   real :: d0, d1, d2         ! linear weights
+   real :: a0, a1, a2
+   real :: eps,  wnorm, tau
+   integer, parameter :: r = 2
+
+   ! linear weights
+   d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
+   eps = 1.0e-20
+   !eps = ds**5
+
+   ! Compute flux at left side of i+1/2
+   ! First stencil
+   P0 = (2.0*qmm - 7.0*qm + 11.0*q0)/6.0
+   b0 = (13.0/12.0)*(qmm - 2.0*qm + q0)**2 + 0.25*(qmm - 4.0*qm + 3.0*q0)**2
+
+   ! Second stencil
+   P1 = (-qm + 5.0*q0 + 2.0*qp)/6.0
+   b1 = (13.0/12.0)*(qm - 2.0*q0 + qp)**2 + 0.25*(qm - qp)**2
+
+   ! Third stencil
+   P2 = (2.0*q0 + 5.0*qp - qpp)/6.0
+   b2 = (13.0/12.0)*(q0 - 2.0*qp + qpp)**2 + 0.25*(3.0*q0 - 4.0*qp + qpp)**2
+
+   ! Alpha values
+   !tau = abs(b2-b0)
+   tau = abs(qmm - 4.0*qm + 6.0*q0 - 4.0*qp + qpp)
+   w0 = d0*(1.0 + (tau/(b0+eps))**r)
+   w1 = d1*(1.0 + (tau/(b1+eps))**r)
+   w2 = d2*(1.0 + (tau/(b2+eps))**r)
+
+   wnorm = w0+w1+w2
+   wpL = (w0*P0 + w1*P1 + w2*P2)/wnorm
+
+   ! Compute flux at the right side of i-1/2
+   ! First stencil
+   P0 = (2.0*qpp - 7.0*qp + 11.0*q0)/6.0
+   b0 = (13.0/12.0)*(qpp - 2.0*qp + q0)**2 + 0.25*(qpp - 4.0*qp + 3.0*q0)**2
+
+   ! Second stencil
+   P1 = (-qp + 5.0*q0 + 2.0*qm)/6.0
+   b1 = (13.0/12.0)*(qp - 2.0*q0 + qm)**2 + 0.25*(qp - qm)**2
+
+   ! Third stencil
+   P2 = (2.0*q0 + 5.0*qm - qmm)/6.0
+   b2 = (13.0/12.0)*(q0 - 2.0*qm + qmm)**2 + 0.25*(3.0*q0 - 4.0*qm + qmm)**2
+
+   ! Alpha values
+   !tau = abs(b2-b0)
+   tau = abs(qpp - 4.0*qp + 6.0*q0 - 4.0*qm + qmm)
+   w0 = d0*(1.0 + (tau/(b0+eps))**r)
+   w1 = d1*(1.0 + (tau/(b1+eps))**r)
+   w2 = d2*(1.0 + (tau/(b2+eps))**r)
+
+   wnorm = w0+w1+w2
+   wmR = (w0*P0 + w1*P1 + w2*P2)/wnorm
+
+   !call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
+   call PP_limiter_w50(q0, wmR, wpL, h_min)
+
+end subroutine weno5_reconstruction_interface
+
+!> 7th-order weno z-type reconstruction flux
+subroutine weno7_reconstruction_interface(wmR, wpL, qm3, qm2, qm1, q0, qp1, qp2, qp3, h_min, ds)
+
+   real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3 !< tracer concentration for 7-stencil wide
+   real, intent(in)  :: h_min     !< The minimum thickness
+   real, intent(in) :: ds         !< grid size
+   real, intent(out) :: wmR, wpL  !< weno reconstruction at the cell interfaces i-1/2 and i+1/2
+
+   real :: P0, P1, P2, P3     ! reconstructed polynomials
+   real :: b0, b1, b2, b3     ! smoothness indicator
+   real :: w0, w1, w2, w3     ! nonlinear weights
+   real :: d0, d1, d2, d3     ! nonlinear weights
+   real :: a0, a1, a2, a3
+   real :: eps, tau, wnorm
+   integer, parameter :: r = 2
+
+   ! linear weights
+   d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
+   eps = 1.0e-20
+
+   ! Compute flux at the right side of i+1/2
+   ! 1st stencil
+   P0 = (-3.0*qm3 + 13.0*qm2 - 23.0*qm1 + 25.0*q0)/12.0
+   b0 = qm3*(547.0*qm3 - 3882.0*qm2 + 4642.0*qm1 - 1854.0*q0) + &
+        qm2*(7043.0*qm2 - 17246.0*qm1 + 7042.0*q0) + &
+        qm1*(11003.0*qm1 - 9402.0*q0) + 2107.0*q0**2
+
+   ! 2nd stencil
+   P1 = (qm2 - 5.0*qm1 + 13.0*q0 + 3.0*qp1)/12.0
+   b1 = qm2*(267.0*qm2 - 1642.0*qm1 + 1602.0*q0 - 494.0*qp1) + &
+           qm1*(2843.0*qm1 - 5966.0*q0 + 1922.0*qp1) &
+           + q0*(3443.0*q0 - 2522.0*qp1) + 547.0*qp1**2
+
+   ! 3rd stencil
+   P2 = (-qm1 + 7.0*q0 + 7.0*qp1 - qp2)/12.0
+   b2 = qm1*(547.0*qm1 - 2522.0*q0 + 1922.0*qp1 - 494.0*qp2) + &
+           q0*(3443.0*q0 - 5966.0*qp1 + 1602.0*qp2) &
+           + qp1*(2843.0*qp1 - 1642.0*qp2) + 267.0*qp2**2
+
+   ! 4rd stencil
+   P3 = (3.0*q0 + 13.0*qp1 - 5.0*qp2 + qp3)/12.0
+   b3 = q0*(2107.0*q0 - 9402.0*qp1 + 7042.0*qp2 - 1854.0*qp3) + &
+           qp1*(11003.0*qp1 - 17246.0*qp2 + 4642.0*qp3) &
+           + qp2*(7043.0*qp2 - 3882.0*qp3) + 547.0*qp3**2
+
+   ! Alpha values
+   !tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
+   tau = abs(qm3 - 6.0*qm2 + 15.0*qm1 - 20.0*q0 + 15.0*qp1 - 6.0*qp2 + qp3)
+   w0 = d0*(1.0 + (tau/(b0+eps))**r)
+   w1 = d1*(1.0 + (tau/(b1+eps))**r)
+   w2 = d2*(1.0 + (tau/(b2+eps))**r)
+   w3 = d3*(1.0 + (tau/(b3+eps))**r)
+
+   ! Normalization
+   wnorm = w0+w1+w2+w3
+   wpL = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
+
+   ! Compute flux at the right side of i-1/2
+   ! 1st stencil
+   P0 = (-3.0*qp3 + 13.0*qp2 - 23.0*qp1 + 25.0*q0)/12.0
+   b0 = qp3*(547.0*qp3 - 3882.0*qp2 + 4642.0*qp1 - 1854.0*q0) + &
+        qp2*(7043.0*qp2 - 17246.0*qp1 + 7042.0*q0) + &
+        qp1*(11003.0*qp1 - 9402.0*q0) + 2107.0*q0**2
+
+   ! 2nd stencil
+   P1 = (qp2 - 5.0*qp1 + 13.0*q0 + 3.0*qm1)/12.0
+   b1 = qp2*(267.0*qp2 - 1642.0*qp1 + 1602.0*q0 - 494.0*qm1) + &
+           qp1*(2843.0*qp1 - 5966.0*q0 + 1922.0*qm1) &
+           + q0*(3443.0*q0 - 2522.0*qm1) + 547.0*qm1**2
+
+   ! 3rd stencil
+   P2 = (-qp1 + 7.0*q0 + 7.0*qm1 - qm2)/12.0
+   b2 = qp1*(547.0*qp1 - 2522.0*q0 + 1922.0*qm1 - 494.0*qm2) + &
+           q0*(3443.0*q0 - 5966.0*qm1 + 1602.0*qm2) &
+           + qm1*(2843.0*qm1 - 1642.0*qm2) + 267.0*qm2**2
+
+   ! 4rd stencil
+   P3 = (3.0*q0 + 13.0*qm1 - 5.0*qm2 + qm3)/12.0
+   b3 = q0*(2107.0*q0 - 9402.0*qm1 + 7042.0*qm2 - 1854.0*qm3) + &
+           qm1*(11003.0*qm1 - 17246.0*qm2 + 4642.0*qm3) &
+           + qm2*(7043.0*qm2 - 3882.0*qm3) + 547.0*qm3**2
+
+   ! Alpha values
+   !tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
+   tau = abs(qp3 - 6.0*qp2 + 15.0*qp1 - 20.0*q0 + 15.0*qm1 - 6.0*qm2 + qm3)
+   w0 = d0*(1.0 + (tau/(b0+eps))**r)
+   w1 = d1*(1.0 + (tau/(b1+eps))**r)
+   w2 = d2*(1.0 + (tau/(b2+eps))**r)
+   w3 = d3*(1.0 + (tau/(b3+eps))**r)
+
+   ! Normalization
+   wnorm = w0+w1+w2+w3
+   wmR = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
+
+   call PP_limiter_w50(q0, wmR, wpL, h_min)
+
+end subroutine weno7_reconstruction_interface
+
+!> This is the subroutine for the positivity-preserving limiter
+!! It limits the WENO reconstruction to give a reconstruction
+!! that is positive-definite.
+subroutine PP_limiter_w50(q0, wmr, wpl, h_min)
+
+  real, intent(in) :: q0 !< tracer concentration in cell i
+  real, intent(inout) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
+  real, intent(in)  :: h_min     !< The minimum thickness
+
+  real :: curv, dh, scale
+
+  curv = 3.0*((wmr + wpl) - 2.0*q0)
+  if (curv > 0.0) then ! Only minima are limited.
+    dh = wpl - wmr
+    if (abs(dh) < curv) then ! The parabola's minimum is within the cell.
+      if (q0 <= h_min) then
+        wpl = q0 ; wmr = q0
+      elseif (12.0*curv*(q0 - h_min) < (curv**2 + 3.0*dh**2)) then
+        ! The minimum value is h_in - (curv^2 + 3*dh^2)/(12*curv), and must
+        ! be limited in this case.  0 < scale < 1.
+        scale = 12.0*curv*(q0 - h_min) / (curv**2 + 3.0*dh**2)
+        wmr = q0 + scale*(wmr - q0)
+        wpl = q0 + scale*(wpl - q0)
+      endif
+    endif
+  endif
+
+end subroutine PP_limiter_w50
+
+!> This is the subroutine for the maximum-principle preserving limiter
+subroutine PP_limiter_w5(qm, q0, qp, wmr, wpl, h_min)
+
+   real, intent(in) :: qm, q0, qp !< tracer concentration in cell i
+   real, intent(inout) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
+   real, intent(in)  :: h_min     !< The minimum thickness
+
+   real :: qmin, qmax, theta, eps
+   real :: a(5), Fmin(5), Fmax(5)
+   integer :: i
+   real :: curv, dq, scale, wpl0, wmr0, T_min, a6
+
+   Fmin(1) = 1.0 ; Fmax(1) = 1.0
+   Fmin(2) = -0.5 ; Fmax(2) = 0.5
+   Fmin(3) = 0.0 ; Fmax(3) = 0.25
+   Fmin(4) = -1.0/8.0 ; Fmax(4) = 1.0/8.0
+   Fmin(5) = 0.0 ; Fmax(5) = 1.0/16.0
+
+   a(1) = (qm + 298.0*q0 + qp - 54.0*(wmr + wpl))/192.0
+   a(2) = (qm - qp - 10.0*(wmr - wpl))/8.0
+   a(3) = (-(qm + 58.0*q0 + qp) + 30.0*(wmr + wpl))/8.0
+   a(4) = (-qm + qp + 2.0*(wmr - wpl))
+   a(5) = (5.0*qm + 50.0*q0 + 5.0*qp - 30.0*(wmr + wpl))/12.0
+
+   qmin = 0.0 
+   do i = 1,5
+     qmin = qmin + a(i)*0.5*((1.0-sign(1.0,a(i)))*Fmax(i) + (1.0+sign(1.0,a(i)))*Fmin(i))
+   enddo
+
+   eps = min(1.0e-13, q0)
+   theta = min((eps-q0)/(qmin-q0), 1.0)
+   if (theta < 0.0) then
+     theta = 0.0
+   endif
+
+   wpl = theta*(wpl - q0) + q0
+
+   ! i-1/2
+   a(1) = (qp + 298.0*q0 + qm - 54.0*(wmr + wpl))/192.0
+   a(2) = (qp - qm - 10.0*(wmr - wpl))/8.0
+   a(3) = (-(qp + 58.0*q0 + qm) + 30.0*(wmr + wpl))/8.0
+   a(4) = (-qp + qm + 2.0*(wmr - wpl))
+   a(5) = (5.0*qp + 50.0*q0 + 5.0*qm - 30.0*(wmr + wpl))/12.0
+
+   qmin = 0.0
+   do i = 1,5
+     qmin = qmin + a(i)*0.5*((1.0-sign(1.0,a(i)))*Fmax(i) + (1.0+sign(1.0,a(i)))*Fmin(i))
+   enddo
+
+   eps = min(1.0e-13, q0)
+   theta = min((eps-q0)/(qmin-q0), 1.0)
+   if (theta < 0.0) then
+     theta = 0.0
+   endif
+
+   wmr = theta*(wmr - q0) + q0
+
+end subroutine PP_limiter_w5
+
+!> \namespace mom_continuity_weno
+!!
+!! This module contains the subroutines that advect layer
+!! thickness.  The scheme here uses Weighted Essentially Non-Oscillatory Schemes with
+!! a positive definite limiter.
+
+end module MOM_continuity_WENO

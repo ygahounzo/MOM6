@@ -13,6 +13,8 @@ use MOM_open_boundary, only : OBC_DIRECTION_E, OBC_DIRECTION_W, OBC_DIRECTION_N,
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : BT_cont_type, porous_barrier_type
 use MOM_verticalGrid, only : verticalGrid_type
+use MOM_continuity_WENO, only : weno3_reconstruction_interface, weno5_reconstruction_interface
+use MOM_continuity_WENO, only : weno7_reconstruction_interface
 
 implicit none ; private
 
@@ -43,6 +45,7 @@ type, public :: continuity_PPM_CS ; private
                              !! mean) interpolation of the edge values instead
                              !! of the higher order interpolation.
   logical :: weno5           !< If true, use a weno5 interpolation of the edge values.
+  logical :: weno7           !< If true, use a weno7 interpolation of the edge values.
   real :: tol_eta            !< The tolerance for free-surface height
                              !! discrepancies between the barotropic solution and
                              !! the sum of the layer thicknesses [H ~> m or kg m-2].
@@ -460,7 +463,7 @@ subroutine zonal_edge_thickness(h_in, h_W, h_E, G, GV, US, CS, OBC, LB_in)
     !$OMP parallel do default(shared)
     do k=1,nz
       call WENO5_reconstruction_x(h_in(:,:,k), h_W(:,:,k), h_E(:,:,k), G, LB, &
-                                2.0*GV%Angstrom_H, CS%monotonic, OBC)
+                                2.0*GV%Angstrom_H, CS%monotonic, OBC, CS)
     enddo
   else
     !$OMP parallel do default(shared)
@@ -513,7 +516,7 @@ subroutine meridional_edge_thickness(h_in, h_S, h_N, G, GV, US, CS, OBC, LB_in)
     !$OMP parallel do default(shared)
     do k=1,nz
       call WENO5_reconstruction_y(h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), G, LB, &
-                                2.0*GV%Angstrom_H, CS%monotonic, OBC)
+                                2.0*GV%Angstrom_H, CS%monotonic, OBC, CS)
     enddo
   else
     !$OMP parallel do default(shared)
@@ -946,28 +949,28 @@ subroutine zonal_flux_layer(u, h, h_W, h_E, uh, duhdu, visc_rem, dt, G, US, j, &
     local_open_BC = OBC%open_u_BCs_exist_globally
   endif ; endif
 
-  !if (CS%weno5) then
-  !  do I=ish-1,ieh ; if (do_I(I)) then
-  !    ! Set new values of uh and duhdu.
-  !    if (u(I) > 0.0) then
-  !      uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * h_E(i)
-  !      h_marg = h_E(i)
-  !    elseif (u(I) < 0.0) then
-  !      uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * h_W(i+1)
-  !      h_marg = h_W(i+1)
-  !    else
-  !      uh(I) = 0.0
-  !      h_marg = 0.5 * (h_W(i+1) + h_E(i))
-  !    endif
-  !    duhdu(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * h_marg * visc_rem(I)
-  !  endif ; enddo
-  !else
+  if (CS%weno5) then
+    do I=ish-1,ieh ; if (do_I(I)) then
+      ! Set new values of uh and duhdu.
+      if (u(I) > 0.0) then
+        uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * h_E(i)
+        h_marg = h_E(i)
+      elseif (u(I) < 0.0) then
+        uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * h_W(i+1)
+        h_marg = h_W(i+1)
+      else
+        uh(I) = 0.0
+        h_marg = 0.5 * (h_W(i+1) + h_E(i))
+      endif
+      duhdu(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * h_marg * visc_rem(I)
+    endif ; enddo
+  else
     do I=ish-1,ieh ; if (do_I(I)) then
       ! Set new values of uh and duhdu.
       if (u(I) > 0.0) then
         if (vol_CFL) then ; CFL = (u(I) * dt) * (G%dy_Cu(I,j) * G%IareaT(i,j))
         else ; CFL = u(I) * dt * G%IdxT(i,j) ; endif
-        CFL = 0.0
+        !CFL = 0.0
         curv_3 = (h_W(i) + h_E(i)) - 2.0*h(i)
         uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * &
             (h_E(i) + CFL * (0.5*(h_W(i) - h_E(i)) + curv_3*(CFL - 1.5)))
@@ -975,18 +978,18 @@ subroutine zonal_flux_layer(u, h, h_W, h_E, uh, duhdu, visc_rem, dt, G, US, j, &
       elseif (u(I) < 0.0) then
         if (vol_CFL) then ; CFL = (-u(I) * dt) * (G%dy_Cu(I,j) * G%IareaT(i+1,j))
         else ; CFL = -u(I) * dt * G%IdxT(i+1,j) ; endif
-        CFL = 0.0
+        !CFL = 0.0
         curv_3 = (h_W(i+1) + h_E(i+1)) - 2.0*h(i+1)
         uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * &
             (h_W(i+1) + CFL * (0.5*(h_E(i+1)-h_W(i+1)) + curv_3*(CFL - 1.5)))
         h_marg = h_W(i+1) + CFL * ((h_E(i+1)-h_W(i+1)) + 3.0*curv_3*(CFL - 1.0))
       else
         uh(I) = 0.0
-        h_marg = h(i) !0.5 * (h_W(i+1) + h_E(i))
+        h_marg = 0.5 * (h_W(i+1) + h_E(i))
       endif
       duhdu(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * h_marg * visc_rem(I)
     endif ; enddo
-  !endif
+  endif
 
   if (local_open_BC) then
     do I=ish-1,ieh ; if (do_I(I)) then ; if (OBC%segnum_u(I,j) /= OBC_NONE) then
@@ -1048,48 +1051,48 @@ subroutine zonal_flux_thickness(u, h, h_W, h_E, h_u, dt, G, GV, US, LB, vol_CFL,
   integer :: i, j, k, ish, ieh, jsh, jeh, nz, n
   ish = LB%ish ; ieh = LB%ieh ; jsh = LB%jsh ; jeh = LB%jeh ; nz = GV%ke
 
-  !if (CS%weno5) then
-  !  !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
-  !  do k=1,nz ; do j=jsh,jeh ; do I=ish-1,ieh
-  !    if (u(I,j,k) > 0.0) then
-  !      h_avg = h_E(i,j,k)
-  !      h_marg = h_E(i,j,k)
-  !    elseif (u(I,j,k) < 0.0) then
-  !      h_avg = h_W(i+1,j,k)
-  !      h_marg = h_W(i+1,j,k)
-  !    else
-  !      h_avg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
-  !      !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
-  !      ! it should be noted that h_W(i+1,j,k) and h_E(i,j,k) are usually the same.
-  !      h_marg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
-  !    endif
+  if (CS%weno5) then
+    !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
+    do k=1,nz ; do j=jsh,jeh ; do I=ish-1,ieh
+      if (u(I,j,k) > 0.0) then
+        h_avg = h_E(i,j,k)
+        h_marg = h_E(i,j,k)
+      elseif (u(I,j,k) < 0.0) then
+        h_avg = h_W(i+1,j,k)
+        h_marg = h_W(i+1,j,k)
+      else
+        h_avg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
+        !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
+        ! it should be noted that h_W(i+1,j,k) and h_E(i,j,k) are usually the same.
+        h_marg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
+      endif
 
-  !    if (marginal) then ; h_u(I,j,k) = h_marg
-  !    else ; h_u(I,j,k) = h_avg ; endif
-  !  enddo ; enddo ; enddo
-  !else
+      if (marginal) then ; h_u(I,j,k) = h_marg
+      else ; h_u(I,j,k) = h_avg ; endif
+    enddo ; enddo ; enddo
+  else
     !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
     do k=1,nz ; do j=jsh,jeh ; do I=ish-1,ieh
       if (u(I,j,k) > 0.0) then
         if (vol_CFL) then ; CFL = (u(I,j,k) * dt) * (G%dy_Cu(I,j) * G%IareaT(i,j))
         else ; CFL = u(I,j,k) * dt * G%IdxT(i,j) ; endif
-        CFL = 0.0
+        !CFL = 0.0
         curv_3 = (h_W(i,j,k) + h_E(i,j,k)) - 2.0*h(i,j,k)
         h_avg = h_E(i,j,k) + CFL * (0.5*(h_W(i,j,k) - h_E(i,j,k)) + curv_3*(CFL - 1.5))
         h_marg = h_E(i,j,k) + CFL * ((h_W(i,j,k) - h_E(i,j,k)) + 3.0*curv_3*(CFL - 1.0))
       elseif (u(I,j,k) < 0.0) then
         if (vol_CFL) then ; CFL = (-u(I,j,k)*dt) * (G%dy_Cu(I,j) * G%IareaT(i+1,j))
         else ; CFL = -u(I,j,k) * dt * G%IdxT(i+1,j) ; endif
-        CFL = 0.0
+        !CFL = 0.0
         curv_3 = (h_W(i+1,j,k) + h_E(i+1,j,k)) - 2.0*h(i+1,j,k)
         h_avg = h_W(i+1,j,k) + CFL * (0.5*(h_E(i+1,j,k)-h_W(i+1,j,k)) + curv_3*(CFL - 1.5))
         h_marg = h_W(i+1,j,k) + CFL * ((h_E(i+1,j,k)-h_W(i+1,j,k)) + &
                                       3.0*curv_3*(CFL - 1.0))
       else
-        h_avg = h(i,j,k) !0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
+        h_avg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
         !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
         ! it should be noted that h_W(i+1,j,k) and h_E(i,j,k) are usually the same.
-        h_marg = h(i,j,k) !0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
+        h_marg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
    !    h_marg = (2.0 * h_W(i+1,j,k) * h_E(i,j,k)) / &
    !             (h_W(i+1,j,k) + h_E(i,j,k) + GV%H_subroundoff)
       endif
@@ -1097,7 +1100,8 @@ subroutine zonal_flux_thickness(u, h, h_W, h_E, h_u, dt, G, GV, US, LB, vol_CFL,
       if (marginal) then ; h_u(I,j,k) = h_marg
       else ; h_u(I,j,k) = h_avg ; endif
     enddo ; enddo ; enddo
-  !endif 
+  endif 
+
   if (present(visc_rem_u)) then
     ! Scale back the thickness to account for the effects of viscosity and the fractional open
     ! thickness to give an appropriate non-normalized weight for each layer in determining the
@@ -1886,26 +1890,26 @@ subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
     local_open_BC = OBC%open_v_BCs_exist_globally
   endif ; endif
 
-  !if (CS%weno5) then
-  !  do i=ish,ieh ; if (do_I(i)) then
-  !    if (v(i) > 0.0) then
-  !      vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * h_N(i,j)
-  !      h_marg = h_N(i,j)
-  !    elseif (v(i) < 0.0) then
-  !      vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * h_S(i,j+1)
-  !      h_marg = h_S(i,j+1)
-  !    else
-  !      vh(i) = 0.0
-  !      h_marg = 0.5 * (h_S(i,j+1) + h_N(i,j))
-  !    endif
-  !    dvhdv(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * h_marg * visc_rem(i)
-  !  endif ; enddo
-  !else
+  if (CS%weno5) then
+    do i=ish,ieh ; if (do_I(i)) then
+      if (v(i) > 0.0) then
+        vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * h_N(i,j)
+        h_marg = h_N(i,j)
+      elseif (v(i) < 0.0) then
+        vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * h_S(i,j+1)
+        h_marg = h_S(i,j+1)
+      else
+        vh(i) = 0.0
+        h_marg = 0.5 * (h_S(i,j+1) + h_N(i,j))
+      endif
+      dvhdv(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * h_marg * visc_rem(i)
+    endif ; enddo
+  else
     do i=ish,ieh ; if (do_I(i)) then
       if (v(i) > 0.0) then
         if (vol_CFL) then ; CFL = (v(i) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
         else ; CFL = v(i) * dt * G%IdyT(i,j) ; endif
-        CFL = 0.0
+        !CFL = 0.0
         curv_3 = (h_S(i,j) + h_N(i,j)) - 2.0*h(i,j)
         vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * ( h_N(i,j) + CFL * &
             (0.5*(h_S(i,j) - h_N(i,j)) + curv_3*(CFL - 1.5)) )
@@ -1914,7 +1918,7 @@ subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
       elseif (v(i) < 0.0) then
         if (vol_CFL) then ; CFL = (-v(i) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
         else ; CFL = -v(i) * dt * G%IdyT(i,j+1) ; endif
-        CFL = 0.0
+        !CFL = 0.0
         curv_3 = (h_S(i,j+1) + h_N(i,j+1)) - 2.0*h(i,j+1)
         vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * ( h_S(i,j+1) + CFL * &
             (0.5*(h_N(i,j+1)-h_S(i,j+1)) + curv_3*(CFL - 1.5)) )
@@ -1922,11 +1926,11 @@ subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
                                       3.0*curv_3*(CFL - 1.0))
       else
         vh(i) = 0.0
-        h_marg = h(i,j)!0.5 * (h_S(i,j+1) + h_N(i,j))
+        h_marg = 0.5 * (h_S(i,j+1) + h_N(i,j))
       endif
       dvhdv(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * h_marg * visc_rem(i)
     endif ; enddo
-  !endif 
+  endif 
 
   if (local_open_BC) then
     do i=ish,ieh ; if (do_I(i)) then
@@ -1991,32 +1995,32 @@ subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol
   integer :: i, j, k, ish, ieh, jsh, jeh, n, nz
   ish = LB%ish ; ieh = LB%ieh ; jsh = LB%jsh ; jeh = LB%jeh ; nz = GV%ke
 
-  !if (CS%weno5) then
-  !  !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
-  !  do k=1,nz ; do J=jsh-1,jeh ; do i=ish,ieh
-  !    if (v(i,J,k) > 0.0) then
-  !      h_avg = h_N(i,j,k)
-  !      h_marg = h_N(i,j,k)
-  !    elseif (v(i,J,k) < 0.0) then
-  !      h_avg = h_S(i,j+1,k)
-  !      h_marg = h_S(i,j+1,k)
-  !    else
-  !      h_avg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
-  !      !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
-  !      ! it should be noted that h_S(i+1,j,k) and h_N(i,j,k) are usually the same.
-  !      h_marg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
-  !    endif
+  if (CS%weno5) then
+    !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
+    do k=1,nz ; do J=jsh-1,jeh ; do i=ish,ieh
+      if (v(i,J,k) > 0.0) then
+        h_avg = h_N(i,j,k)
+        h_marg = h_N(i,j,k)
+      elseif (v(i,J,k) < 0.0) then
+        h_avg = h_S(i,j+1,k)
+        h_marg = h_S(i,j+1,k)
+      else
+        h_avg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
+        !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
+        ! it should be noted that h_S(i+1,j,k) and h_N(i,j,k) are usually the same.
+        h_marg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
+      endif
 
-  !    if (marginal) then ; h_v(i,J,k) = h_marg
-  !    else ; h_v(i,J,k) = h_avg ; endif
-  !  enddo ; enddo ; enddo
-  !else
+      if (marginal) then ; h_v(i,J,k) = h_marg
+      else ; h_v(i,J,k) = h_avg ; endif
+    enddo ; enddo ; enddo
+  else
     !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
     do k=1,nz ; do J=jsh-1,jeh ; do i=ish,ieh
       if (v(i,J,k) > 0.0) then
         if (vol_CFL) then ; CFL = (v(i,J,k) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
         else ; CFL = v(i,J,k) * dt * G%IdyT(i,j) ; endif
-        CFL = 0.0
+        !CFL = 0.0
         curv_3 = (h_S(i,j,k) + h_N(i,j,k)) - 2.0*h(i,j,k)
         h_avg = h_N(i,j,k) + CFL * (0.5*(h_S(i,j,k) - h_N(i,j,k)) + curv_3*(CFL - 1.5))
         h_marg = h_N(i,j,k) + CFL * ((h_S(i,j,k) - h_N(i,j,k)) + &
@@ -2024,16 +2028,16 @@ subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol
       elseif (v(i,J,k) < 0.0) then
         if (vol_CFL) then ; CFL = (-v(i,J,k)*dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
         else ; CFL = -v(i,J,k) * dt * G%IdyT(i,j+1) ; endif
-        CFL = 0.0
+        !CFL = 0.0
         curv_3 = (h_S(i,j,k) + h_N(i,j+1,k)) - 2.0*h(i,j+1,k)
         h_avg = h_S(i,j+1,k) + CFL * (0.5*(h_N(i,j+1,k)-h_S(i,j+1,k)) + curv_3*(CFL - 1.5))
         h_marg = h_S(i,j+1,k) + CFL * ((h_N(i,j+1,k)-h_S(i,j+1,k)) + &
                                       3.0*curv_3*(CFL - 1.0))
       else
-        h_avg = h(i,j,k)!0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
+        h_avg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
         !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
         ! it should be noted that h_S(i+1,j,k) and h_N(i,j,k) are usually the same.
-        h_marg = h(i,j,k)!0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
+        h_marg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
    !    h_marg = (2.0 * h_S(i,j+1,k) * h_N(i,j,k)) / &
    !             (h_S(i,j+1,k) + h_N(i,j,k) + GV%H_subroundoff)
       endif
@@ -2041,7 +2045,7 @@ subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol
       if (marginal) then ; h_v(i,J,k) = h_marg
       else ; h_v(i,J,k) = h_avg ; endif
     enddo ; enddo ; enddo
-  !endif
+  endif
 
   if (present(visc_rem_v)) then
     ! Scale back the thickness to account for the effects of viscosity and the fractional open
@@ -2762,7 +2766,7 @@ subroutine PPM_limit_CW84(h_in, h_L, h_R, G, iis, iie, jis, jie)
 end subroutine PPM_limit_CW84
 
 !> Calculates left/right edge values for WENO reconstruction.
-subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC)
+subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, CS)
   type(ocean_grid_type),             intent(in)  :: G    !< Ocean's grid structure.
   real, dimension(SZI_(G),SZJ_(G)),  intent(in)  :: h_in !< Layer thickness [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: h_W  !< West edge thickness in the reconstruction,
@@ -2776,6 +2780,7 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC)
                     !! Colella & Woodward monotonic limiter.
                     !! Otherwise use a simple positive-definite limiter.
   type(ocean_OBC_type),              pointer     :: OBC !< Open boundaries control structure.
+  type(continuity_PPM_CS), intent(in)            :: CS   !< This module's control structure.
 
   ! Local variables with useful mnemonic names.
   real :: h_ip3, h_ip2, h_ip1, h_i, h_im1, h_im2, h_im3 ! Neighboring thicknesses or sensibly
@@ -2785,8 +2790,8 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC)
   integer :: i, j, isl, iel, jsl, jel, n, stencil
   logical :: local_open_BC
   type(OBC_segment_type), pointer :: segment => NULL()
-  real :: order5, dx, ah
-  real :: am2, am1, a0, ap1, ap2
+  real :: order3, order5, order7, dx, area3, area5, area7
+  real :: am3, am2, am1, a0, ap1, ap2, ap3
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2811,10 +2816,6 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC)
     call MOM_error(FATAL,mesg)
   endif
 
-  ! do j=jsl,jel ; do i=isl,iel
-  !  Area_h(i,j) = G%mask2dT(i,j) * G%areaT(i,j)
-  ! enddo ; enddo
-
   ! if (local_open_BC) then
   !   do n=1, OBC%number_of_segments
   !     segment => OBC%segment(n)
@@ -2832,45 +2833,48 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC)
 
   do j=jsl,jel ; do i=isl,iel
     ! Neighboring values should take into account any boundaries.
-    !h_im3 = G%mask2dT(i-3,j) * h_in(i-3,j) + (1.0-G%mask2dT(i-3,j)) * h_in(i-2,j)
     h_im2 = G%mask2dT(i-2,j) * h_in(i-2,j) + (1.0-G%mask2dT(i-2,j)) * h_in(i-1,j)
     h_im1 = G%mask2dT(i-1,j) * h_in(i-1,j) + (1.0-G%mask2dT(i-1,j)) * h_in(i,j)
     h_i = h_in(i,j)
     h_ip1 = G%mask2dT(i+1,j) * h_in(i+1,j) + (1.0-G%mask2dT(i+1,j)) * h_in(i,j)
     h_ip2 = G%mask2dT(i+2,j) * h_in(i+2,j) + (1.0-G%mask2dT(i+2,j)) * h_in(i+1,j)
-    !h_ip3 = G%mask2dT(i+3,j) * h_in(i+3,j) + (1.0-G%mask2dT(i+3,j)) * h_in(i+2,j)
 
-    !aq = 0.5*(G%mask2dT(i,j)*G%areaT(i,j)+G%mask2dT(i+1,j)*G%areaT(i+1,j) + &
     am2 = G%mask2dT(i-2,j)*G%areaT(i-2,j)
     am1 = G%mask2dT(i-1,j)*G%areaT(i-1,j)
     a0 = G%mask2dT(i,j)*G%areaT(i,j)
     ap1 = G%mask2dT(i+1,j)*G%areaT(i+1,j)
     ap2 = G%mask2dT(i+2,j)*G%areaT(i+2,j)
 
-    ah = min(am2*h_im2, am1*h_im1, a0*h_i, ap1*h_ip1, ap2*h_ip2)
+    area5 = min(am2*h_im2, am1*h_im1, a0*h_i, ap1*h_ip1, ap2*h_ip2)
+    area3 = min(am1*h_im1, a0*h_i, ap1*h_ip1)
 
-    !h_im2 = h_in(i-2,j)
-    !h_im1 = h_in(i-1,j)
-    !h_i = h_in(i,j)
-    !h_ip1 = h_in(i+1,j)
-    !h_ip2 = h_in(i+2,j)
-    !h_ip3 = h_in(i+3,j)
+    order3 = G%mask2dT(i-1,j)*G%mask2dT(i,j)*G%mask2dT(i+1,j)
+    order5 = order3*G%mask2dT(i-2,j)*G%mask2dT(i+2,j)
+
+    if (area5 <= G%areaT(i,j)*h_min) order5 = 0.0
+    if (area3 <= G%areaT(i,j)*h_min) order3 = 0.0
+
+    order7 = 0.0
+    if (CS%weno7) then
+      h_im3 = G%mask2dT(i-3,j) * h_in(i-3,j) + (1.0-G%mask2dT(i-3,j)) * h_in(i-2,j)
+      h_ip3 = G%mask2dT(i+3,j) * h_in(i+3,j) + (1.0-G%mask2dT(i+3,j)) * h_in(i+2,j)
+
+      am3 = G%mask2dT(i-3,j)*G%areaT(i-3,j)
+      ap3 = G%mask2dT(i+3,j)*G%areaT(i+3,j)
+      area7 = min(area5, am3*h_im3, ap3*h_ip3)
+      order7 = order5*G%mask2dT(i-3,j)*G%mask2dT(i+3,j)
+      if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
+    endif
 
     dx = G%dxT(i,j)
 
-    order5 = G%mask2dT(i,j)*G%mask2dT(i-1,j)*G%mask2dT(i+1,j)* &
-                   G%mask2dCu(i-2,j)*G%mask2dCu(i+2,j)
-
-    if ((G%mask2dT(i-1,j) * G%mask2dT(i,j) * G%mask2dT(i+1,j)) == 0.0) order5 = 0.0
-    if (ah <= G%areaT(i,j)*h_min) order5 = 0.0
-
-    if (order5 == 1.0) then
-     call weno5_reconstruction_interface_v0(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, h_ip2, h_min, dx)
+    if (order7 == 1.0) then
+      call weno7_reconstruction_interface(h_W(i,j), h_E(i,j), h_im3, h_im2, h_im1, h_i, h_ip1, h_ip2, h_ip3, h_min, dx)
+    elseif (order5 == 1.0) then
+      call weno5_reconstruction_interface(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, h_ip2, h_min, dx)
+    elseif(order3 == 1.0) then
+      call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im1, h_i, h_ip1, h_min, dx)
     else
-      !call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, h_ip2, h_ip3, h_min)
-      ! call weno5_reconstruction_interface_v0(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, h_ip2, h_min)
-      !call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im3, h_im2, h_im1, h_i, h_ip1, h_min)
-
       h_W(i,j) = 0.5*( h_im1 + h_i)
       h_E(i,j) = 0.5*( h_ip1 + h_i)
     endif
@@ -2904,7 +2908,7 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC)
 end subroutine WENO5_reconstruction_x
 
 !> Calculates left/right edge values for WENO reconstruction.
-subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC)
+subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, CS)
   type(ocean_grid_type),             intent(in)  :: G    !< Ocean's grid structure.
   real, dimension(SZI_(G),SZJ_(G)),  intent(in)  :: h_in !< Layer thickness [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: h_S  !< South edge thickness in the reconstruction,
@@ -2918,6 +2922,7 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC)
                     !! Colella & Woodward monotonic limiter.
                     !! Otherwise use a simple positive-definite limiter.
   type(ocean_OBC_type),              pointer     :: OBC !< Open boundaries control structure.
+  type(continuity_PPM_CS), intent(in)            :: CS   !< This module's control structure.
 
   ! Local variables with useful mnemonic names.
   real :: h_jp3, h_jp2, h_jp1, h_j, h_jm1, h_jm2, h_jm3 ! Neighboring thicknesses or sensibly
@@ -2927,8 +2932,8 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC)
   integer :: i, j, isl, iel, jsl, jel, n, stencil
   logical :: local_open_BC
   type(OBC_segment_type), pointer :: segment => NULL()
-  real :: order5, dy, ah
-  real :: am2, am1, a0, ap1, ap2
+  real :: order3, order5, order7, dy, area3, area5, area7
+  real :: am3, am2, am1, a0, ap1, ap2, ap3
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2955,13 +2960,38 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC)
 
   do j=jsl,jel ; do i=isl,iel
     ! Neighboring values should take into account any boundaries.
-    !h_jm3 = G%mask2dT(i,j-3) * h_in(i,j-3) + (1.0-G%mask2dT(i,j-3)) * h_in(i,j-2)
     h_jm2 = G%mask2dT(i,j-2) * h_in(i,j-2) + (1.0-G%mask2dT(i,j-2)) * h_in(i,j-1)
     h_jm1 = G%mask2dT(i,j-1) * h_in(i,j-1) + (1.0-G%mask2dT(i,j-1)) * h_in(i,j)
     h_j = h_in(i,j)
     h_jp1 = G%mask2dT(i,j+1) * h_in(i,j+1) + (1.0-G%mask2dT(i,j+1)) * h_in(i,j)
     h_jp2 = G%mask2dT(i,j+2) * h_in(i,j+2) + (1.0-G%mask2dT(i,j+2)) * h_in(i,j+1)
-    !h_jp3 = G%mask2dT(i,j+3) * h_in(i,j+3) + (1.0-G%mask2dT(i,j+3)) * h_in(i,j+2)
+
+    am2 = G%mask2dT(i,j-2)*G%areaT(i,j-2)
+    am1 = G%mask2dT(i,j-1)*G%areaT(i,j-1)
+    a0  = G%mask2dT(i,j)*G%areaT(i,j)
+    ap1 = G%mask2dT(i,j+1)*G%areaT(i,j+1)
+    ap2 = G%mask2dT(i,j+2)*G%areaT(i,j+2)
+
+    area3 = min(am1*h_jm1, a0*h_j, ap1*h_jp1)
+    area5 = min(area3, am2*h_jm2, ap2*h_jp2)
+
+    order3 = G%mask2dT(i,j-1)*G%mask2dT(i,j)*G%mask2dT(i,j+1)
+    order5 = order3*G%mask2dT(i,j-2)*G%mask2dT(i,j+2)
+
+    if (area3 <= G%areaT(i,j)*h_min) order3 = 0.0
+    if (area5 <= G%areaT(i,j)*h_min) order5 = 0.0
+
+    order7 = 0.0
+    if (CS%weno7) then
+      h_jm3 = G%mask2dT(i,j-3) * h_in(i,j-3) + (1.0-G%mask2dT(i,j-3)) * h_in(i,j-2)
+      h_jp3 = G%mask2dT(i,j+3) * h_in(i,j+3) + (1.0-G%mask2dT(i,j+3)) * h_in(i,j+2)
+
+      am3 = G%mask2dT(i,j-3)*G%areaT(i,j-3)
+      ap3 = G%mask2dT(i,j+3)*G%areaT(i,j+3)
+      area7 = min(area5, am3*h_jm3, ap3*h_jp3)
+      order7 = order5*G%mask2dT(i,j-3)*G%mask2dT(i,j+3)
+      if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
+    endif
 
     !h_jm2 = h_in(i,j-2)
     !h_jm1 = h_in(i,j-1)
@@ -2972,29 +3002,13 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC)
 
     dy = G%dyT(i,j)
 
-    am2 = G%mask2dT(i,j-2)*G%areaT(i,j-2)
-    am1 = G%mask2dT(i,j-1)*G%areaT(i,j-1)
-    a0 = G%mask2dT(i,j)*G%areaT(i,j)
-    ap1 = G%mask2dT(i,j+1)*G%areaT(i,j+1)
-    ap2 = G%mask2dT(i,j+2)*G%areaT(i,j+2)
-
-    ah = min(h_jm2, h_jm1, h_j, h_jp1, h_jp2)
-
-    order5 = G%mask2dT(i,j)*G%mask2dT(i,j-1)*G%mask2dT(i,j+1)* &
-                   G%mask2dCu(i,j-2)*G%mask2dCu(i,j+2)
-    if ((G%mask2dT(i,j-1) * G%mask2dT(i,j) * G%mask2dT(i,j+1)) == 0.0) order5 = 0.0
-    if (ah <= G%areaT(i,j)*h_min) then
-      order5 = 0.0
-    endif
-    print*, 'order5 = ', order5
-
-    if (order5 == 1.0) then
-     call weno5_reconstruction_interface_v0(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_min, dy)
+    if (order7 == 1.0) then
+      call weno7_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm3, h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_jp3, h_min, dy)
+    elseif (order5 == 1.0) then
+      call weno5_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_min, dy)
+    elseif (order3 == 1.0) then
+      call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm1, h_j, h_jp1, h_min, dy)
     else
-      !call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_jp3, h_min)
-      !call weno5_reconstruction_interface_v0(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_min)
-      !call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm3, h_jm2, h_jm1, h_j, h_jp1, h_min)
-
       h_S(i,j) = 0.5*( h_jm1 + h_j )
       h_N(i,j) = 0.5*( h_jp1 + h_j )
     endif
@@ -3026,612 +3040,6 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC)
 
   return
 end subroutine WENO5_reconstruction_y
-
-!> 5th-order weno z-type reconstruction flux
-subroutine weno5_reconstruction_interface_v0(wmR, wpL, qmm, qm, q0, qp, qpp, h_min, ds)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
-   real, intent(in)  :: h_min, ds     !< The minimum thickness
-   real, intent(out) :: wmR, wpL
-
-   real :: P0, P1, P2         ! reconstructed polynomials
-   real :: b0, b1, b2         ! smoothness indicator
-   real :: w0, w1, w2         ! nonlinear weights
-   real :: d0, d1, d2         ! linear weights
-   real :: a0, a1, a2
-   real :: eps,  wnorm, tau
-   integer, parameter :: r = 1
-   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-   real :: qul, qmd, qlc, qmin, qmax, md
-   real :: c0, c1, c2, epsO, O0, O1, O2, t2
-
-   ! linear weights
-   d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
-   eps = 1.0e-40
-   eps = ds**5
-
-   c0 = d0 ; c1 = d2 ; c2 = d1; epsO = ds**5
-
-   ! Compute flux at left side of i+1/2
-   ! First stencil
-   P0 = (2.0*qmm - 7.0*qm + 11.0*q0)/6.0
-   b0 = (13.0/12.0)*(qmm - 2.0*qm + q0)**2 + 0.25*(qmm - 4.0*qm + 3.0*q0)**2
-   !b0 = 0.1*abs(qmm-3.0*qm+2.0*q0) + 1.5*abs(qmm-2.0*qm+q0)
-
-   ! Second stencil
-   P1 = (-qm + 5.0*q0 + 2.0*qp)/6.0
-   b1 = (13.0/12.0)*(qm - 2.0*q0 + qp)**2 + 0.25*(qm - qp)**2
-   !b1 = 0.1*abs(-qm+qp) + 1.5*abs(qm-2.0*q0+qp)
-
-   ! Third stencil
-   P2 = (2.0*q0 + 5.0*qp - qpp)/6.0
-   b2 = (13.0/12.0)*(q0 - 2.0*qp + qpp)**2 + 0.25*(3.0*q0 - 4.0*qp + qpp)**2
-   !b2 = 0.1*abs(-q0+qp) + 1.5*abs(q0-2.0*qp+qpp)
-
-   ! Alpha values
-   !tau = abs(b2-b0)
-   tau = abs(qmm - 4.0*qm + 6.0*q0 - 4.0*qp + qpp)
-   w0 = d0*(1.0 + (tau/(b0+eps))**r)
-   w1 = d1*(1.0 + (tau/(b1+eps))**r)
-   w2 = d2*(1.0 + (tau/(b2+eps))**r)
-
-   !a0 = d0 + c0*tau/(b0**2+eps)
-   !a1 = d1 + c1*tau/(b1**2+eps)
-   !a2 = d2 + c2*tau/(b2**2+eps)
-
-   !O0 = a2 ; O2 = a1
-   !t2 = (abs(qm - 2.0*q0 + qp))**3
-   !O1 = 1.0 + t2/((max(abs(qm-qmm),abs(qpp-qp)))**2+epsO)
-
-   !w0 = a0/O0 ; w1 = a1/O1 ; w2 = a2/O2
-
-   wnorm = w0+w1+w2
-   w0 = w0/wnorm ; w1 = w1/wnorm ; w2 = w2/wnorm
-   wpL = w0*P0 + w1*P1 + w2*P2
-
-   ! Compute flux at the right side of i-1/2
-   ! First stencil
-   P0 = (2.0*qpp - 7.0*qp + 11.0*q0)/6.0
-   b0 = (13.0/12.0)*(qpp - 2.0*qp + q0)**2 + 0.25*(qpp - 4.0*qp + 3.0*q0)**2
-   !b0 = 0.1*abs(qpp-3.0*qp+2.0*q0) + 1.5*abs(qpp-2.0*qp+q0)
-
-   ! Second stencil
-   P1 = (-qp + 5.0*q0 + 2.0*qm)/6.0
-   b1 = (13.0/12.0)*(qp - 2.0*q0 + qm)**2 + 0.25*(qp - qm)**2
-   !b1 = 0.1*abs(-qp+qm) + 1.5*abs(qp-2.0*q0+qm)
-
-   ! Third stencil
-   P2 = (2.0*q0 + 5.0*qm - qmm)/6.0
-   b2 = (13.0/12.0)*(q0 - 2.0*qm + qmm)**2 + 0.25*(3.0*q0 - 4.0*qm + qmm)**2
-   !b2 = 0.1*abs(-q0+qm) + 1.5*abs(q0-2.0*qm+qmm)
-
-   ! Alpha values
-   !tau = abs(b2-b0)
-   tau = abs(qpp - 4.0*qp + 6.0*q0 - 4.0*qm + qmm)
-   w0 = d0*(1.0 + (tau/(b0+eps))**r)
-   w1 = d1*(1.0 + (tau/(b1+eps))**r)
-   w2 = d2*(1.0 + (tau/(b2+eps))**r)
-
-   !tau = abs(sqrt(b2)-sqrt(b0))
-   !w0 = d0*(1.0 + (tau/(sqrt(b0)+eps))**r)
-   !w1 = d1*(1.0 + (tau/(sqrt(b1)+eps))**r)
-   !w2 = d2*(1.0 + (tau/(sqrt(b2)+eps))**r)
-
-   !a0 = d0 + c0*tau/(b0**2+eps)
-   !a1 = d1 + c1*tau/(b1**2+eps)
-   !a2 = d2 + c2*tau/(b2**2+eps)
-
-   !O0 = a2 ; O2 = a1
-   !t2 = (abs(qp - 2.0*q0 + qm))**3
-   !O1 = 1.0 + t2/((max(abs(qp-qpp),abs(qmm-qm)))**2+epsO)
-
-   !w0 = a0/O0 ; w1 = a1/O1 ; w2 = a2/O2
-
-   wnorm = w0+w1+w2
-   w0 = w0/wnorm ; w1 = w1/wnorm ; w2 = w2/wnorm
-   wmR = w0*P0 + w1*P1 + w2*P2
-
-   !call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
-   call PP_limiter_w50(q0, wmR, wpL, h_min)
-
-end subroutine weno5_reconstruction_interface_v0
-
-subroutine weno5_reconstruction_interface_v1(wmR, wpL, qmm, qm, q0, qp, qpp, h_min)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
-   real, intent(in)  :: h_min     !< The minimum thickness
-   real, intent(out) :: wmR, wpL
-
-   real :: P0, P1, P2         ! reconstructed polynomials
-   real :: b0, b1, b2         ! smoothness indicator
-   real :: w0, w1, w2         ! nonlinear weights
-   real :: d0, d1, d2         ! linear weights
-   real :: a0, a1, a2
-   real :: eps,  wnorm, tau
-   integer, parameter :: r = 2
-   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-   real :: qul, qmd, qlc, qmin, qmax, md
-
-   ! linear weights
-   d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
-   eps = 1.0e-40
-
-   ! Compute flux at left side of i+1/2
-   ! First stencil
-   P0 = (2.0*qmm - 7.0*qm + 11.0*q0)/6.0
-   b0 = (13.0/12.0)*(qmm - 2.0*qm + q0)**2 + 0.25*(qmm - 4.0*qm + 3.0*q0)**2
-
-   ! Second stencil
-   P1 = (-qm + 5.0*q0 + 2.0*qp)/6.0
-   b1 = (13.0/12.0)*(qm - 2.0*q0 + qp)**2 + 0.25*(qm - qp)**2
-
-   ! Third stencil
-   P2 = (2.0*q0 + 5.0*qp - qpp)/6.0
-   b2 = (13.0/12.0)*(q0 - 2.0*qp + qpp)**2 + 0.25*(3.0*q0 - 4.0*qp + qpp)**2
-
-   ! Alpha values
-   tau = abs(b2-b0)
-   w0 = d0!*(1.0 + (tau/(b0+eps))**r)
-   w1 = d1!*(1.0 + (tau/(b1+eps))**r)
-   w2 = d2!*(1.0 + (tau/(b2+eps))**r)
-
-   wnorm = w0+w1+w2
-   w0 = w0/wnorm ; w1 = w1/wnorm ; w2 = w2/wnorm
-   wpL = w0*P0 + w1*P1 + w2*P2
-
-   !wpL = (2.0*qmm - 13.0*qm + 47.0*q0 + 27.0*qp - 3.0*qpp)/60.0
-
-   ! Monotonicity Preserving
-   dm1 = qmm - 2.0*qm + q0
-   dd0 = qp  - 2.0*q0 + qm
-   dd1 = qpp - 2.0*qp + q0
-
-   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
-   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
-   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
-   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   qul = q0 + 2.0*(q0-qm)
-   qmd = 0.5*(q0 + qp) - 0.5*dm4p
-   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
-
-   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-
-   md = 0.5*(sign(1.0,qmin-wpL) + sign(1.0,qmax-wpL))*min(abs(qmin-wpL),abs(qmax-wpL))
-   !wpL = wpL + md
-
-   ! Compute flux at the right side of i-1/2
-   ! First stencil
-   P0 = (2.0*qpp - 7.0*qp + 11.0*q0)/6.0
-   b0 = (13.0/12.0)*(qpp - 2.0*qp + q0)**2 + 0.25*(qpp - 4.0*qp + 3.0*q0)**2
-
-   ! Second stencil
-   P1 = (-qp + 5.0*q0 + 2.0*qm)/6.0
-   b1 = (13.0/12.0)*(qp - 2.0*q0 + qm)**2 + 0.25*(qp - qm)**2
-
-   ! Third stencil
-   P2 = (2.0*q0 + 5.0*qm - qmm)/6.0
-   b2 = (13.0/12.0)*(q0 - 2.0*qm + qmm)**2 + 0.25*(3.0*q0 - 4.0*qm + qmm)**2
-
-   ! Alpha values
-   tau = abs(b2-b0)
-   w0 = d0!*(1.0 + (tau/(b0+eps))**r)
-   w1 = d1!*(1.0 + (tau/(b1+eps))**r)
-   w2 = d2!*(1.0 + (tau/(b2+eps))**r)
-
-   wnorm = w0+w1+w2
-   w0 = w0/wnorm ; w1 = w1/wnorm ; w2 = w2/wnorm
-   wmR = w0*P0 + w1*P1 + w2*P2
-
-   !wmR = (2.0*qpp - 13.0*qp + 47.0*q0 + 27.0*qm - 3.0*qmm)/60.0
-
-   ! Monotonicity Preserving
-   dm1 = qpp - 2.0*qp + q0
-   dd0 = qm  - 2.0*q0 + qp
-   dd1 = qmm - 2.0*qm + q0
-
-   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
-   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
-   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
-   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   qul = q0 + 2.0*(q0-qp)
-   qmd = 0.5*(q0 + qm) - 0.5*dm4p
-   qlc = 0.5*(3.0*q0-qp) + (4.0/3.0)*dm4m
-
-   qmin = max(min(q0,qm,qmd),min(q0,qul,qlc))
-   qmax = min(max(q0,qm,qmd),max(q0,qul,qlc))
-
-   md = 0.5*(sign(1.0,qmin-wmR) + sign(1.0,qmax-wmR))*min(abs(qmin-wmR),abs(qmax-wmR))
-   !wmR = wmR + md
-
-   !call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
-   call PP_limiter_w50(q0, wmR, wpL, h_min)
-
-end subroutine weno5_reconstruction_interface_v1
-
-!> 5th-order weno z-type reconstruction flux
-subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
-   real, intent(in)  :: h_min     !< The minimum thickness
-   real, intent(out) :: wmR, wpL
-   
-   call weno5_reconstruction_tmp(wpL, qmm, qm, q0, qp, qpp)
-   call weno5_reconstruction_tmp(wmR, qpp, qp, q0, qm, qmm)
-
-   call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
-
-end subroutine weno5_reconstruction_interface
-
-!> 5th-order weno z-type reconstruction flux
-subroutine weno5_reconstruction_tmp(wpL, qmm, qm, q0, qp, qpp)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
-   real, intent(out) :: wpL
-
-   real :: P0, P1, P2         ! reconstructed polynomials
-   real :: b0, b1, b2         ! smoothness indicator
-   real :: w0, w1, w2         ! nonlinear weights
-   real :: d0, d1, d2         ! linear weights
-   real :: a0, a1, a2
-   real :: eps,  wnorm, tau
-   integer, parameter :: r = 2
-   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-   real :: qul, qmd, qlc, qmin, qmax, md
-
-   ! linear weights
-   d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
-   eps = 1.0e-20
-
-   ! Compute flux at left side of i+1/2
-   ! First stencil
-   P0 = (2.0*qmm - 7.0*qm + 11.0*q0)/6.0
-   b0 = (13.0/12.0)*(qmm - 2.0*qm + q0)**2 + 0.25*(qmm - 4.0*qm + 3.0*q0)**2
-
-   ! Second stencil
-   P1 = (-qm + 5.0*q0 + 2.0*qp)/6.0
-   b1 = (13.0/12.0)*(qm - 2.0*q0 + qp)**2 + 0.25*(qm - qp)**2
-
-   ! Third stencil
-   P2 = (2.0*q0 + 5.0*qp - qpp)/6.0
-   b2 = (13.0/12.0)*(q0 - 2.0*qp + qpp)**2 + 0.25*(3.0*q0 - 4.0*qp + qpp)**2
-
-   ! Alpha values
-   tau = abs(b2-b0)
-   w0 = d0*(1.0 + (tau/(b0+eps))**r)
-   w1 = d1*(1.0 + (tau/(b1+eps))**r)
-   w2 = d2*(1.0 + (tau/(b2+eps))**r)
-
-   wnorm = w0+w1+w2
-   wpL = (w0*P0 + w1*P1 + w2*P2)/wnorm
-
-   ! Monotonicity Preserving
-   dm1 = qmm - 2.0*qm + q0
-   dd0 = qp  - 2.0*q0 + qm
-   dd1 = qpp - 2.0*qp + q0
-
-   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
-   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
-   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
-   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   qul = q0 + 2.0*(q0-qm)
-   qmd = 0.5*(q0 + qp) - 0.5*dm4p
-   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
-
-   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-
-   md = 0.5*(sign(1.0,qmin-wpL) + sign(1.0,qmax-wpL))*min(abs(qmin-wpL),abs(qmax-wpL))
-   wpL = wpL + md
-
-end subroutine weno5_reconstruction_tmp
-
-!> 3th-order weno z-type reconstruction flux
-subroutine weno3_reconstruction_interface_v0(wmR, wpL, qmm, qm, q0, qp, qpp, h_min)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
-   real, intent(in)  :: h_min     !< The minimum thickness
-   real, intent(out) :: wmR, wpL
-
-   real :: P1, P2         ! reconstructed polynomials
-   real :: b1, b2         ! smoothness indicator
-   real :: w1, w2         ! nonlinear weights
-   real :: d1, d2         ! linear weights
-   real :: eps,  wnorm, tau
-   integer, parameter :: r = 2
-   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-   real :: qul, qmd, qlc, qmin, qmax, md
-
-   ! Compute flux at the right side of i+1/2
-   ! reconstructed polynomials
-   P1 = 0.5*(-qm + 3.0*q0)
-   P2 = 0.5*(q0 + qp)
-
-   ! smoothness indicator
-   b1 = (q0-qm)*(q0-qm)
-   b2 = (qp-q0)*(qp-q0)
-
-   d1 = 1.0/3.0 ; d2 = 2.0/3.0
-
-   ! Alpha values
-   eps = 1.0e-40
-   tau = abs(b1-b2)
-   w1 = d1!*(1.0 + (tau/(b1+eps))**2)
-   w2 = d2!*(1.0 + (tau/(b2+eps))**2)
-   !w1 = d1!*(1.0 + (tau/(b1+eps)**2))
-   !w2 = d2!*(1.0 + (tau/(b2+eps)**2))
-
-   ! Normalization
-   wnorm = w1+w2
-   w1 = w1/wnorm ; w2 = w2/wnorm
-   wpL = w1*P1 + w2*P2
-
-   ! Monotonicity Preserving
-   dm1 = qmm - 2.0*qm + q0
-   dd0 = qp  - 2.0*q0 + qm
-   dd1 = qpp - 2.0*qp + q0
-
-   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
-   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
-   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
-   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   qul = q0 + 2.0*(q0-qm)
-   qmd = 0.5*(q0 + qp) - 0.5*dm4p
-   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
-
-   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-
-   md = 0.5*(sign(1.0,qmin-wpL) + sign(1.0,qmax-wpL))*min(abs(qmin-wpL),abs(qmax-wpL))
-   !wpL = wpL + md
-
-   ! Compute flux at the right side of i-1/2
-   ! reconstructed polynomials
-   P1 = 0.5*(-qp + 3.0*q0)
-   P2 = 0.5*(q0 + qm)
-
-   ! smoothness indicator
-   b1 = (q0-qp)*(q0-qp)
-   b2 = (qm-q0)*(qm-q0)
-
-   d1 = 1.0/3.0 ; d2 = 2.0/3.0
-
-   ! Alpha values
-   tau = abs(b1-b2)
-   w1 = d1!*(1.0 + (tau/(b1+eps))**2)
-   w2 = d2!*(1.0 + (tau/(b2+eps))**2)
-   wnorm = w1+w2
-   w1 = w1/wnorm ; w2 = w2/wnorm
-   !print*,'w1, w2 = ', w1, w2
-   !print*,'b1, b2 = ', b1, b2
-   !print*,'w1, w2 = ', w1, w2
-   !if (w1 > 1.0 .or. w2 > 1.0) print*,'w1, w2 = ', w1, w2, b1, b2
-   !w1 = d1!*(1.0 + (tau/(b1+eps)**2))
-   !w2 = d2!*(1.0 + (tau/(b2+eps)**2))
-
-   ! Normalization
-   !wnorm = w1+w2
-   !wmR = (w1*P1 + w2*P2)/wnorm
-   !w1 = w1/wnorm ; w2 = w2/wnorm
-   wmR = w1*P1 + w2*P2
-
-   ! Monotonicity Preserving
-   dm1 = qpp - 2.0*qp + q0
-   dd0 = qm  - 2.0*q0 + qp
-   dd1 = qmm - 2.0*qm + q0
-
-   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
-   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
-   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
-   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   qul = q0 + 2.0*(q0-qp)
-   qmd = 0.5*(q0 + qm) - 0.5*dm4p
-   qlc = 0.5*(3.0*q0-qp) + (4.0/3.0)*dm4m
-
-   qmin = max(min(q0,qm,qmd),min(q0,qul,qlc))
-   qmax = min(max(q0,qm,qmd),max(q0,qul,qlc))
-
-   md = 0.5*(sign(1.0,qmin-wmR) + sign(1.0,qmax-wmR))*min(abs(qmin-wmR),abs(qmax-wmR))
-   !wmR = wmR + md
-
-   !call PP_limiter_w5(q0, wmR, wpL, h_min)
-   !call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
-   call PP_limiter_w50(q0, wmR, wpL, h_min)
-
-end subroutine weno3_reconstruction_interface_v0
-
-!> 5th-order weno z-type reconstruction flux
-subroutine weno3_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp,qp3, h_min)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp, qp3 !< tracer concentration for 5-stencil wide
-   real, intent(in)  :: h_min     !< The minimum thickness
-   real, intent(out) :: wmR, wpL
-
-   real :: wpl1, wpl2, wmr1, wmr2
-
-   call weno3_reconstruction_tmp(wpl1, qmm, qm, q0, qp, qpp)
-   call weno3_reconstruction_tmp(wmr1, qpp, qp, q0, qm, qmm)
-   call PP_limiter_w5(qm, q0, qp, wmr1, wpl1, h_min)
-   wpL = wpl1
-
-   call weno3_reconstruction_tmp(wpl2, qp3, qpp, qp, q0, qm)
-   call weno3_reconstruction_tmp(wmr2, qm, q0, qp, qpp, qp3)
-   call PP_limiter_w5(qpp, qp, qm, wmr1, wpl1, h_min)
-   wmR = wpl2
-
-   !call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
-   !call PP_limiter_w51(q0,qp, wmR, wpL, h_min)
-
-end subroutine weno3_reconstruction_interface
-
-!> 3th-order weno z-type reconstruction flux
-subroutine weno3_reconstruction_tmp(wpL, qmm, qm, q0, qp, qpp)
-
-   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
-   real, intent(out) :: wpL
-
-   real :: P1, P2         ! reconstructed polynomials
-   real :: b1, b2         ! smoothness indicator
-   real :: w1, w2         ! nonlinear weights
-   real :: d1, d2         ! linear weights
-   real :: eps,  wnorm, tau
-   integer, parameter :: r = 2
-   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-   real :: qul, qmd, qlc, qmin, qmax, md
-
-   ! Compute flux at the right side of i+1/2
-   ! reconstructed polynomials
-   P1 = 0.5*(-qm + 3.0*q0)
-   P2 = 0.5*(q0 + qp)
-
-   ! smoothness indicator
-   b1 = (q0-qm)*(q0-qm)
-   b2 = (qp-q0)*(qp-q0)
-
-   d1 = 1.0/3.0 ; d2 = 2.0/3.0
-
-   ! Alpha values
-   eps = 1.0e-6
-   tau = abs(b2-b1)
-   w1 = d1*(1.0 + (tau/(b1+eps))**2)
-   w2 = d2*(1.0 + (tau/(b2+eps))**2)
-
-   ! Normalization
-   wnorm = w1+w2
-   wpL = (w1*P1 + w2*P2)/wnorm
-
-   ! Monotonicity Preserving
-   dm1 = qmm - 2.0*qm + q0
-   dd0 = qp  - 2.0*q0 + qm
-   dd1 = qpp - 2.0*qp + q0
-
-   mm1 = 0.5*(sign(1.0,4.0*dd0-dd1) + sign(1.0,4.0*dd1-dd0))*min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
-   mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
-   dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1))*min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
-   mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
-   dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
-
-   qul = q0 + 2.0*(q0-qm)
-   qmd = 0.5*(q0 + qp) - 0.5*dm4p
-   qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
-
-   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-
-   md = 0.5*(sign(1.0,qmin-wpL) + sign(1.0,qmax-wpL))*min(abs(qmin-wpL),abs(qmax-wpL))
-   wpL = wpL + md
-
-end subroutine weno3_reconstruction_tmp
-
-!> This is the subroutine for the positivity-preserving limiter
-!! It limits the WENO reconstruction to give a reconstruction
-!! that is positive-definite.
-subroutine PP_limiter_w50(q0, wmr, wpl, h_min)
-
-  real, intent(in) :: q0 !< tracer concentration in cell i
-  real, intent(inout) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
-  real, intent(in)  :: h_min     !< The minimum thickness
-
-  real :: curv, dh, scale
-
-  curv = 3.0*((wmr + wpl) - 2.0*q0)
-  if (curv > 0.0) then ! Only minima are limited.
-    dh = wpl - wmr
-    if (abs(dh) < curv) then ! The parabola's minimum is within the cell.
-      if (q0 <= h_min) then
-        wpl = q0 ; wmr = q0
-      elseif (12.0*curv*(q0 - h_min) < (curv**2 + 3.0*dh**2)) then
-        ! The minimum value is h_in - (curv^2 + 3*dh^2)/(12*curv), and must
-        ! be limited in this case.  0 < scale < 1.
-        scale = 12.0*curv*(q0 - h_min) / (curv**2 + 3.0*dh**2)
-        wmr = q0 + scale*(wmr - q0)
-        wpl = q0 + scale*(wpl - q0)
-      endif
-    endif
-  endif
-
-end subroutine PP_limiter_w50
-
-!> This is the subroutine for the maximum-principle preserving limiter
-subroutine PP_limiter_w5(qm, q0, qp, wmr, wpl, h_min)
-
-   real, intent(in) :: qm, q0, qp !< tracer concentration in cell i
-   real, intent(inout) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
-   real, intent(in)  :: h_min     !< The minimum thickness
-
-   real :: qmin, qmax, theta, eps
-   real :: a(5), Fmin(5), Fmax(5)
-   integer :: i
-   real :: curv, dq, scale, wpl0, wmr0, T_min, a6
-
-   Fmin(1) = 1.0 ; Fmax(1) = 1.0
-   Fmin(2) = -0.5 ; Fmax(2) = 0.5
-   Fmin(3) = 0.0 ; Fmax(3) = 0.25
-   Fmin(4) = -1.0/8.0 ; Fmax(4) = 1.0/8.0
-   Fmin(5) = 0.0 ; Fmax(5) = 1.0/16.0
-
-   a(1) = (qm + 298.0*q0 + qp - 54.0*(wmr + wpl))/192.0
-   a(2) = (qm - qp - 10.0*(wmr - wpl))/8.0
-   a(3) = (-(qm + 58.0*q0 + qp) + 30.0*(wmr + wpl))/8.0
-   a(4) = (-qm + qp + 2.0*(wmr - wpl))
-   a(5) = (5.0*qm + 50.0*q0 + 5.0*qp - 30.0*(wmr + wpl))/12.0
-
-   qmin = 0.0 
-   do i = 1,5
-     qmin = qmin + a(i)*0.5*((1.0-sign(1.0,a(i)))*Fmax(i) + (1.0+sign(1.0,a(i)))*Fmin(i))
-   enddo
-
-   eps = min(1.0e-13, q0)
-   theta = min((eps-q0)/(qmin-q0), 1.0)
-   if (theta < 0.0) then
-     theta = 0.0
-   endif
-
-   wpl = theta*(wpl - q0) + q0
-
-   ! i-1/2
-   a(1) = (qp + 298.0*q0 + qm - 54.0*(wmr + wpl))/192.0
-   a(2) = (qp - qm - 10.0*(wmr - wpl))/8.0
-   a(3) = (-(qp + 58.0*q0 + qm) + 30.0*(wmr + wpl))/8.0
-   a(4) = (-qp + qm + 2.0*(wmr - wpl))
-   a(5) = (5.0*qp + 50.0*q0 + 5.0*qm - 30.0*(wmr + wpl))/12.0
-
-   qmin = 0.0
-   do i = 1,5
-     qmin = qmin + a(i)*0.5*((1.0-sign(1.0,a(i)))*Fmax(i) + (1.0+sign(1.0,a(i)))*Fmin(i))
-   enddo
-
-   eps = min(1.0e-13, q0)
-   theta = min((eps-q0)/(qmin-q0), 1.0)
-   if (theta < 0.0) then
-     theta = 0.0
-   endif
-
-   wmr = theta*(wmr - q0) + q0
-
-end subroutine PP_limiter_w5
 
 !> Return the maximum ratio of a/b or maxrat.
 function ratio_max(a, b, maxrat) result(ratio)
@@ -3686,6 +3094,10 @@ subroutine continuity_PPM_init(Time, G, GV, US, param_file, diag, CS)
                  "mode where its minimal stencil is useful.", default=.false.)
   call get_param(param_file, mdl, "WENO5_CONTINUITY", CS%weno5, &
                  "If true, CONTINUITY_PPM becomes a weno5 "//&
+                 "continuity solver.  This scheme is more accurate but "//&
+                 "might have CFL restriction.", default=.false.)
+  call get_param(param_file, mdl, "WENO7_CONTINUITY", CS%weno7, &
+                 "If true, CONTINUITY_PPM becomes a weno7 "//&
                  "continuity solver.  This scheme is more accurate but "//&
                  "might have CFL restriction.", default=.false.)
   call get_param(param_file, mdl, "ETA_TOLERANCE", CS%tol_eta, &
