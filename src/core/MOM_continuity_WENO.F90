@@ -21,6 +21,7 @@ implicit none ; private
 public weno3_reconstruction_interface
 public weno5_reconstruction_interface
 public weno7_reconstruction_interface
+public WENO_limiter
 
 contains
 
@@ -42,6 +43,7 @@ subroutine weno3_reconstruction_interface(wmR, wpL, qm, q0, qp, h_min, ds)
    ! linear weights
    d1 = 1.0/3.0 ; d2 = 2.0/3.0
    eps = 1.0e-20
+   !eps = ds**2
 
    ! Compute flux at the right side of i+1/2
    ! reconstructed polynomials
@@ -53,10 +55,9 @@ subroutine weno3_reconstruction_interface(wmR, wpL, qm, q0, qp, h_min, ds)
    b2 = (qp-q0)*(qp-q0)
 
    ! Alpha values
-   !tau = abs(b1-b2)
-   tau = abs(qm - 2.0*q0 + qp)
-   w1 = d1*(1.0 + (tau/(b1+eps))**2)
-   w2 = d2*(1.0 + (tau/(b2+eps))**2)
+   tau = abs(b1-b2)
+   w1 = d1*(1.0 + (tau/(b1+eps))**r)
+   w2 = d2*(1.0 + (tau/(b2+eps))**r)
 
    ! Normalization
    wnorm = w1+w2
@@ -71,20 +72,16 @@ subroutine weno3_reconstruction_interface(wmR, wpL, qm, q0, qp, h_min, ds)
    b1 = (q0-qp)*(q0-qp)
    b2 = (qm-q0)*(qm-q0)
 
-   d1 = 1.0/3.0 ; d2 = 2.0/3.0
-
    ! Alpha values
-   !tau = abs(b1-b2)
-   tau = abs(qp - 2.0*q0 + qm)
-   w1 = d1*(1.0 + (tau/(b1+eps))**2)
-   w2 = d2*(1.0 + (tau/(b2+eps))**2)
+   tau = abs(b1-b2)
+   w1 = d1*(1.0 + (tau/(b1+eps))**r)
+   w2 = d2*(1.0 + (tau/(b2+eps))**r)
 
    ! Normalization
    wnorm = w1+w2
    wmR = (w1*P1 + w2*P2)/wnorm
 
-   !call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
-   call PP_limiter_w50(q0, wmR, wpL, h_min)
+   !call PP_limiter(q0, wmR, wpL, h_min)
 
 end subroutine weno3_reconstruction_interface
 
@@ -107,7 +104,7 @@ subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min,
    ! linear weights
    d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
    eps = 1.0e-20
-   !eps = ds**5
+   !eps = ds**2
 
    ! Compute flux at left side of i+1/2
    ! First stencil
@@ -123,8 +120,7 @@ subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min,
    b2 = (13.0/12.0)*(q0 - 2.0*qp + qpp)**2 + 0.25*(3.0*q0 - 4.0*qp + qpp)**2
 
    ! Alpha values
-   !tau = abs(b2-b0)
-   tau = abs(qmm - 4.0*qm + 6.0*q0 - 4.0*qp + qpp)
+   tau = abs(b2-b0)
    w0 = d0*(1.0 + (tau/(b0+eps))**r)
    w1 = d1*(1.0 + (tau/(b1+eps))**r)
    w2 = d2*(1.0 + (tau/(b2+eps))**r)
@@ -146,8 +142,7 @@ subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min,
    b2 = (13.0/12.0)*(q0 - 2.0*qm + qmm)**2 + 0.25*(3.0*q0 - 4.0*qm + qmm)**2
 
    ! Alpha values
-   !tau = abs(b2-b0)
-   tau = abs(qpp - 4.0*qp + 6.0*q0 - 4.0*qm + qmm)
+   tau = abs(b2-b0)
    w0 = d0*(1.0 + (tau/(b0+eps))**r)
    w1 = d1*(1.0 + (tau/(b1+eps))**r)
    w2 = d2*(1.0 + (tau/(b2+eps))**r)
@@ -155,8 +150,7 @@ subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min,
    wnorm = w0+w1+w2
    wmR = (w0*P0 + w1*P1 + w2*P2)/wnorm
 
-   !call PP_limiter_w5(qm, q0, qp, wmR, wpL, h_min)
-   call PP_limiter_w50(q0, wmR, wpL, h_min)
+   !call PP_limiter(q0, wmR, wpL, h_min)
 
 end subroutine weno5_reconstruction_interface
 
@@ -179,6 +173,7 @@ subroutine weno7_reconstruction_interface(wmR, wpL, qm3, qm2, qm1, q0, qp1, qp2,
    ! linear weights
    d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
    eps = 1.0e-20
+   !eps = ds**4
 
    ! Compute flux at the right side of i+1/2
    ! 1st stencil
@@ -206,8 +201,8 @@ subroutine weno7_reconstruction_interface(wmR, wpL, qm3, qm2, qm1, q0, qp1, qp2,
            + qp2*(7043.0*qp2 - 3882.0*qp3) + 547.0*qp3**2
 
    ! Alpha values
-   !tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
-   tau = abs(qm3 - 6.0*qm2 + 15.0*qm1 - 20.0*q0 + 15.0*qp1 - 6.0*qp2 + qp3)
+   tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
+   !tau = abs(b3 - b0)
    w0 = d0*(1.0 + (tau/(b0+eps))**r)
    w1 = d1*(1.0 + (tau/(b1+eps))**r)
    w2 = d2*(1.0 + (tau/(b2+eps))**r)
@@ -243,8 +238,8 @@ subroutine weno7_reconstruction_interface(wmR, wpL, qm3, qm2, qm1, q0, qp1, qp2,
            + qm2*(7043.0*qm2 - 3882.0*qm3) + 547.0*qm3**2
 
    ! Alpha values
-   !tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
-   tau = abs(qp3 - 6.0*qp2 + 15.0*qp1 - 20.0*q0 + 15.0*qm1 - 6.0*qm2 + qm3)
+   tau = abs(b3 + 3.0 * b2 - 3.0 * b1 - b0)
+   !tau = abs(b3 - b0)
    w0 = d0*(1.0 + (tau/(b0+eps))**r)
    w1 = d1*(1.0 + (tau/(b1+eps))**r)
    w2 = d2*(1.0 + (tau/(b2+eps))**r)
@@ -254,97 +249,112 @@ subroutine weno7_reconstruction_interface(wmR, wpL, qm3, qm2, qm1, q0, qp1, qp2,
    wnorm = w0+w1+w2+w3
    wmR = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
 
-   call PP_limiter_w50(q0, wmR, wpL, h_min)
+   !call PP_limiter(q0, wmR, wpL, h_min)
 
 end subroutine weno7_reconstruction_interface
 
 !> This is the subroutine for the positivity-preserving limiter
 !! It limits the WENO reconstruction to give a reconstruction
 !! that is positive-definite.
-subroutine PP_limiter_w50(q0, wmr, wpl, h_min)
+subroutine PP_limiter0(q0, wmr, wpl, h_min)
 
-  real, intent(in) :: q0 !< tracer concentration in cell i
-  real, intent(inout) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
-  real, intent(in)  :: h_min     !< The minimum thickness
+   real, intent(in) :: q0 !< tracer concentration in cell i
+   real, intent(inout) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
+   real, intent(in)  :: h_min     !< The minimum thickness
 
-  real :: curv, dh, scale
+   real :: qmin, theta, eps, a(3)
+   real :: theta0, theta1
+   integer :: i
+   real, parameter :: Fmin(3) = (/ 1.0,  -0.5,  0.0 /)
+   real, parameter :: Fmax(3) = (/ 1.0,   0.5,  0.25 /)
 
-  curv = 3.0*((wmr + wpl) - 2.0*q0)
-  if (curv > 0.0) then ! Only minima are limited.
-    dh = wpl - wmr
-    if (abs(dh) < curv) then ! The parabola's minimum is within the cell.
-      if (q0 <= h_min) then
-        wpl = q0 ; wmr = q0
-      elseif (12.0*curv*(q0 - h_min) < (curv**2 + 3.0*dh**2)) then
-        ! The minimum value is h_in - (curv^2 + 3*dh^2)/(12*curv), and must
-        ! be limited in this case.  0 < scale < 1.
-        scale = 12.0*curv*(q0 - h_min) / (curv**2 + 3.0*dh**2)
-        wmr = q0 + scale*(wmr - q0)
-        wpl = q0 + scale*(wpl - q0)
-      endif
-    endif
-  endif
+   eps = min(h_min, q0)
 
-end subroutine PP_limiter_w50
+   a(1) = (6.0*q0 - (wmr + wpl))/4.0
+   a(2) = (wpl - wmr)
+   a(3) = -6.0*q0 + 3.0*(wmr + wpl)
 
-!> This is the subroutine for the maximum-principle preserving limiter
-subroutine PP_limiter_w5(qm, q0, qp, wmr, wpl, h_min)
+   qmin = 0.0
+   do i = 1,3
+     qmin = qmin + a(i)*(0.5*(1.0-sign(1.0,a(i)))*Fmax(i) + 0.5*(1.0+sign(1.0,a(i)))*Fmin(i))
+   enddo
 
-   real, intent(in) :: qm, q0, qp !< tracer concentration in cell i
+   theta = min(((q0-eps)/(q0-qmin)), 1.0)
+   wpl = theta*(wpl - q0) + q0
+   wmr = theta*(wmr - q0) + q0
+
+end subroutine PP_limiter0
+
+!> This is the subroutine for the positivity-preserving limiter
+!! It limits the WENO reconstruction to give a reconstruction
+!! that is positive-definite.
+subroutine PP_limiter(q0, wmr, wpl, h_min)
+
+   real, intent(in) :: q0 !< tracer concentration in cell i
    real, intent(inout) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
    real, intent(in)  :: h_min     !< The minimum thickness
 
    real :: qmin, qmax, theta, eps
-   real :: a(5), Fmin(5), Fmax(5)
-   integer :: i
-   real :: curv, dq, scale, wpl0, wmr0, T_min, a6
+   real :: w0, P0
 
-   Fmin(1) = 1.0 ; Fmax(1) = 1.0
-   Fmin(2) = -0.5 ; Fmax(2) = 0.5
-   Fmin(3) = 0.0 ; Fmax(3) = 0.25
-   Fmin(4) = -1.0/8.0 ; Fmax(4) = 1.0/8.0
-   Fmin(5) = 0.0 ; Fmax(5) = 1.0/16.0
+   w0 = 5.0/18.0
+   P0 = (q0 - w0*(wmr + wpl))/(1.0 - 2.0*w0)
+   qmin = min(wmr, P0, wpl)
 
-   a(1) = (qm + 298.0*q0 + qp - 54.0*(wmr + wpl))/192.0
-   a(2) = (qm - qp - 10.0*(wmr - wpl))/8.0
-   a(3) = (-(qm + 58.0*q0 + qp) + 30.0*(wmr + wpl))/8.0
-   a(4) = (-qm + qp + 2.0*(wmr - wpl))
-   a(5) = (5.0*qm + 50.0*q0 + 5.0*qp - 30.0*(wmr + wpl))/12.0
-
-   qmin = 0.0 
-   do i = 1,5
-     qmin = qmin + a(i)*0.5*((1.0-sign(1.0,a(i)))*Fmax(i) + (1.0+sign(1.0,a(i)))*Fmin(i))
-   enddo
-
-   eps = min(1.0e-13, q0)
-   theta = min((eps-q0)/(qmin-q0), 1.0)
-   if (theta < 0.0) then
-     theta = 0.0
-   endif
-
+   eps = min(h_min, q0)
+   theta = min(((q0-eps)/(q0-qmin)), 1.0)
    wpl = theta*(wpl - q0) + q0
-
-   ! i-1/2
-   a(1) = (qp + 298.0*q0 + qm - 54.0*(wmr + wpl))/192.0
-   a(2) = (qp - qm - 10.0*(wmr - wpl))/8.0
-   a(3) = (-(qp + 58.0*q0 + qm) + 30.0*(wmr + wpl))/8.0
-   a(4) = (-qp + qm + 2.0*(wmr - wpl))
-   a(5) = (5.0*qp + 50.0*q0 + 5.0*qm - 30.0*(wmr + wpl))/12.0
-
-   qmin = 0.0
-   do i = 1,5
-     qmin = qmin + a(i)*0.5*((1.0-sign(1.0,a(i)))*Fmax(i) + (1.0+sign(1.0,a(i)))*Fmin(i))
-   enddo
-
-   eps = min(1.0e-13, q0)
-   theta = min((eps-q0)/(qmin-q0), 1.0)
-   if (theta < 0.0) then
-     theta = 0.0
-   endif
-
    wmr = theta*(wmr - q0) + q0
 
-end subroutine PP_limiter_w5
+end subroutine PP_limiter
+
+!> This is the subroutine for the positivity-preserving limiter
+!! It limits the WENO reconstruction to give a reconstruction
+!! that is positive-definite.
+subroutine WENO_limiter(h_in, wmr, wpl, h_min, G, iis, iie, jis, jie)
+  type(ocean_grid_type),             intent(in)  :: G    !< Ocean's grid structure.
+  real, dimension(SZI_(G),SZJ_(G)),  intent(in)  :: h_in !< Layer thickness [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: wmr !< Left thickness in the reconstruction [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: wpl !< Right thickness in the reconstruction [H ~> m or kg m-2].
+  real,                              intent(in)  :: h_min !< The minimum thickness
+                    !! that can be obtained by a concave parabolic fit [H ~> m or kg m-2]
+  integer,                           intent(in)  :: iis      !< Start of i index range.
+  integer,                           intent(in)  :: iie      !< End of i index range.
+  integer,                           intent(in)  :: jis      !< Start of j index range.
+  integer,                           intent(in)  :: jie      !< End of j index range.
+
+  real :: qmin, theta, eps, a(3)
+  real, parameter :: Fmin(3) = (/ 1.0,  -0.5,  0.0 /)
+  real, parameter :: Fmax(3) = (/ 1.0,   0.5,  0.25 /)
+  integer :: i,j,k
+  real :: w0, P0
+
+  w0 = 5.0/18.0
+
+  do j=jis,jie ; do i=iis,iie
+    ! This limiter prevents undershooting minima within the domain with
+    ! values less than h_min.
+    eps = min(h_min, h_in(i,j))
+
+    a(1) = (6.0*h_in(i,j) - (wmr(i,j) + wpl(i,j)))/4.0
+    a(2) = (wpl(i,j) - wmr(i,j))
+    a(3) = -6.0*h_in(i,j) + 3.0*(wmr(i,j) + wpl(i,j))
+
+    qmin = 0.0
+    do k = 1,3
+      qmin = qmin + a(k)*(0.5*(1.0-sign(1.0,a(k)))*Fmax(k) + 0.5*(1.0+sign(1.0,a(k)))*Fmin(k))
+    enddo
+
+    !P0 = (h_in(i,j) - w0*(wmr(i,j) + wpl(i,j)))/(1.0 - 2.0*w0)
+    !qmin = min(wmr(i,j), P0, wpl(i,j))
+
+    theta = min(((h_in(i,j)-eps)/(h_in(i,j)-qmin)), 1.0)
+    wpl(i,j) = theta*(wpl(i,j) - h_in(i,j)) + h_in(i,j)
+    wmr(i,j) = theta*(wmr(i,j) - h_in(i,j)) + h_in(i,j)
+
+  enddo ; enddo
+
+end subroutine WENO_limiter
 
 !> \namespace mom_continuity_weno
 !!

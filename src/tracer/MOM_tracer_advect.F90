@@ -428,6 +428,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   real :: order3, order5, order7, order9
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: u, Tmin, Tmax, wq, mu, qext, dx(6)
+  real :: area3, area5, area7
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -610,10 +611,18 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           Tm2 = T_tmp(i-2,m); Tm1 = T_tmp(i-1,m); Tc = T_tmp(i,m) ;
           Tp1 = T_tmp(i+1,m); Tp2 = T_tmp(i+2,m); Tp3 = T_tmp(i+3,m)
 
+          area3 = min(hprev(i-1,j,k),hprev(i,j,k),hprev(i+1,j,k))
+          area5 = min(area3,hprev(i-2,j,k),hprev(i+2,j,k),hprev(i+3,j,k))
+
+          if (area3 <= G%areaT(i,j)*min_h) order3 = 0.0
+          if (area5 <= G%areaT(i,j)*min_h) order5 = 0.0
+
           order7 = 0.0 ; order9 = 0.0
           if (advect_schemes(m) == ADVECT_WENO7) then
             order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
             Tm3 = T_tmp(i-3,m); Tp4 = T_tmp(i+4,m)
+            area7 = min(area5,hprev(i-3,j,k),hprev(i+4,j,k))
+            if (area7 <= G%areaT(i,j)*min_h) order7 = 0.0
           elseif (advect_schemes(m) == ADVECT_WENO9) then
             order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
             order9 = order7*G%mask2dCu(I-5,j)*G%mask2dCu(I+5,j)
@@ -631,13 +640,13 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           endif
 
           if (order9 == 1.0) then
-            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, mu, qext, Tmin, Tmax)
+            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, Tmin, Tmax)
           elseif (order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, mu, qext, Tmin, Tmax)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax)
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, mu, qext, Tmin, Tmax)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
           !elseif (order3 == 1.0) then
-          !  call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, mu, qext, Tmin, Tmax)
+          !  call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax)
           else
             !if (u >= 0.0) then
             !  wq = Tc
@@ -672,7 +681,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j) ; dx(6) = G%dxCu(I+3,j)
 
           if (order5 == 1.0) then
-            call weno5NM_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, mu, qext, Tmin, Tmax, dx)
+            call weno5NM_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, dx)
           else
             call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, u, mu, qext)
           endif
@@ -906,6 +915,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   real :: order3, order5, order7, order9
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: v, Tmin, Tmax, wq, mu, qext, dy(6)
+  real :: area3, area5, area7
 
   usePLMslope = .false.
   ! stencil for calculating slope values
@@ -1101,10 +1111,18 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           Tm2 = T_tmp(i,m,j-2); Tm1 = T_tmp(i,m,j-1); Tc = T_tmp(i,m,j) ;
           Tp1 = T_tmp(i,m,j+1); Tp2 = T_tmp(i,m,j+2); Tp3 = T_tmp(i,m,j+3)
 
+          area3 = min(hprev(i,j-1,k), hprev(i,j,k), hprev(i,j+1,k))
+          area5 = min(area3, hprev(i,j-2,k), hprev(i,j+2,k), hprev(i,j+3,k))
+
+          if (area3 <= G%areaT(i,j)*min_h) order3 = 0.0
+          if (area5 <= G%areaT(i,j)*min_h) order5 = 0.0
+
           order7 = 0.0 ; order9 = 0.0
           if (advect_schemes(m) == ADVECT_WENO7) then
             order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
             Tm3 = T_tmp(i,m,j-3); Tp4 = T_tmp(i,m,j+4)
+            area7 = min(area5, hprev(i,j-3,k), hprev(i,j+4,k))
+            if (area7 <= G%areaT(i,j)*min_h) order7 = 0.0
           elseif (advect_schemes(m) == ADVECT_WENO9) then
             order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
             order9 = order7*G%mask2dCv(i,J-5)*G%mask2dCv(i,J+5)
@@ -1121,11 +1139,11 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           endif
 
           if (order9 == 1.0) then
-            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, mu, qext, Tmin, Tmax)
+            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, Tmin, Tmax)
           elseif (order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, mu, qext, Tmin, Tmax)
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax)
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, mu, qext, Tmin, Tmax)
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
           !elseif (order3 == 1.0) then
           !  call weno3_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax)
           else
@@ -1161,7 +1179,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2) ; dy(6) = G%dyCv(i,J+3)
 
           if (order5 == 1.0) then
-            call weno5NM_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, mu, qext, Tmin, Tmax, dy)
+            call weno5NM_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, dy)
           else
             call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, v, mu, qext)
           endif

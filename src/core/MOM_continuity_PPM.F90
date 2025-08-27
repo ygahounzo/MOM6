@@ -14,7 +14,7 @@ use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : BT_cont_type, porous_barrier_type
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_continuity_WENO, only : weno3_reconstruction_interface, weno5_reconstruction_interface
-use MOM_continuity_WENO, only : weno7_reconstruction_interface
+use MOM_continuity_WENO, only : weno7_reconstruction_interface, WENO_limiter
 
 implicit none ; private
 
@@ -459,10 +459,10 @@ subroutine zonal_edge_thickness(h_in, h_W, h_E, G, GV, US, CS, OBC, LB_in)
     do k=1,nz ; do j=jsh,jeh ; do i=ish-1,ieh+1
       h_W(i,j,k) = h_in(i,j,k) ; h_E(i,j,k) = h_in(i,j,k)
     enddo ; enddo ; enddo
-  elseif (CS%weno5) then
+  elseif (CS%weno5 .or. CS%weno7) then
     !$OMP parallel do default(shared)
     do k=1,nz
-      call WENO5_reconstruction_x(h_in(:,:,k), h_W(:,:,k), h_E(:,:,k), G, LB, &
+      call WENO_reconstruction_x(h_in(:,:,k), h_W(:,:,k), h_E(:,:,k), G, LB, &
                                 2.0*GV%Angstrom_H, CS%monotonic, OBC, CS)
     enddo
   else
@@ -512,10 +512,10 @@ subroutine meridional_edge_thickness(h_in, h_S, h_N, G, GV, US, CS, OBC, LB_in)
     do k=1,nz ; do j=jsh-1,jeh+1 ; do i=ish,ieh
       h_S(i,j,k) = h_in(i,j,k) ; h_N(i,j,k) = h_in(i,j,k)
     enddo ; enddo ; enddo
-  elseif(CS%weno5) then
+  elseif(CS%weno5 .or. CS%weno7) then
     !$OMP parallel do default(shared)
     do k=1,nz
-      call WENO5_reconstruction_y(h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), G, LB, &
+      call WENO_reconstruction_y(h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), G, LB, &
                                 2.0*GV%Angstrom_H, CS%monotonic, OBC, CS)
     enddo
   else
@@ -949,7 +949,7 @@ subroutine zonal_flux_layer(u, h, h_W, h_E, uh, duhdu, visc_rem, dt, G, US, j, &
     local_open_BC = OBC%open_u_BCs_exist_globally
   endif ; endif
 
-  if (CS%weno5) then
+  if (CS%weno5 .or. CS%weno7) then
     do I=ish-1,ieh ; if (do_I(I)) then
       ! Set new values of uh and duhdu.
       if (u(I) > 0.0) then
@@ -1051,7 +1051,7 @@ subroutine zonal_flux_thickness(u, h, h_W, h_E, h_u, dt, G, GV, US, LB, vol_CFL,
   integer :: i, j, k, ish, ieh, jsh, jeh, nz, n
   ish = LB%ish ; ieh = LB%ieh ; jsh = LB%jsh ; jeh = LB%jeh ; nz = GV%ke
 
-  if (CS%weno5) then
+  if (CS%weno5 .or. CS%weno7) then
     !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
     do k=1,nz ; do j=jsh,jeh ; do I=ish-1,ieh
       if (u(I,j,k) > 0.0) then
@@ -1890,7 +1890,7 @@ subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
     local_open_BC = OBC%open_v_BCs_exist_globally
   endif ; endif
 
-  if (CS%weno5) then
+  if (CS%weno5 .or. CS%weno7) then
     do i=ish,ieh ; if (do_I(i)) then
       if (v(i) > 0.0) then
         vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * h_N(i,j)
@@ -1909,7 +1909,6 @@ subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
       if (v(i) > 0.0) then
         if (vol_CFL) then ; CFL = (v(i) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
         else ; CFL = v(i) * dt * G%IdyT(i,j) ; endif
-        !CFL = 0.0
         curv_3 = (h_S(i,j) + h_N(i,j)) - 2.0*h(i,j)
         vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * ( h_N(i,j) + CFL * &
             (0.5*(h_S(i,j) - h_N(i,j)) + curv_3*(CFL - 1.5)) )
@@ -1918,7 +1917,6 @@ subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
       elseif (v(i) < 0.0) then
         if (vol_CFL) then ; CFL = (-v(i) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
         else ; CFL = -v(i) * dt * G%IdyT(i,j+1) ; endif
-        !CFL = 0.0
         curv_3 = (h_S(i,j+1) + h_N(i,j+1)) - 2.0*h(i,j+1)
         vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * ( h_S(i,j+1) + CFL * &
             (0.5*(h_N(i,j+1)-h_S(i,j+1)) + curv_3*(CFL - 1.5)) )
@@ -1995,7 +1993,7 @@ subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol
   integer :: i, j, k, ish, ieh, jsh, jeh, n, nz
   ish = LB%ish ; ieh = LB%ieh ; jsh = LB%jsh ; jeh = LB%jeh ; nz = GV%ke
 
-  if (CS%weno5) then
+  if (CS%weno5 .or. CS%weno7) then
     !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
     do k=1,nz ; do J=jsh-1,jeh ; do i=ish,ieh
       if (v(i,J,k) > 0.0) then
@@ -2020,7 +2018,6 @@ subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol
       if (v(i,J,k) > 0.0) then
         if (vol_CFL) then ; CFL = (v(i,J,k) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
         else ; CFL = v(i,J,k) * dt * G%IdyT(i,j) ; endif
-        !CFL = 0.0
         curv_3 = (h_S(i,j,k) + h_N(i,j,k)) - 2.0*h(i,j,k)
         h_avg = h_N(i,j,k) + CFL * (0.5*(h_S(i,j,k) - h_N(i,j,k)) + curv_3*(CFL - 1.5))
         h_marg = h_N(i,j,k) + CFL * ((h_S(i,j,k) - h_N(i,j,k)) + &
@@ -2028,7 +2025,6 @@ subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol
       elseif (v(i,J,k) < 0.0) then
         if (vol_CFL) then ; CFL = (-v(i,J,k)*dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
         else ; CFL = -v(i,J,k) * dt * G%IdyT(i,j+1) ; endif
-        !CFL = 0.0
         curv_3 = (h_S(i,j,k) + h_N(i,j+1,k)) - 2.0*h(i,j+1,k)
         h_avg = h_S(i,j+1,k) + CFL * (0.5*(h_N(i,j+1,k)-h_S(i,j+1,k)) + curv_3*(CFL - 1.5))
         h_marg = h_S(i,j+1,k) + CFL * ((h_N(i,j+1,k)-h_S(i,j+1,k)) + &
@@ -2766,7 +2762,7 @@ subroutine PPM_limit_CW84(h_in, h_L, h_R, G, iis, iie, jis, jie)
 end subroutine PPM_limit_CW84
 
 !> Calculates left/right edge values for WENO reconstruction.
-subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, CS)
+subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, CS)
   type(ocean_grid_type),             intent(in)  :: G    !< Ocean's grid structure.
   real, dimension(SZI_(G),SZJ_(G)),  intent(in)  :: h_in !< Layer thickness [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: h_W  !< West edge thickness in the reconstruction,
@@ -2790,8 +2786,10 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, 
   integer :: i, j, isl, iel, jsl, jel, n, stencil
   logical :: local_open_BC
   type(OBC_segment_type), pointer :: segment => NULL()
-  real :: order3, order5, order7, dx, area3, area5, area7
+  !real :: order3, order5, order7, dx, area3, area5, area7
+  real :: order5, order7, dx, area3, area5, area7
   real :: am3, am2, am1, a0, ap1, ap2, ap3
+  real, dimension(SZI_(G),SZJ_(G))  :: order3 ! 
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2801,35 +2799,39 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, 
   isl = LB%ish-1 ; iel = LB%ieh+1 ; jsl = LB%jsh ; jel = LB%jeh
 
   ! This is the stencil of the reconstruction, not the scheme overall.
-  stencil = 3
+  stencil = 3 !; if (CS%weno7) stencil = 4
 
   if ((isl-stencil < G%isd) .or. (iel+stencil > G%ied)) then
-    write(mesg,'("In MOM_continuity_PPM, WENO5_reconstruction_x called with a ", &
+    write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_x called with a ", &
                & "x-halo that needs to be increased by ",i2,".")') &
                stencil + max(G%isd-isl,iel-G%ied)
     call MOM_error(FATAL,mesg)
   endif
   if ((jsl < G%jsd) .or. (jel > G%jed)) then
-    write(mesg,'("In MOM_continuity_PPM, WENO5_reconstruction_x called with a ", &
+    write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_x called with a ", &
                & "y-halo that needs to be increased by ",i2,".")') &
                max(G%jsd-jsl,jel-G%jed)
     call MOM_error(FATAL,mesg)
   endif
 
-  ! if (local_open_BC) then
-  !   do n=1, OBC%number_of_segments
-  !     segment => OBC%segment(n)
-  !     if (.not. segment%on_pe) cycle
-  !     if (segment%direction == OBC_DIRECTION_S .or. &
-  !         segment%direction == OBC_DIRECTION_N) then
-  !       J=segment%HI%JsdB
-  !       do i=segment%HI%isd,segment%HI%ied
-  !         slp(i,j+1) = 0.0
-  !         slp(i,j) = 0.0
-  !       enddo
-  !     endif
-  !   enddo
-  ! endif
+  do j=jsl,jel ; do i=isl-1,iel+1
+    order3(i,j) = G%mask2dT(i-1,j)*G%mask2dT(i,j)*G%mask2dT(i+1,j)
+  enddo ; enddo
+
+  if (local_open_BC) then
+    do n=1, OBC%number_of_segments
+      segment => OBC%segment(n)
+      if (.not. segment%on_pe) cycle
+      if (segment%direction == OBC_DIRECTION_S .or. &
+          segment%direction == OBC_DIRECTION_N) then
+        J=segment%HI%JsdB
+        do i=segment%HI%isd,segment%HI%ied
+          order3(i,j) = 0.0
+          order3(i+1,j) = 0.0
+        enddo
+      endif
+    enddo
+  endif
 
   do j=jsl,jel ; do i=isl,iel
     ! Neighboring values should take into account any boundaries.
@@ -2845,14 +2847,14 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, 
     ap1 = G%mask2dT(i+1,j)*G%areaT(i+1,j)
     ap2 = G%mask2dT(i+2,j)*G%areaT(i+2,j)
 
-    area5 = min(am2*h_im2, am1*h_im1, a0*h_i, ap1*h_ip1, ap2*h_ip2)
     area3 = min(am1*h_im1, a0*h_i, ap1*h_ip1)
+    area5 = min(area3, am2*h_im2, ap2*h_ip2)
 
-    order3 = G%mask2dT(i-1,j)*G%mask2dT(i,j)*G%mask2dT(i+1,j)
-    order5 = order3*G%mask2dT(i-2,j)*G%mask2dT(i+2,j)
+    !order3(i,j) = G%mask2dT(i-1,j)*G%mask2dT(i,j)*G%mask2dT(i+1,j)
+    order5 = order3(i,j)*G%mask2dT(i-2,j)*G%mask2dT(i+2,j)
 
+    if (area3 <= G%areaT(i,j)*h_min) order3(i,j) = 0.0
     if (area5 <= G%areaT(i,j)*h_min) order5 = 0.0
-    if (area3 <= G%areaT(i,j)*h_min) order3 = 0.0
 
     order7 = 0.0
     if (CS%weno7) then
@@ -2872,11 +2874,11 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, 
       call weno7_reconstruction_interface(h_W(i,j), h_E(i,j), h_im3, h_im2, h_im1, h_i, h_ip1, h_ip2, h_ip3, h_min, dx)
     elseif (order5 == 1.0) then
       call weno5_reconstruction_interface(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, h_ip2, h_min, dx)
-    elseif(order3 == 1.0) then
+    elseif(order3(i,j) == 1.0) then
       call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im1, h_i, h_ip1, h_min, dx)
     else
-      h_W(i,j) = 0.5*( h_im1 + h_i)
-      h_E(i,j) = 0.5*( h_ip1 + h_i)
+      h_W(i,j) = h_i
+      h_E(i,j) = h_i
     endif
   enddo ; enddo
   
@@ -2904,11 +2906,13 @@ subroutine WENO5_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, 
     enddo
   endif
 
+  call WENO_limiter(h_in, h_W, h_E, h_min, G, isl, iel, jsl, jel)
+
   return
-end subroutine WENO5_reconstruction_x
+end subroutine WENO_reconstruction_x
 
 !> Calculates left/right edge values for WENO reconstruction.
-subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, CS)
+subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, CS)
   type(ocean_grid_type),             intent(in)  :: G    !< Ocean's grid structure.
   real, dimension(SZI_(G),SZJ_(G)),  intent(in)  :: h_in !< Layer thickness [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: h_S  !< South edge thickness in the reconstruction,
@@ -2932,8 +2936,10 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, 
   integer :: i, j, isl, iel, jsl, jel, n, stencil
   logical :: local_open_BC
   type(OBC_segment_type), pointer :: segment => NULL()
-  real :: order3, order5, order7, dy, area3, area5, area7
-  real :: am3, am2, am1, a0, ap1, ap2, ap3
+  !real :: order3, order5, order7, dy, area3, area5, area7
+  real :: order5, order7, dy, area3, area5, area7
+  real :: am3, am2, am1, a0, ap1, ap2, ap3, rr
+  real, dimension(SZI_(G),SZJ_(G))  :: order3 ! 
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2943,19 +2949,38 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, 
   isl = LB%ish ; iel = LB%ieh ; jsl = LB%jsh-1 ; jel = LB%jeh+1
 
   ! This is the stencil of the reconstruction, not the scheme overall.
-  stencil = 3
+  stencil = 3 !; if (CS%weno7) stencil = 4
 
   if ((isl < G%isd) .or. (iel > G%ied)) then
-    write(mesg,'("In MOM_continuity_PPM, WENO5_reconstruction_y called with a ", &
+    write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_y called with a ", &
                & "x-halo that needs to be increased by ",i2,".")') &
                max(G%isd-isl,iel-G%ied)
     call MOM_error(FATAL,mesg)
   endif
   if ((jsl-stencil < G%jsd) .or. (jel+stencil > G%jed)) then
-    write(mesg,'("In MOM_continuity_PPM, WENO5_reconstruction_y called with a ", &
+    write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_y called with a ", &
                  & "y-halo that needs to be increased by ",i2,".")') &
                  stencil + max(G%jsd-jsl,jel-G%jed)
     call MOM_error(FATAL,mesg)
+  endif
+
+  do j=jsl-1,jel+1 ; do i=isl,iel
+    order3(i,j) = G%mask2dT(i,j-1)*G%mask2dT(i,j)*G%mask2dT(i,j+1)
+  enddo ; enddo
+
+  if (local_open_BC) then
+    do n=1, OBC%number_of_segments
+      segment => OBC%segment(n)
+      if (.not. segment%on_pe) cycle
+      if (segment%direction == OBC_DIRECTION_S .or. &
+          segment%direction == OBC_DIRECTION_N) then
+        J=segment%HI%JsdB
+        do i=segment%HI%isd,segment%HI%ied
+          order3(i,j) = 0.0
+          order3(i,j+1) = 0.0
+        enddo
+      endif
+    enddo
   endif
 
   do j=jsl,jel ; do i=isl,iel
@@ -2975,10 +3000,10 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, 
     area3 = min(am1*h_jm1, a0*h_j, ap1*h_jp1)
     area5 = min(area3, am2*h_jm2, ap2*h_jp2)
 
-    order3 = G%mask2dT(i,j-1)*G%mask2dT(i,j)*G%mask2dT(i,j+1)
-    order5 = order3*G%mask2dT(i,j-2)*G%mask2dT(i,j+2)
+    !order3(i,j) = G%mask2dT(i,j-1)*G%mask2dT(i,j)*G%mask2dT(i,j+1)
+    order5 = order3(i,j)*G%mask2dT(i,j-2)*G%mask2dT(i,j+2)
 
-    if (area3 <= G%areaT(i,j)*h_min) order3 = 0.0
+    if (area3 <= G%areaT(i,j)*h_min) order3(i,j) = 0.0
     if (area5 <= G%areaT(i,j)*h_min) order5 = 0.0
 
     order7 = 0.0
@@ -2993,24 +3018,17 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, 
       if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
     endif
 
-    !h_jm2 = h_in(i,j-2)
-    !h_jm1 = h_in(i,j-1)
-    !h_j = h_in(i,j)
-    !h_jp1 = h_in(i,j+1)
-    !h_jp2 = h_in(i,j+2)
-    !h_jp3 = h_in(i,j+3)
-
     dy = G%dyT(i,j)
 
     if (order7 == 1.0) then
       call weno7_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm3, h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_jp3, h_min, dy)
     elseif (order5 == 1.0) then
       call weno5_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_min, dy)
-    elseif (order3 == 1.0) then
+    elseif (order3(i,j) == 1.0) then
       call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm1, h_j, h_jp1, h_min, dy)
     else
-      h_S(i,j) = 0.5*( h_jm1 + h_j )
-      h_N(i,j) = 0.5*( h_jp1 + h_j )
+      h_S(i,j) = h_j
+      h_N(i,j) = h_j
     endif
   enddo ; enddo
 
@@ -3038,8 +3056,10 @@ subroutine WENO5_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, 
     enddo
   endif
 
+  call WENO_limiter(h_in, h_S, h_N, h_min, G, isl, iel, jsl, jel)
+
   return
-end subroutine WENO5_reconstruction_y
+end subroutine WENO_reconstruction_y
 
 !> Return the maximum ratio of a/b or maxrat.
 function ratio_max(a, b, maxrat) result(ratio)
@@ -3151,7 +3171,17 @@ function continuity_PPM_stencil(CS) result(stencil)
   type(continuity_PPM_CS), intent(in) :: CS   !< Module's control structure.
   integer ::  stencil !< The continuity solver stencil size with the current settings.
 
-  stencil = 3 ; if (CS%simple_2nd) stencil = 2 ; if (CS%upwind_1st) stencil = 1
+  !stencil = 3 ; if (CS%simple_2nd) stencil = 2 ; if (CS%upwind_1st) stencil = 1
+  stencil = 3
+  if (CS%simple_2nd) then
+    stencil = 2
+  elseif (CS%upwind_1st) then
+    stencil = 1
+  elseif (CS%weno5) then
+    stencil = 3
+  elseif (CS%weno7) then
+    stencil = 4
+  endif
 
 end function continuity_PPM_stencil
 
