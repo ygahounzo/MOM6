@@ -13,6 +13,8 @@ use MOM_open_boundary, only : OBC_DIRECTION_E, OBC_DIRECTION_W, OBC_DIRECTION_N,
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : BT_cont_type, porous_barrier_type
 use MOM_verticalGrid, only : verticalGrid_type
+use MOM_continuity_WENO, only : weno3_reconstruction_interface, weno5_reconstruction_interface
+use MOM_continuity_WENO, only : weno7_reconstruction_interface, WENO_limiter
 
 implicit none ; private
 
@@ -42,6 +44,8 @@ type, public :: continuity_PPM_CS ; private
   logical :: simple_2nd      !< If true, use a simple second order (arithmetic
                              !! mean) interpolation of the edge values instead
                              !! of the higher order interpolation.
+  logical :: weno5           !< If true, use a weno5 interpolation of the edge values.
+  logical :: weno7           !< If true, use a weno7 interpolation of the edge values.
   real :: tol_eta            !< The tolerance for free-surface height
                              !! discrepancies between the barotropic solution and
                              !! the sum of the layer thicknesses [H ~> m or kg m-2].
@@ -455,6 +459,12 @@ subroutine zonal_edge_thickness(h_in, h_W, h_E, G, GV, US, CS, OBC, LB_in)
     do k=1,nz ; do j=jsh,jeh ; do i=ish-1,ieh+1
       h_W(i,j,k) = h_in(i,j,k) ; h_E(i,j,k) = h_in(i,j,k)
     enddo ; enddo ; enddo
+  elseif (CS%weno5 .or. CS%weno7) then
+    !$OMP parallel do default(shared)
+    do k=1,nz
+      call WENO_reconstruction_x(h_in(:,:,k), h_W(:,:,k), h_E(:,:,k), G, LB, &
+                                2.0*GV%Angstrom_H, CS%monotonic, OBC, CS)
+    enddo
   else
     !$OMP parallel do default(shared)
     do k=1,nz
@@ -502,6 +512,12 @@ subroutine meridional_edge_thickness(h_in, h_S, h_N, G, GV, US, CS, OBC, LB_in)
     do k=1,nz ; do j=jsh-1,jeh+1 ; do i=ish,ieh
       h_S(i,j,k) = h_in(i,j,k) ; h_N(i,j,k) = h_in(i,j,k)
     enddo ; enddo ; enddo
+  elseif(CS%weno5 .or. CS%weno7) then
+    !$OMP parallel do default(shared)
+    do k=1,nz
+      call WENO_reconstruction_y(h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), G, LB, &
+                                2.0*GV%Angstrom_H, CS%monotonic, OBC, CS)
+    enddo
   else
     !$OMP parallel do default(shared)
     do k=1,nz
@@ -625,7 +641,7 @@ subroutine zonal_mass_flux(u, h_in, h_W, h_E, uh, dt, G, GV, US, CS, OBC, por_fa
       enddo ; endif
       call zonal_flux_layer(u(:,j,k), h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), &
                             uh(:,j,k), duhdu(:,k), visc_rem(:,k), &
-                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), OBC)
+                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS, OBC)
       if (local_specified_BC) then
         do I=ish-1,ieh ; if (OBC%segnum_u(I,j) /= 0) then
           l_seg = abs(OBC%segnum_u(I,j))
@@ -807,10 +823,10 @@ subroutine zonal_mass_flux(u, h_in, h_W, h_E, uh, dt, G, GV, US, CS, OBC, por_fa
   if  (set_BT_cont) then ; if (allocated(BT_cont%h_u)) then
     if (present(u_cor)) then
       call zonal_flux_thickness(u_cor, h_in, h_W, h_E, BT_cont%h_u, dt, G, GV, US, LB, &
-                                CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaU, visc_rem_u)
+                                CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaU, CS, visc_rem_u)
     else
       call zonal_flux_thickness(u, h_in, h_W, h_E, BT_cont%h_u, dt, G, GV, US, LB, &
-                                CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaU, visc_rem_u)
+                                CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaU, CS, visc_rem_u)
     endif
   endif ; endif
 
@@ -875,7 +891,7 @@ subroutine zonal_BT_mass_flux(u, h_in, h_W, h_E, uhbt, dt, G, GV, US, CS, OBC, p
     do k=1,nz
       ! This sets uh and duhdu.
       call zonal_flux_layer(u(:,j,k), h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), uh, duhdu, ones, &
-                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), OBC)
+                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS, OBC)
       if (OBC_in_row) then ; do I=ish-1,ieh ; if (OBC%segnum_u(I,j) /= 0) then
         l_seg = abs(OBC%segnum_u(I,j))
         if (OBC%segment(l_seg)%specified) uh(I) = OBC%segment(l_seg)%normal_trans(I,j,k)
@@ -894,7 +910,7 @@ end subroutine zonal_BT_mass_flux
 
 !> Evaluates the zonal mass or volume fluxes in a layer.
 subroutine zonal_flux_layer(u, h, h_W, h_E, uh, duhdu, visc_rem, dt, G, US, j, &
-                            ish, ieh, do_I, vol_CFL, por_face_areaU, OBC)
+                            ish, ieh, do_I, vol_CFL, por_face_areaU, CS, OBC)
   type(ocean_grid_type),        intent(in)    :: G        !< Ocean's grid structure.
   real, dimension(SZIB_(G)),    intent(in)    :: u        !< Zonal velocity [L T-1 ~> m s-1].
   real, dimension(SZIB_(G)),    intent(in)    :: visc_rem !< Both the fraction of the
@@ -918,6 +934,7 @@ subroutine zonal_flux_layer(u, h, h_W, h_E, uh, duhdu, visc_rem, dt, G, US, j, &
   logical,                      intent(in)    :: vol_CFL  !< If true, rescale the
   real, dimension(SZIB_(G)),    intent(in)    :: por_face_areaU !< fractional open area of U-faces [nondim]
           !! ratio of face areas to the cell areas when estimating the CFL number.
+  type(continuity_PPM_CS),      intent(in)    :: CS   !< This module's control structure.
   type(ocean_OBC_type), optional, pointer     :: OBC !< Open boundaries control structure.
   ! Local variables
   real :: CFL  ! The CFL number based on the local velocity and grid spacing [nondim]
@@ -932,28 +949,45 @@ subroutine zonal_flux_layer(u, h, h_W, h_E, uh, duhdu, visc_rem, dt, G, US, j, &
     local_open_BC = OBC%open_u_BCs_exist_globally
   endif ; endif
 
-  do I=ish-1,ieh ; if (do_I(I)) then
-    ! Set new values of uh and duhdu.
-    if (u(I) > 0.0) then
-      if (vol_CFL) then ; CFL = (u(I) * dt) * (G%dy_Cu(I,j) * G%IareaT(i,j))
-      else ; CFL = u(I) * dt * G%IdxT(i,j) ; endif
-      curv_3 = (h_W(i) + h_E(i)) - 2.0*h(i)
-      uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * &
-          (h_E(i) + CFL * (0.5*(h_W(i) - h_E(i)) + curv_3*(CFL - 1.5)))
-      h_marg = h_E(i) + CFL * ((h_W(i) - h_E(i)) + 3.0*curv_3*(CFL - 1.0))
-    elseif (u(I) < 0.0) then
-      if (vol_CFL) then ; CFL = (-u(I) * dt) * (G%dy_Cu(I,j) * G%IareaT(i+1,j))
-      else ; CFL = -u(I) * dt * G%IdxT(i+1,j) ; endif
-      curv_3 = (h_W(i+1) + h_E(i+1)) - 2.0*h(i+1)
-      uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * &
-          (h_W(i+1) + CFL * (0.5*(h_E(i+1)-h_W(i+1)) + curv_3*(CFL - 1.5)))
-      h_marg = h_W(i+1) + CFL * ((h_E(i+1)-h_W(i+1)) + 3.0*curv_3*(CFL - 1.0))
-    else
-      uh(I) = 0.0
-      h_marg = 0.5 * (h_W(i+1) + h_E(i))
-    endif
-    duhdu(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * h_marg * visc_rem(I)
-  endif ; enddo
+  if (CS%weno5 .or. CS%weno7) then
+    do I=ish-1,ieh ; if (do_I(I)) then
+      ! Set new values of uh and duhdu.
+      if (u(I) > 0.0) then
+        uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * h_E(i)
+        h_marg = h_E(i)
+      elseif (u(I) < 0.0) then
+        uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * h_W(i+1)
+        h_marg = h_W(i+1)
+      else
+        uh(I) = 0.0
+        h_marg = 0.5 * (h_W(i+1) + h_E(i))
+      endif
+      duhdu(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * h_marg * visc_rem(I)
+    endif ; enddo
+  else
+    do I=ish-1,ieh ; if (do_I(I)) then
+      ! Set new values of uh and duhdu.
+      if (u(I) > 0.0) then
+        if (vol_CFL) then ; CFL = (u(I) * dt) * (G%dy_Cu(I,j) * G%IareaT(i,j))
+        else ; CFL = u(I) * dt * G%IdxT(i,j) ; endif
+        curv_3 = (h_W(i) + h_E(i)) - 2.0*h(i)
+        uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * &
+            (h_E(i) + CFL * (0.5*(h_W(i) - h_E(i)) + curv_3*(CFL - 1.5)))
+        h_marg = h_E(i) + CFL * ((h_W(i) - h_E(i)) + 3.0*curv_3*(CFL - 1.0))
+      elseif (u(I) < 0.0) then
+        if (vol_CFL) then ; CFL = (-u(I) * dt) * (G%dy_Cu(I,j) * G%IareaT(i+1,j))
+        else ; CFL = -u(I) * dt * G%IdxT(i+1,j) ; endif
+        curv_3 = (h_W(i+1) + h_E(i+1)) - 2.0*h(i+1)
+        uh(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * u(I) * &
+            (h_W(i+1) + CFL * (0.5*(h_E(i+1)-h_W(i+1)) + curv_3*(CFL - 1.5)))
+        h_marg = h_W(i+1) + CFL * ((h_E(i+1)-h_W(i+1)) + 3.0*curv_3*(CFL - 1.0))
+      else
+        uh(I) = 0.0
+        h_marg = 0.5 * (h_W(i+1) + h_E(i))
+      endif
+      duhdu(I) = (G%dy_Cu(I,j) * por_face_areaU(I)) * h_marg * visc_rem(I)
+    endif ; enddo
+  endif
 
   if (local_open_BC) then
     do I=ish-1,ieh ; if (do_I(I)) then ; if (OBC%segnum_u(I,j) /= 0) then
@@ -973,7 +1007,7 @@ end subroutine zonal_flux_layer
 !> Sets the effective interface thickness associated with the fluxes at each zonal velocity point,
 !! optionally scaling back these thicknesses to account for viscosity and fractional open areas.
 subroutine zonal_flux_thickness(u, h, h_W, h_E, h_u, dt, G, GV, US, LB, vol_CFL, &
-                                marginal, OBC, por_face_areaU, visc_rem_u)
+                                marginal, OBC, por_face_areaU, CS, visc_rem_u)
   type(ocean_grid_type),                     intent(in)    :: G    !< Ocean's grid structure.
   type(verticalGrid_type),                   intent(in)    :: GV   !< Ocean's vertical grid structure.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in)   :: u    !< Zonal velocity [L T-1 ~> m s-1].
@@ -997,6 +1031,7 @@ subroutine zonal_flux_thickness(u, h, h_W, h_E, h_u, dt, G, GV, US, LB, vol_CFL,
   real, dimension(SZIB_(G), SZJ_(G), SZK_(G)), &
                                    intent(in)    :: por_face_areaU !< fractional open area of U-faces [nondim]
   type(ocean_OBC_type),                      pointer       :: OBC !< Open boundaries control structure.
+  type(continuity_PPM_CS),            intent(in) :: CS   !< This module's control structure.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
                                    optional, intent(in)    :: visc_rem_u
                           !< Both the fraction of the momentum originally in a layer that remains after
@@ -1013,33 +1048,54 @@ subroutine zonal_flux_thickness(u, h, h_W, h_E, h_u, dt, G, GV, US, LB, vol_CFL,
   integer :: i, j, k, ish, ieh, jsh, jeh, nz, n
   ish = LB%ish ; ieh = LB%ieh ; jsh = LB%jsh ; jeh = LB%jeh ; nz = GV%ke
 
-  !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
-  do k=1,nz ; do j=jsh,jeh ; do I=ish-1,ieh
-    if (u(I,j,k) > 0.0) then
-      if (vol_CFL) then ; CFL = (u(I,j,k) * dt) * (G%dy_Cu(I,j) * G%IareaT(i,j))
-      else ; CFL = u(I,j,k) * dt * G%IdxT(i,j) ; endif
-      curv_3 = (h_W(i,j,k) + h_E(i,j,k)) - 2.0*h(i,j,k)
-      h_avg = h_E(i,j,k) + CFL * (0.5*(h_W(i,j,k) - h_E(i,j,k)) + curv_3*(CFL - 1.5))
-      h_marg = h_E(i,j,k) + CFL * ((h_W(i,j,k) - h_E(i,j,k)) + 3.0*curv_3*(CFL - 1.0))
-    elseif (u(I,j,k) < 0.0) then
-      if (vol_CFL) then ; CFL = (-u(I,j,k)*dt) * (G%dy_Cu(I,j) * G%IareaT(i+1,j))
-      else ; CFL = -u(I,j,k) * dt * G%IdxT(i+1,j) ; endif
-      curv_3 = (h_W(i+1,j,k) + h_E(i+1,j,k)) - 2.0*h(i+1,j,k)
-      h_avg = h_W(i+1,j,k) + CFL * (0.5*(h_E(i+1,j,k)-h_W(i+1,j,k)) + curv_3*(CFL - 1.5))
-      h_marg = h_W(i+1,j,k) + CFL * ((h_E(i+1,j,k)-h_W(i+1,j,k)) + &
-                                    3.0*curv_3*(CFL - 1.0))
-    else
-      h_avg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
-      !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
-      ! it should be noted that h_W(i+1,j,k) and h_E(i,j,k) are usually the same.
-      h_marg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
- !    h_marg = (2.0 * h_W(i+1,j,k) * h_E(i,j,k)) / &
- !             (h_W(i+1,j,k) + h_E(i,j,k) + GV%H_subroundoff)
-    endif
+  if (CS%weno5 .or. CS%weno7) then
+    !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
+    do k=1,nz ; do j=jsh,jeh ; do I=ish-1,ieh
+      if (u(I,j,k) > 0.0) then
+        h_avg = h_E(i,j,k)
+        h_marg = h_E(i,j,k)
+      elseif (u(I,j,k) < 0.0) then
+        h_avg = h_W(i+1,j,k)
+        h_marg = h_W(i+1,j,k)
+      else
+        h_avg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
+        !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
+        ! it should be noted that h_W(i+1,j,k) and h_E(i,j,k) are usually the same.
+        h_marg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
+      endif
 
-    if (marginal) then ; h_u(I,j,k) = h_marg
-    else ; h_u(I,j,k) = h_avg ; endif
-  enddo ; enddo ; enddo
+      if (marginal) then ; h_u(I,j,k) = h_marg
+      else ; h_u(I,j,k) = h_avg ; endif
+    enddo ; enddo ; enddo
+  else
+    !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
+    do k=1,nz ; do j=jsh,jeh ; do I=ish-1,ieh
+      if (u(I,j,k) > 0.0) then
+        if (vol_CFL) then ; CFL = (u(I,j,k) * dt) * (G%dy_Cu(I,j) * G%IareaT(i,j))
+        else ; CFL = u(I,j,k) * dt * G%IdxT(i,j) ; endif
+        curv_3 = (h_W(i,j,k) + h_E(i,j,k)) - 2.0*h(i,j,k)
+        h_avg = h_E(i,j,k) + CFL * (0.5*(h_W(i,j,k) - h_E(i,j,k)) + curv_3*(CFL - 1.5))
+        h_marg = h_E(i,j,k) + CFL * ((h_W(i,j,k) - h_E(i,j,k)) + 3.0*curv_3*(CFL - 1.0))
+      elseif (u(I,j,k) < 0.0) then
+        if (vol_CFL) then ; CFL = (-u(I,j,k)*dt) * (G%dy_Cu(I,j) * G%IareaT(i+1,j))
+        else ; CFL = -u(I,j,k) * dt * G%IdxT(i+1,j) ; endif
+        curv_3 = (h_W(i+1,j,k) + h_E(i+1,j,k)) - 2.0*h(i+1,j,k)
+        h_avg = h_W(i+1,j,k) + CFL * (0.5*(h_E(i+1,j,k)-h_W(i+1,j,k)) + curv_3*(CFL - 1.5))
+        h_marg = h_W(i+1,j,k) + CFL * ((h_E(i+1,j,k)-h_W(i+1,j,k)) + &
+                                      3.0*curv_3*(CFL - 1.0))
+      else
+        h_avg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
+        !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
+        ! it should be noted that h_W(i+1,j,k) and h_E(i,j,k) are usually the same.
+        h_marg = 0.5 * (h_W(i+1,j,k) + h_E(i,j,k))
+   !    h_marg = (2.0 * h_W(i+1,j,k) * h_E(i,j,k)) / &
+   !             (h_W(i+1,j,k) + h_E(i,j,k) + GV%H_subroundoff)
+      endif
+
+      if (marginal) then ; h_u(I,j,k) = h_marg
+      else ; h_u(I,j,k) = h_avg ; endif
+    enddo ; enddo ; enddo
+  endif
   if (present(visc_rem_u)) then
     ! Scale back the thickness to account for the effects of viscosity and the fractional open
     ! thickness to give an appropriate non-normalized weight for each layer in determining the
@@ -1215,7 +1271,7 @@ subroutine zonal_flux_adjust(u, h_in, h_W, h_E, uhbt, uh_tot_0, duhdu_tot_0, &
       do I=ish-1,ieh ; u_new(I) = u(I,j,k) + du(I) * visc_rem(I,k) ; enddo
       call zonal_flux_layer(u_new, h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), &
                             uh_aux(:,k), duhdu(:,k), visc_rem(:,k), &
-                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), OBC)
+                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS, OBC)
     enddo ; endif
 
     if (itt < max_itts) then
@@ -1363,11 +1419,11 @@ subroutine set_zonal_BT_cont(u, h_in, h_W, h_E, BT_cont, uh_tot_0, duhdu_tot_0, 
       u_0(I) = u(I,j,k) + du0(I) * visc_rem(I,k)
     endif ; enddo
     call zonal_flux_layer(u_0, h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), uh_0, duhdu_0, &
-                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k))
+                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS)
     call zonal_flux_layer(u_L, h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), uh_L, duhdu_L, &
-                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k))
+                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS)
     call zonal_flux_layer(u_R, h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), uh_R, duhdu_R, &
-                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k))
+                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS)
     do I=ish-1,ieh ; if (do_I(I)) then
       FAmt_0(I) = FAmt_0(I) + duhdu_0(I)
       FAmt_L(I) = FAmt_L(I) + duhdu_L(I)
@@ -1518,7 +1574,7 @@ subroutine meridional_mass_flux(v, h_in, h_S, h_N, vh, dt, G, GV, US, CS, OBC, p
       enddo ; endif
       call merid_flux_layer(v(:,J,k), h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), &
                             vh(:,J,k), dvhdv(:,k), visc_rem(:,k), &
-                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), OBC)
+                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS, OBC)
       if (local_specified_BC) then
         do i=ish,ieh ; if (OBC%segnum_v(i,J) /= 0) then
           l_seg = abs(OBC%segnum_v(i,J))
@@ -1697,10 +1753,10 @@ subroutine meridional_mass_flux(v, h_in, h_S, h_N, vh, dt, G, GV, US, CS, OBC, p
   if (set_BT_cont) then ; if (allocated(BT_cont%h_v)) then
     if (present(v_cor)) then
       call meridional_flux_thickness(v_cor, h_in, h_S, h_N, BT_cont%h_v, dt, G, GV, US, LB, &
-                                    CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaV, visc_rem_v)
+                                    CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaV, CS, visc_rem_v)
     else
       call meridional_flux_thickness(v, h_in, h_S, h_N, BT_cont%h_v, dt, G, GV, US, LB, &
-                                    CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaV, visc_rem_v)
+                                    CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaV, CS, visc_rem_v)
     endif
   endif ; endif
 
@@ -1765,7 +1821,7 @@ subroutine meridional_BT_mass_flux(v, h_in, h_S, h_N, vhbt, dt, G, GV, US, CS, O
     do k=1,nz
       ! This sets vh and dvhdv.
       call merid_flux_layer(v(:,J,k), h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), vh, dvhdv, ones, &
-                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), OBC)
+                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS, OBC)
       if (OBC_in_row) then ; do i=ish,ieh ; if (OBC%segnum_v(i,J) /= 0) then
         l_seg = abs(OBC%segnum_v(i,J))
         if (OBC%segment(l_seg)%specified) vh(i) = OBC%segment(l_seg)%normal_trans(i,J,k)
@@ -1785,7 +1841,7 @@ end subroutine meridional_BT_mass_flux
 
 !> Evaluates the meridional mass or volume fluxes in a layer.
 subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
-                            ish, ieh, do_I, vol_CFL, por_face_areaV, OBC)
+                            ish, ieh, do_I, vol_CFL, por_face_areaV, CS, OBC)
   type(ocean_grid_type),        intent(in)    :: G        !< Ocean's grid structure.
   real, dimension(SZI_(G)),     intent(in)    :: v        !< Meridional velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G)),     intent(in)    :: visc_rem !< Both the fraction of the
@@ -1813,6 +1869,7 @@ subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
          !! ratio of face areas to the cell areas when estimating the CFL number.
   real, dimension(SZI_(G),SZJB_(G)), &
                              intent(in) :: por_face_areaV !< fractional open area of V-faces [nondim]
+  type(continuity_PPM_CS),   intent(in) :: CS   !< This module's control structure.
   type(ocean_OBC_type), optional, pointer :: OBC !< Open boundaries control structure.
   ! Local variables
   real :: CFL ! The CFL number based on the local velocity and grid spacing [nondim]
@@ -1827,29 +1884,45 @@ subroutine merid_flux_layer(v, h, h_S, h_N, vh, dvhdv, visc_rem, dt, G, US, J, &
     local_open_BC = OBC%open_v_BCs_exist_globally
   endif ; endif
 
-  do i=ish,ieh ; if (do_I(i)) then
-    if (v(i) > 0.0) then
-      if (vol_CFL) then ; CFL = (v(i) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
-      else ; CFL = v(i) * dt * G%IdyT(i,j) ; endif
-      curv_3 = (h_S(i,j) + h_N(i,j)) - 2.0*h(i,j)
-      vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * ( h_N(i,j) + CFL * &
-          (0.5*(h_S(i,j) - h_N(i,j)) + curv_3*(CFL - 1.5)) )
-      h_marg = h_N(i,j) + CFL * ((h_S(i,j) - h_N(i,j)) + &
-                                  3.0*curv_3*(CFL - 1.0))
-    elseif (v(i) < 0.0) then
-      if (vol_CFL) then ; CFL = (-v(i) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
-      else ; CFL = -v(i) * dt * G%IdyT(i,j+1) ; endif
-      curv_3 = (h_S(i,j+1) + h_N(i,j+1)) - 2.0*h(i,j+1)
-      vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * ( h_S(i,j+1) + CFL * &
-          (0.5*(h_N(i,j+1)-h_S(i,j+1)) + curv_3*(CFL - 1.5)) )
-      h_marg = h_S(i,j+1) + CFL * ((h_N(i,j+1)-h_S(i,j+1)) + &
+  if (CS%weno5 .or. CS%weno7) then
+    do i=ish,ieh ; if (do_I(i)) then
+      if (v(i) > 0.0) then
+        vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * h_N(i,j)
+        h_marg = h_N(i,j)
+      elseif (v(i) < 0.0) then
+        vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * h_S(i,j+1)
+        h_marg = h_S(i,j+1)
+      else
+        vh(i) = 0.0
+        h_marg = 0.5 * (h_S(i,j+1) + h_N(i,j))
+      endif
+      dvhdv(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * h_marg * visc_rem(i)
+    endif ; enddo
+  else
+    do i=ish,ieh ; if (do_I(i)) then
+      if (v(i) > 0.0) then
+        if (vol_CFL) then ; CFL = (v(i) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
+        else ; CFL = v(i) * dt * G%IdyT(i,j) ; endif
+        curv_3 = (h_S(i,j) + h_N(i,j)) - 2.0*h(i,j)
+        vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * ( h_N(i,j) + CFL * &
+            (0.5*(h_S(i,j) - h_N(i,j)) + curv_3*(CFL - 1.5)) )
+        h_marg = h_N(i,j) + CFL * ((h_S(i,j) - h_N(i,j)) + &
                                     3.0*curv_3*(CFL - 1.0))
-    else
-      vh(i) = 0.0
-      h_marg = 0.5 * (h_S(i,j+1) + h_N(i,j))
-    endif
-    dvhdv(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * h_marg * visc_rem(i)
-  endif ; enddo
+      elseif (v(i) < 0.0) then
+        if (vol_CFL) then ; CFL = (-v(i) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
+        else ; CFL = -v(i) * dt * G%IdyT(i,j+1) ; endif
+        curv_3 = (h_S(i,j+1) + h_N(i,j+1)) - 2.0*h(i,j+1)
+        vh(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * v(i) * ( h_S(i,j+1) + CFL * &
+            (0.5*(h_N(i,j+1)-h_S(i,j+1)) + curv_3*(CFL - 1.5)) )
+        h_marg = h_S(i,j+1) + CFL * ((h_N(i,j+1)-h_S(i,j+1)) + &
+                                      3.0*curv_3*(CFL - 1.0))
+      else
+        vh(i) = 0.0
+        h_marg = 0.5 * (h_S(i,j+1) + h_N(i,j))
+      endif
+      dvhdv(i) = (G%dx_Cv(i,J)*por_face_areaV(i,J)) * h_marg * visc_rem(i)
+    endif ; enddo
+  endif
 
   if (local_open_BC) then
     do i=ish,ieh ; if (do_I(i)) then
@@ -1871,7 +1944,7 @@ end subroutine merid_flux_layer
 !> Sets the effective interface thickness associated with the fluxes at each meridional velocity point,
 !! optionally scaling back these thicknesses to account for viscosity and fractional open areas.
 subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol_CFL, &
-                                     marginal, OBC, por_face_areaV, visc_rem_v)
+                                     marginal, OBC, por_face_areaV, CS, visc_rem_v)
   type(ocean_grid_type),                     intent(in)    :: G    !< Ocean's grid structure.
   type(verticalGrid_type),                   intent(in)    :: GV   !< Ocean's vertical grid structure.
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)   :: v    !< Meridional velocity [L T-1 ~> m s-1].
@@ -1895,6 +1968,7 @@ subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol
   type(ocean_OBC_type),                      pointer       :: OBC !< Open boundaries control structure.
   real, dimension(SZI_(G),SZJB_(G),SZK_(G)), &
                                      intent(in) :: por_face_areaV  !< fractional open area of V-faces [nondim]
+  type(continuity_PPM_CS),           intent(in) :: CS   !< This module's control structure.
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), optional, intent(in) :: visc_rem_v !< Both the fraction
                           !! of the momentum originally in a layer that remains after a time-step of
                           !! viscosity, and the fraction of a time-step's worth of a barotropic
@@ -1911,34 +1985,55 @@ subroutine meridional_flux_thickness(v, h, h_S, h_N, h_v, dt, G, GV, US, LB, vol
   integer :: i, j, k, ish, ieh, jsh, jeh, n, nz
   ish = LB%ish ; ieh = LB%ieh ; jsh = LB%jsh ; jeh = LB%jeh ; nz = GV%ke
 
-  !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
-  do k=1,nz ; do J=jsh-1,jeh ; do i=ish,ieh
-    if (v(i,J,k) > 0.0) then
-      if (vol_CFL) then ; CFL = (v(i,J,k) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
-      else ; CFL = v(i,J,k) * dt * G%IdyT(i,j) ; endif
-      curv_3 = (h_S(i,j,k) + h_N(i,j,k)) - 2.0*h(i,j,k)
-      h_avg = h_N(i,j,k) + CFL * (0.5*(h_S(i,j,k) - h_N(i,j,k)) + curv_3*(CFL - 1.5))
-      h_marg = h_N(i,j,k) + CFL * ((h_S(i,j,k) - h_N(i,j,k)) + &
-                                3.0*curv_3*(CFL - 1.0))
-    elseif (v(i,J,k) < 0.0) then
-      if (vol_CFL) then ; CFL = (-v(i,J,k)*dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
-      else ; CFL = -v(i,J,k) * dt * G%IdyT(i,j+1) ; endif
-      curv_3 = (h_S(i,j+1,k) + h_N(i,j+1,k)) - 2.0*h(i,j+1,k)
-      h_avg = h_S(i,j+1,k) + CFL * (0.5*(h_N(i,j+1,k)-h_S(i,j+1,k)) + curv_3*(CFL - 1.5))
-      h_marg = h_S(i,j+1,k) + CFL * ((h_N(i,j+1,k)-h_S(i,j+1,k)) + &
-                                    3.0*curv_3*(CFL - 1.0))
-    else
-      h_avg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
-      !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
-      ! it should be noted that h_S(i+1,j,k) and h_N(i,j,k) are usually the same.
-      h_marg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
- !    h_marg = (2.0 * h_S(i,j+1,k) * h_N(i,j,k)) / &
- !             (h_S(i,j+1,k) + h_N(i,j,k) + GV%H_subroundoff)
-    endif
+  if (CS%weno5 .or. CS%weno7) then
+    !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
+    do k=1,nz ; do J=jsh-1,jeh ; do i=ish,ieh
+      if (v(i,J,k) > 0.0) then
+        h_avg = h_N(i,j,k)
+        h_marg = h_N(i,j,k)
+      elseif (v(i,J,k) < 0.0) then
+        h_avg = h_S(i,j+1,k)
+        h_marg = h_S(i,j+1,k)
+      else
+        h_avg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
+        !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
+        ! it should be noted that h_S(i+1,j,k) and h_N(i,j,k) are usually the same.
+        h_marg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
+      endif
 
-    if (marginal) then ; h_v(i,J,k) = h_marg
-    else ; h_v(i,J,k) = h_avg ; endif
-  enddo ; enddo ; enddo
+      if (marginal) then ; h_v(i,J,k) = h_marg
+      else ; h_v(i,J,k) = h_avg ; endif
+    enddo ; enddo ; enddo
+  else
+    !$OMP parallel do default(shared) private(CFL,curv_3,h_marg,h_avg)
+    do k=1,nz ; do J=jsh-1,jeh ; do i=ish,ieh
+      if (v(i,J,k) > 0.0) then
+        if (vol_CFL) then ; CFL = (v(i,J,k) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
+        else ; CFL = v(i,J,k) * dt * G%IdyT(i,j) ; endif
+        curv_3 = (h_S(i,j,k) + h_N(i,j,k)) - 2.0*h(i,j,k)
+        h_avg = h_N(i,j,k) + CFL * (0.5*(h_S(i,j,k) - h_N(i,j,k)) + curv_3*(CFL - 1.5))
+        h_marg = h_N(i,j,k) + CFL * ((h_S(i,j,k) - h_N(i,j,k)) + &
+                                  3.0*curv_3*(CFL - 1.0))
+      elseif (v(i,J,k) < 0.0) then
+        if (vol_CFL) then ; CFL = (-v(i,J,k)*dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
+        else ; CFL = -v(i,J,k) * dt * G%IdyT(i,j+1) ; endif
+        curv_3 = (h_S(i,j+1,k) + h_N(i,j+1,k)) - 2.0*h(i,j+1,k)
+        h_avg = h_S(i,j+1,k) + CFL * (0.5*(h_N(i,j+1,k)-h_S(i,j+1,k)) + curv_3*(CFL - 1.5))
+        h_marg = h_S(i,j+1,k) + CFL * ((h_N(i,j+1,k)-h_S(i,j+1,k)) + &
+                                      3.0*curv_3*(CFL - 1.0))
+      else
+        h_avg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
+        !   The choice to use the arithmetic mean here is somewhat arbitrarily, but
+        ! it should be noted that h_S(i+1,j,k) and h_N(i,j,k) are usually the same.
+        h_marg = 0.5 * (h_S(i,j+1,k) + h_N(i,j,k))
+   !    h_marg = (2.0 * h_S(i,j+1,k) * h_N(i,j,k)) / &
+   !             (h_S(i,j+1,k) + h_N(i,j,k) + GV%H_subroundoff)
+      endif
+
+      if (marginal) then ; h_v(i,J,k) = h_marg
+      else ; h_v(i,J,k) = h_avg ; endif
+    enddo ; enddo ; enddo
+  endif
 
   if (present(visc_rem_v)) then
     ! Scale back the thickness to account for the effects of viscosity and the fractional open
@@ -2112,7 +2207,7 @@ subroutine meridional_flux_adjust(v, h_in, h_S, h_N, vhbt, vh_tot_0, dvhdv_tot_0
       do i=ish,ieh ; v_new(i) = v(i,J,k) + dv(i) * visc_rem(i,k) ; enddo
       call merid_flux_layer(v_new, h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), &
                             vh_aux(:,k), dvhdv(:,k), visc_rem(:,k), &
-                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), OBC)
+                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS, OBC)
     enddo ; endif
 
     if (itt < max_itts) then
@@ -2260,11 +2355,11 @@ subroutine set_merid_BT_cont(v, h_in, h_S, h_N, BT_cont, vh_tot_0, dvhdv_tot_0, 
       v_0(i) = v(I,j,k) + dv0(i) * visc_rem(i,k)
     endif ; enddo
     call merid_flux_layer(v_0, h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), vh_0, dvhdv_0, &
-                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k))
+                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS)
     call merid_flux_layer(v_L, h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), vh_L, dvhdv_L, &
-                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k))
+                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS)
     call merid_flux_layer(v_R, h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), vh_R, dvhdv_R, &
-                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k))
+                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS)
     do i=ish,ieh ; if (do_I(i)) then
       FAmt_0(i) = FAmt_0(i) + dvhdv_0(i)
       FAmt_L(i) = FAmt_L(i) + dvhdv_L(i)
@@ -2656,6 +2751,306 @@ subroutine PPM_limit_CW84(h_in, h_L, h_R, G, iis, iie, jis, jie)
   return
 end subroutine PPM_limit_CW84
 
+!> Calculates left/right edge values for WENO reconstruction.
+subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, CS)
+  type(ocean_grid_type),             intent(in)  :: G    !< Ocean's grid structure.
+  real, dimension(SZI_(G),SZJ_(G)),  intent(in)  :: h_in !< Layer thickness [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: h_W  !< West edge thickness in the reconstruction,
+                                                         !! [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: h_E  !< East edge thickness in the reconstruction,
+                                                         !! [H ~> m or kg m-2].
+  type(cont_loop_bounds_type),       intent(in)  :: LB   !< Active loop bounds structure.
+  real,                              intent(in)  :: h_min !< The minimum thickness
+                    !! that can be obtained by a concave parabolic fit [H ~> m or kg m-2]
+  logical,                           intent(in)  :: monotonic !< If true, use the
+                    !! Colella & Woodward monotonic limiter.
+                    !! Otherwise use a simple positive-definite limiter.
+  type(ocean_OBC_type),              pointer     :: OBC !< Open boundaries control structure.
+  type(continuity_PPM_CS), intent(in)            :: CS   !< This module's control structure.
+
+  ! Local variables with useful mnemonic names.
+  real :: h_ip3, h_ip2, h_ip1, h_i, h_im1, h_im2, h_im3 ! Neighboring thicknesses or sensibly
+                                                 ! extrapolated values [H ~> m or kg m-2]
+  real :: wh    ! WENO flux
+  character(len=256) :: mesg
+  integer :: i, j, isl, iel, jsl, jel, n, stencil
+  logical :: local_open_BC
+  type(OBC_segment_type), pointer :: segment => NULL()
+  !real :: order3, order5, order7, dx, area3, area5, area7
+  real :: order5, order7, dx, area3, area5, area7
+  real :: am3, am2, am1, a0, ap1, ap2, ap3
+  real, dimension(SZI_(G),SZJ_(G))  :: order3 !
+
+  local_open_BC = .false.
+  if (associated(OBC)) then
+    local_open_BC = OBC%open_u_BCs_exist_globally
+  endif
+
+  isl = LB%ish-1 ; iel = LB%ieh+1 ; jsl = LB%jsh ; jel = LB%jeh
+
+  ! This is the stencil of the reconstruction, not the scheme overall.
+  stencil = 3 !; if (CS%weno7) stencil = 4
+
+  if ((isl-stencil < G%isd) .or. (iel+stencil > G%ied)) then
+    write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_x called with a ", &
+               & "x-halo that needs to be increased by ",i2,".")') &
+               stencil + max(G%isd-isl,iel-G%ied)
+    call MOM_error(FATAL,mesg)
+  endif
+  if ((jsl < G%jsd) .or. (jel > G%jed)) then
+    write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_x called with a ", &
+               & "y-halo that needs to be increased by ",i2,".")') &
+               max(G%jsd-jsl,jel-G%jed)
+    call MOM_error(FATAL,mesg)
+  endif
+
+  do j=jsl,jel ; do i=isl-1,iel+1
+    order3(i,j) = G%mask2dT(i-1,j)*G%mask2dT(i,j)*G%mask2dT(i+1,j)
+  enddo ; enddo
+
+  if (local_open_BC) then
+    do n=1, OBC%number_of_segments
+      segment => OBC%segment(n)
+      if (.not. segment%on_pe) cycle
+      if (segment%direction == OBC_DIRECTION_S .or. &
+          segment%direction == OBC_DIRECTION_N) then
+        J=segment%HI%JsdB
+        do i=segment%HI%isd,segment%HI%ied
+          order3(i,j) = 0.0
+          order3(i+1,j) = 0.0
+        enddo
+      endif
+    enddo
+  endif
+
+  do j=jsl,jel ; do i=isl,iel
+    ! Neighboring values should take into account any boundaries.
+    h_im2 = G%mask2dT(i-2,j) * h_in(i-2,j) + (1.0-G%mask2dT(i-2,j)) * h_in(i-1,j)
+    h_im1 = G%mask2dT(i-1,j) * h_in(i-1,j) + (1.0-G%mask2dT(i-1,j)) * h_in(i,j)
+    h_i = h_in(i,j)
+    h_ip1 = G%mask2dT(i+1,j) * h_in(i+1,j) + (1.0-G%mask2dT(i+1,j)) * h_in(i,j)
+    h_ip2 = G%mask2dT(i+2,j) * h_in(i+2,j) + (1.0-G%mask2dT(i+2,j)) * h_in(i+1,j)
+
+    am2 = G%mask2dT(i-2,j)*G%areaT(i-2,j)
+    am1 = G%mask2dT(i-1,j)*G%areaT(i-1,j)
+    a0 = G%mask2dT(i,j)*G%areaT(i,j)
+    ap1 = G%mask2dT(i+1,j)*G%areaT(i+1,j)
+    ap2 = G%mask2dT(i+2,j)*G%areaT(i+2,j)
+
+    area3 = min(am1*h_im1, a0*h_i, ap1*h_ip1)
+    area5 = min(area3, am2*h_im2, ap2*h_ip2)
+
+    !order3(i,j) = G%mask2dT(i-1,j)*G%mask2dT(i,j)*G%mask2dT(i+1,j)
+    order5 = order3(i,j)*G%mask2dT(i-2,j)*G%mask2dT(i+2,j)
+
+    if (area3 <= G%areaT(i,j)*h_min) order3(i,j) = 0.0
+    if (area5 <= G%areaT(i,j)*h_min) order5 = 0.0
+
+    order7 = 0.0
+    if (CS%weno7) then
+      h_im3 = G%mask2dT(i-3,j) * h_in(i-3,j) + (1.0-G%mask2dT(i-3,j)) * h_in(i-2,j)
+      h_ip3 = G%mask2dT(i+3,j) * h_in(i+3,j) + (1.0-G%mask2dT(i+3,j)) * h_in(i+2,j)
+
+      am3 = G%mask2dT(i-3,j)*G%areaT(i-3,j)
+      ap3 = G%mask2dT(i+3,j)*G%areaT(i+3,j)
+      area7 = min(area5, am3*h_im3, ap3*h_ip3)
+      order7 = order5*G%mask2dT(i-3,j)*G%mask2dT(i+3,j)
+      if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
+    endif
+
+    dx = G%dxT(i,j)
+
+    if (order7 == 1.0) then
+      call weno7_reconstruction_interface(h_W(i,j), h_E(i,j), h_im3, h_im2, h_im1, h_i, h_ip1, h_ip2, h_ip3, h_min, dx)
+    elseif (order5 == 1.0) then
+      call weno5_reconstruction_interface(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, h_ip2, h_min, dx)
+    elseif(order3(i,j) == 1.0) then
+      call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im1, h_i, h_ip1, h_min, dx)
+    else
+      h_W(i,j) = h_i
+      h_E(i,j) = h_i
+    endif
+  enddo ; enddo
+
+  if (local_open_BC) then
+    do n=1, OBC%number_of_segments
+      segment => OBC%segment(n)
+      if (.not. segment%on_pe) cycle
+      if (segment%direction == OBC_DIRECTION_E) then
+        I=segment%HI%IsdB
+        do j=segment%HI%jsd,segment%HI%jed
+          h_W(i+1,j) = h_in(i,j)
+          h_E(i+1,j) = h_in(i,j)
+          h_W(i,j) = h_in(i,j)
+          h_E(i,j) = h_in(i,j)
+        enddo
+      elseif (segment%direction == OBC_DIRECTION_W) then
+        I=segment%HI%IsdB
+        do j=segment%HI%jsd,segment%HI%jed
+          h_W(i,j) = h_in(i+1,j)
+          h_E(i,j) = h_in(i+1,j)
+          h_W(i+1,j) = h_in(i+1,j)
+          h_E(i+1,j) = h_in(i+1,j)
+        enddo
+      endif
+    enddo
+  endif
+
+  call WENO_limiter(h_in, h_W, h_E, h_min, G, isl, iel, jsl, jel)
+
+  return
+end subroutine WENO_reconstruction_x
+
+!> Calculates left/right edge values for WENO reconstruction.
+subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, CS)
+  type(ocean_grid_type),             intent(in)  :: G    !< Ocean's grid structure.
+  real, dimension(SZI_(G),SZJ_(G)),  intent(in)  :: h_in !< Layer thickness [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: h_S  !< South edge thickness in the reconstruction,
+                                                         !! [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: h_N  !< North edge thickness in the reconstruction,
+                                                         !! [H ~> m or kg m-2].
+  type(cont_loop_bounds_type),       intent(in)  :: LB   !< Active loop bounds structure.
+  real,                              intent(in)  :: h_min !< The minimum thickness
+                    !! that can be obtained by a concave parabolic fit [H ~> m or kg m-2]
+  logical,                           intent(in)  :: monotonic !< If true, use the
+                    !! Colella & Woodward monotonic limiter.
+                    !! Otherwise use a simple positive-definite limiter.
+  type(ocean_OBC_type),              pointer     :: OBC !< Open boundaries control structure.
+  type(continuity_PPM_CS), intent(in)            :: CS   !< This module's control structure.
+
+  ! Local variables with useful mnemonic names.
+  real :: h_jp3, h_jp2, h_jp1, h_j, h_jm1, h_jm2, h_jm3 ! Neighboring thicknesses or sensibly
+                                                 ! extrapolated values [H ~> m or kg m-2]
+  real :: wh    ! WENO flux
+  character(len=256) :: mesg
+  integer :: i, j, isl, iel, jsl, jel, n, stencil
+  logical :: local_open_BC
+  type(OBC_segment_type), pointer :: segment => NULL()
+  !real :: order3, order5, order7, dy, area3, area5, area7
+  real :: order5, order7, dy, area3, area5, area7
+  real :: am3, am2, am1, a0, ap1, ap2, ap3, rr
+  real, dimension(SZI_(G),SZJ_(G))  :: order3 !
+
+  local_open_BC = .false.
+  if (associated(OBC)) then
+    local_open_BC = OBC%open_v_BCs_exist_globally
+  endif
+
+  isl = LB%ish ; iel = LB%ieh ; jsl = LB%jsh-1 ; jel = LB%jeh+1
+
+  ! This is the stencil of the reconstruction, not the scheme overall.
+  stencil = 3 !; if (CS%weno7) stencil = 4
+
+  if ((isl < G%isd) .or. (iel > G%ied)) then
+    write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_y called with a ", &
+               & "x-halo that needs to be increased by ",i2,".")') &
+               max(G%isd-isl,iel-G%ied)
+    call MOM_error(FATAL,mesg)
+  endif
+  if ((jsl-stencil < G%jsd) .or. (jel+stencil > G%jed)) then
+    write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_y called with a ", &
+                 & "y-halo that needs to be increased by ",i2,".")') &
+                 stencil + max(G%jsd-jsl,jel-G%jed)
+    call MOM_error(FATAL,mesg)
+  endif
+
+  do j=jsl-1,jel+1 ; do i=isl,iel
+    order3(i,j) = G%mask2dT(i,j-1)*G%mask2dT(i,j)*G%mask2dT(i,j+1)
+  enddo ; enddo
+
+  if (local_open_BC) then
+    do n=1, OBC%number_of_segments
+      segment => OBC%segment(n)
+      if (.not. segment%on_pe) cycle
+      if (segment%direction == OBC_DIRECTION_S .or. &
+          segment%direction == OBC_DIRECTION_N) then
+        J=segment%HI%JsdB
+        do i=segment%HI%isd,segment%HI%ied
+          order3(i,j) = 0.0
+          order3(i,j+1) = 0.0
+        enddo
+      endif
+    enddo
+  endif
+
+  do j=jsl,jel ; do i=isl,iel
+    ! Neighboring values should take into account any boundaries.
+    h_jm2 = G%mask2dT(i,j-2) * h_in(i,j-2) + (1.0-G%mask2dT(i,j-2)) * h_in(i,j-1)
+    h_jm1 = G%mask2dT(i,j-1) * h_in(i,j-1) + (1.0-G%mask2dT(i,j-1)) * h_in(i,j)
+    h_j = h_in(i,j)
+    h_jp1 = G%mask2dT(i,j+1) * h_in(i,j+1) + (1.0-G%mask2dT(i,j+1)) * h_in(i,j)
+    h_jp2 = G%mask2dT(i,j+2) * h_in(i,j+2) + (1.0-G%mask2dT(i,j+2)) * h_in(i,j+1)
+
+    am2 = G%mask2dT(i,j-2)*G%areaT(i,j-2)
+    am1 = G%mask2dT(i,j-1)*G%areaT(i,j-1)
+    a0  = G%mask2dT(i,j)*G%areaT(i,j)
+    ap1 = G%mask2dT(i,j+1)*G%areaT(i,j+1)
+    ap2 = G%mask2dT(i,j+2)*G%areaT(i,j+2)
+
+    area3 = min(am1*h_jm1, a0*h_j, ap1*h_jp1)
+    area5 = min(area3, am2*h_jm2, ap2*h_jp2)
+
+    !order3(i,j) = G%mask2dT(i,j-1)*G%mask2dT(i,j)*G%mask2dT(i,j+1)
+    order5 = order3(i,j)*G%mask2dT(i,j-2)*G%mask2dT(i,j+2)
+
+    if (area3 <= G%areaT(i,j)*h_min) order3(i,j) = 0.0
+    if (area5 <= G%areaT(i,j)*h_min) order5 = 0.0
+
+    order7 = 0.0
+    if (CS%weno7) then
+      h_jm3 = G%mask2dT(i,j-3) * h_in(i,j-3) + (1.0-G%mask2dT(i,j-3)) * h_in(i,j-2)
+      h_jp3 = G%mask2dT(i,j+3) * h_in(i,j+3) + (1.0-G%mask2dT(i,j+3)) * h_in(i,j+2)
+
+      am3 = G%mask2dT(i,j-3)*G%areaT(i,j-3)
+      ap3 = G%mask2dT(i,j+3)*G%areaT(i,j+3)
+      area7 = min(area5, am3*h_jm3, ap3*h_jp3)
+      order7 = order5*G%mask2dT(i,j-3)*G%mask2dT(i,j+3)
+      if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
+    endif
+
+    dy = G%dyT(i,j)
+
+    if (order7 == 1.0) then
+      call weno7_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm3, h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_jp3, h_min, dy)
+    elseif (order5 == 1.0) then
+      call weno5_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_min, dy)
+    elseif (order3(i,j) == 1.0) then
+      call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm1, h_j, h_jp1, h_min, dy)
+    else
+      h_S(i,j) = h_j
+      h_N(i,j) = h_j
+    endif
+  enddo ; enddo
+
+  if (local_open_BC) then
+    do n=1, OBC%number_of_segments
+      segment => OBC%segment(n)
+      if (.not. segment%on_pe) cycle
+      if (segment%direction == OBC_DIRECTION_N) then
+        J=segment%HI%JsdB
+        do i=segment%HI%isd,segment%HI%ied
+          h_S(i,j+1) = h_in(i,j)
+          h_N(i,j+1) = h_in(i,j)
+          h_S(i,j) = h_in(i,j)
+          h_N(i,j) = h_in(i,j)
+        enddo
+      elseif (segment%direction == OBC_DIRECTION_S) then
+        J=segment%HI%JsdB
+        do i=segment%HI%isd,segment%HI%ied
+          h_S(i,j) = h_in(i,j+1)
+          h_N(i,j) = h_in(i,j+1)
+          h_S(i,j+1) = h_in(i,j+1)
+          h_N(i,j+1) = h_in(i,j+1)
+        enddo
+      endif
+    enddo
+  endif
+
+  call WENO_limiter(h_in, h_S, h_N, h_min, G, isl, iel, jsl, jel)
+
+  return
+end subroutine WENO_reconstruction_y
+
 !> Return the maximum ratio of a/b or maxrat.
 function ratio_max(a, b, maxrat) result(ratio)
   real, intent(in) :: a       !< Numerator, in arbitrary units [A]
@@ -2707,6 +3102,14 @@ subroutine continuity_PPM_init(Time, G, GV, US, param_file, diag, CS)
                  "continuity solver.  This scheme is highly diffusive "//&
                  "but may be useful for debugging or in single-column "//&
                  "mode where its minimal stencil is useful.", default=.false.)
+  call get_param(param_file, mdl, "WENO5_CONTINUITY", CS%weno5, &
+                 "If true, CONTINUITY_PPM becomes a weno5 "//&
+                 "continuity solver.  This scheme is more accurate but "//&
+                 "might have CFL restriction.", default=.false.)
+  call get_param(param_file, mdl, "WENO7_CONTINUITY", CS%weno7, &
+                 "If true, CONTINUITY_PPM becomes a weno7 "//&
+                 "continuity solver.  This scheme is more accurate but "//&
+                 "might have CFL restriction.", default=.false.)
   call get_param(param_file, mdl, "ETA_TOLERANCE", CS%tol_eta, &
                  "The tolerance for the differences between the "//&
                  "barotropic and baroclinic estimates of the sea surface "//&
@@ -2758,7 +3161,16 @@ function continuity_PPM_stencil(CS) result(stencil)
   type(continuity_PPM_CS), intent(in) :: CS   !< Module's control structure.
   integer ::  stencil !< The continuity solver stencil size with the current settings.
 
-  stencil = 3 ; if (CS%simple_2nd) stencil = 2 ; if (CS%upwind_1st) stencil = 1
+  stencil = 3
+  if (CS%simple_2nd) then
+    stencil = 2
+  elseif (CS%upwind_1st) then
+    stencil = 1
+  elseif (CS%weno5) then
+    stencil = 3
+  elseif (CS%weno7) then
+    stencil = 4
+  endif
 
 end function continuity_PPM_stencil
 

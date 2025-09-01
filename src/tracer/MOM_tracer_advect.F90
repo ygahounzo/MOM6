@@ -19,7 +19,12 @@ use MOM_tracer_registry, only : tracer_registry_type, tracer_type
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_tracer_advect_schemes, only : ADVECT_PLM, ADVECT_PPMH3, ADVECT_PPM
+use MOM_tracer_advect_schemes, only : ADVECT_WENO5, ADVECT_WENO7, ADVECT_WENO9
+use MOM_tracer_advect_schemes, only : ADVECT_WENO5NM
 use MOM_tracer_advect_schemes, only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
+use MOM_tracer_advect_weno, only : weno3_reconstruction, weno5_reconstruction
+use MOM_tracer_advect_weno, only : weno7_reconstruction, weno9_reconstruction, PPM_reconstruction
+use MOM_tracer_advect_weno, only : weno5NM_reconstruction
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -147,6 +152,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
        else
          stencil_local = 3
        endif
+     elseif (local_advect_scheme(m) == ADVECT_WENO5) then
+       stencil_local = 3
+     elseif (local_advect_scheme(m) == ADVECT_WENO5NM) then
+       stencil_local = 3
+     elseif (local_advect_scheme(m) == ADVECT_WENO7) then
+       stencil_local = 4
+     elseif (local_advect_scheme(m) == ADVECT_WENO9) then
+       stencil_local = 5
      endif
      stencil = max(stencil, stencil_local)
   enddo
@@ -156,7 +169,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       "stencil is wider than the halo.")
   endif
 
-  max_iter = 2*INT(CEILING(dt/CS%dt)) + 1
+  max_iter = 2*INT(CEILING(dt/CS%dt)) + 1 
 
   if (present(max_iter_in)) max_iter = max_iter_in
   if (present(x_first_in))  x_first = x_first_in
@@ -223,7 +236,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   !$OMP end parallel
 
   isv = is ; iev = ie ; jsv = js ; jev = je
-
+  
   do itt=1,max_iter
 
     if (isv > is-stencil) then
@@ -323,7 +336,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     if (itt >= max_iter) then
       exit
     endif
-
+    
     ! Exit if there are no layers that need more iterations.
     if (isv > is-stencil) then
       do_any = 0
@@ -412,6 +425,10 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer :: i, j, m, n, i_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
+  real :: order3, order5, order7, order9
+  real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
+  real :: u, Tmin, Tmax, wq, mu, qext, dx(6)
+  logical :: non_neg
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -505,7 +522,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
       enddo
     endif ; endif
 
-
     ! Calculate the i-direction fluxes of each tracer, using as much
     ! the minimum of the remaining mass flux (uhr) and the half the mass
     ! in the cell plus whatever part of its half of the mass flux that
@@ -583,6 +599,90 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             flux_x(I,j,m) = uhh(I)*( aL + 0.5 * CFL(I) * ( &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
+        enddo
+      elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
+              (advect_schemes(m) == ADVECT_WENO9)) then
+        do I=is-1,ie
+
+          order3 = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)*G%mask2dCu(I+1,j)* &
+                   G%mask2dCu(I-2,j)*G%mask2dCu(I+2,j)
+          order5 = order3*G%mask2dCu(I-3,j)*G%mask2dCu(I+3,j)
+
+          Tm2 = T_tmp(i-2,m); Tm1 = T_tmp(i-1,m); Tc = T_tmp(i,m) ;
+          Tp1 = T_tmp(i+1,m); Tp2 = T_tmp(i+2,m); Tp3 = T_tmp(i+3,m)
+
+          order7 = 0.0 ; order9 = 0.0
+          if (advect_schemes(m) == ADVECT_WENO7) then
+            order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
+            Tm3 = T_tmp(i-3,m); Tp4 = T_tmp(i+4,m)
+          elseif (advect_schemes(m) == ADVECT_WENO9) then
+            order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
+            order9 = order7*G%mask2dCu(I-5,j)*G%mask2dCu(I+5,j)
+            Tm3 = T_tmp(i-3,m); Tp4 = T_tmp(i+4,m)
+            Tm4 = T_tmp(i-4,m); Tp5 = T_tmp(i+5,m)
+          endif
+
+          u = uhh(I)
+          Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
+          mu = CFL(I)
+
+          qext = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)
+          if (u < 0.0) then
+            qext = G%mask2dCu(I,j)*G%mask2dCu(I+1,j)
+          endif
+
+          non_neg = Tr(m)%non_negative
+
+          if (order9 == 1.0) then
+            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, Tmin, Tmax, non_neg)
+          elseif (order7 == 1.0) then
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, non_neg)
+          elseif (order5 == 1.0) then
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, non_neg)
+          elseif (order3 == 1.0) then
+            call weno3_reconstruction(wq, Tm1, Tc, Tp1, Tp2, u, Tmin, Tmax, non_neg)
+          else
+            if (u >= 0.0) then
+              wq = Tc
+            else
+              wq = Tp1
+            endif
+            call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, u, mu, qext)
+          endif
+
+          flux_x(I,j,m) = u*wq
+        enddo
+      elseif (advect_schemes(m) == ADVECT_WENO5NM) then
+        do I=is-1,ie
+
+          order3 = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)*G%mask2dCu(I+1,j)* &
+                   G%mask2dCu(I-2,j)*G%mask2dCu(I+2,j)
+          order5 = order3*G%mask2dCu(I-3,j)*G%mask2dCu(I+3,j)
+
+          Tm2 = T_tmp(i-2,m); Tm1 = T_tmp(i-1,m); Tc = T_tmp(i,m) ;
+          Tp1 = T_tmp(i+1,m); Tp2 = T_tmp(i+2,m); Tp3 = T_tmp(i+3,m)
+
+          u = uhh(I)
+          Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
+          mu = CFL(I)
+
+          qext = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)
+          if (u < 0.0) then
+            qext = G%mask2dCu(I,j)*G%mask2dCu(I+1,j)
+          endif
+
+          dx(1) = G%dxCu(I-2,j) ; dx(2) = G%dxCu(I-1,j) ; dx(3) = G%dxCu(I,j)
+          dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j) ; dx(6) = G%dxCu(I+3,j)
+
+          non_neg = Tr(m)%non_negative
+
+          if (order5 == 1.0) then
+            call weno5NM_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, dx, non_neg)
+          else
+            call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, u, mu, qext)
+          endif
+
+          flux_x(I,j,m) = u*wq
         enddo
       else ! PLM
         do I=is-1,ie
@@ -680,12 +780,15 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
     ! Update do_i so that nothing changes outside of the OBC (problem for interior OBCs only)
     if (associated(OBC)) then
-      if ((.not.OBC%exterior_OBC_bug) .and. (OBC%OBC_pe)) then
+      if ((OBC%exterior_OBC_bug .eqv. .false.) .and. (OBC%OBC_pe)) then
         if (OBC%specified_u_BCs_exist_globally .or. OBC%open_u_BCs_exist_globally) then
-          do i=is,ie-1
-            if (OBC%segnum_u(I,j) > 0) do_i(i+1,j) = .false.  ! OBC_DIRECTION_E
-            if (OBC%segnum_u(I,j) < 0) do_i(i,j) = .false.    ! OBC_DIRECTION_W
-          enddo
+          do i=is,ie-1 ; if (OBC%segnum_u(I,j) /= OBC_NONE) then
+            if (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_E) then
+              do_i(i+1,j) = .false.
+            elseif (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_W) then
+              do_i(i,j) = .false.
+            endif
+          endif ; enddo
         endif
       endif
     endif
@@ -805,6 +908,10 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer :: i, j, j2, m, n, j_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
+  real :: order3, order5, order7, order9
+  real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
+  real :: v, Tmin, Tmax, wq, mu, qext, dy(6)
+  logical :: non_neg
 
   usePLMslope = .false.
   ! stencil for calculating slope values
@@ -989,6 +1096,88 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
+      elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
+            (advect_schemes(m) == ADVECT_WENO9)) then
+        do i=is,ie
+
+          order3 = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)*G%mask2dCv(i,J+1)* &
+                   G%mask2dCv(i,J-2)*G%mask2dCv(i,J+2)
+          order5 = order3*G%mask2dCv(i,J-3)*G%mask2dCv(i,J+3)
+
+          Tm2 = T_tmp(i,m,j-2); Tm1 = T_tmp(i,m,j-1); Tc = T_tmp(i,m,j) ;
+          Tp1 = T_tmp(i,m,j+1); Tp2 = T_tmp(i,m,j+2); Tp3 = T_tmp(i,m,j+3)
+
+          order7 = 0.0 ; order9 = 0.0
+          if (advect_schemes(m) == ADVECT_WENO7) then
+            order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
+            Tm3 = T_tmp(i,m,j-3); Tp4 = T_tmp(i,m,j+4)
+          elseif (advect_schemes(m) == ADVECT_WENO9) then
+            order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
+            order9 = order7*G%mask2dCv(i,J-5)*G%mask2dCv(i,J+5)
+            Tm3 = T_tmp(i,m,j-3); Tp4 = T_tmp(i,m,j+4)
+            Tm4 = T_tmp(i,m,j-4); Tp5 = T_tmp(i,m,j+5)
+          endif
+
+          v = vhh(i,J)
+          Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
+          mu = CFL(i)
+          qext = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)
+          if (v < 0.0) then
+            qext = G%mask2dCv(i,J)*G%mask2dCv(i,J+1)
+          endif
+
+          non_neg = Tr(m)%non_negative
+
+          if (order9 == 1.0) then
+            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, Tmin, Tmax, non_neg)
+          elseif (order7 == 1.0) then
+            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, non_neg)
+          elseif (order5 == 1.0) then
+            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, non_neg)
+          elseif (order3 == 1.0) then
+            call weno3_reconstruction(wq, Tm1, Tc, Tp1, Tp2, v, Tmin, Tmax, non_neg)
+          else
+            if (v >= 0.0) then
+               wq = Tc
+            else
+               wq = Tp1
+            endif
+            !call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, v, mu, qext)
+          endif
+
+          flux_y(i,m,J) = v*wq
+        enddo
+      elseif (advect_schemes(m) == ADVECT_WENO5NM) then
+        do i=is,ie
+
+          order3 = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)*G%mask2dCv(i,J+1)* &
+                   G%mask2dCv(i,J-2)*G%mask2dCv(i,J+2)
+          order5 = order3*G%mask2dCv(i,J-3)*G%mask2dCv(i,J+3)
+
+          Tm2 = T_tmp(i,m,j-2); Tm1 = T_tmp(i,m,j-1); Tc = T_tmp(i,m,j) ;
+          Tp1 = T_tmp(i,m,j+1); Tp2 = T_tmp(i,m,j+2); Tp3 = T_tmp(i,m,j+3)
+
+          v = vhh(i,J)
+          Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
+          mu = CFL(i)
+          qext = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)
+          if (v < 0.0) then
+            qext = G%mask2dCv(i,J)*G%mask2dCv(i,J+1)
+          endif
+
+          dy(1) = G%dyCv(i,J-2) ; dy(2) = G%dyCv(i,J-1) ; dy(3) = G%dyCv(i,J)
+          dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2) ; dy(6) = G%dyCv(i,J+3)
+
+          non_neg = Tr(m)%non_negative
+
+          if (order5 == 1.0) then
+            call weno5NM_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, dy, non_neg)
+          else
+            call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, v, mu, qext)
+          endif
+
+          flux_y(i,m,J) = v*wq
+        enddo
       else ! PLM
         do i=is,ie
           if (vhh(i,J) >= 0.0) then
@@ -1096,8 +1285,16 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
       if ((OBC%exterior_OBC_bug .eqv. .false.) .and. (OBC%OBC_pe)) then
         if (OBC%specified_v_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally) then
           do i=is,ie
-            if (OBC%segnum_v(i,J-1) > 0) do_i(i,j) = .false.  ! OBC_DIRECTION_N
-            if (OBC%segnum_v(i,J) < 0) do_i(i,j) = .false.  ! OBC_DIRECTION_S
+            if (OBC%segnum_v(i,J-1) /= OBC_NONE) then
+              if (OBC%segment(OBC%segnum_v(i,J-1))%direction == OBC_DIRECTION_N) then
+                do_i(i,j) = .false.
+              endif
+            endif
+            if (OBC%segnum_v(i,J) /= OBC_NONE) then
+              if (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_S) then
+                do_i(i,j) = .false.
+              endif
+            endif
           enddo
         endif
       endif

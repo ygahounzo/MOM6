@@ -57,7 +57,8 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                            df_2d_x, df_2d_y, advection_xy, registry_diags, &
                            conc_scale, flux_nameroot, flux_longname, flux_units, flux_scale, &
                            convergence_units, convergence_scale, cmor_tendprefix, diag_form, &
-                           restart_CS, mandatory, underflow_conc, Tr_out, advect_scheme)
+                           restart_CS, mandatory, underflow_conc, Tr_out, advect_scheme, &
+                           non_negative)
   type(hor_index_type),           intent(in)    :: HI           !< horizontal index type
   type(verticalGrid_type),        intent(in)    :: GV           !< ocean vertical grid structure
   type(tracer_registry_type),     pointer       :: Reg          !< pointer to the tracer registry
@@ -133,6 +134,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
 
   integer,                 optional, intent(in) :: advect_scheme !< Advection scheme for this tracer, the default is -1
                                                                 !! indicating to use the scheme from MOM_tracer_advect
+  logical,              optional, intent(in)    :: non_negative !< If true, this tracer is non-negative
 
   logical :: mand
   type(tracer_type), pointer :: Tr=>NULL()
@@ -236,6 +238,9 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
 
   Tr%advect_scheme = -1
   if(present(advect_scheme)) Tr%advect_scheme = advect_scheme
+
+  Tr%non_negative = .true.
+  if(present(non_negative)) Tr%non_negative = non_negative
 
   Tr%t => tr_ptr
 

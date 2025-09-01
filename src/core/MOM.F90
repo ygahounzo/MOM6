@@ -157,6 +157,7 @@ use MOM_verticalGrid,          only : verticalGrid_type, verticalGridInit, verti
 use MOM_verticalGrid,          only : get_thickness_units, get_flux_units, get_tr_flux_units
 use MOM_wave_interface,        only : wave_parameters_CS, waves_end, waves_register_restarts
 use MOM_wave_interface,        only : Update_Stokes_Drift
+use MOM_tracer_advect_weno,    only : tracer_min_max_init
 
 ! Database client used for machine-learning interface
 use MOM_database_comms,       only : dbcomms_CS_type, database_comms_init, dbclient_type
@@ -2962,7 +2963,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                            net_surfflux_longname='Net temperature flux ignoring short-wave, as used by [CVMix] KPP', &
                            flux_scale=conv2watt, convergence_units='W m-2', &
                            convergence_scale=conv2watt, CMOR_tendprefix="opottemp", &
-                           diag_form=2, underflow_conc=temp_underflow, Tr_out=CS%tv%tr_T)
+                           diag_form=2, underflow_conc=temp_underflow, Tr_out=CS%tv%tr_T, non_negative=.false.)
       call register_tracer(CS%tv%S, CS%tracer_Reg, param_file, HI, GV, &
                            tr_desc=vd_S, registry_diags=.true., conc_scale=US%S_to_ppt, &
                            flux_nameroot='S', flux_units=S_flux_units, flux_longname='Salt', &
@@ -3632,6 +3633,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
              CS%diag, CS%OBC, CS%tracer_flow_CSp, CS%sponge_CSp, &
              CS%ALE_sponge_CSp, CS%tv)
   if (present(tracer_flow_CSp)) tracer_flow_CSp => CS%tracer_flow_CSp
+
+  ! Find the min and max of the tracers
+  call tracer_min_max_init(CS%tracer_Reg, G, GV)
 
   ! If running in offline tracer mode, initialize the necessary control structure and
   ! parameters
