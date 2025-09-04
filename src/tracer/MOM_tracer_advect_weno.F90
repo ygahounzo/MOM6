@@ -11,7 +11,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public weno3_reconstruction 
+public weno3_reconstruction
 public weno5_reconstruction
 public weno7_reconstruction
 public weno9_reconstruction
@@ -36,7 +36,7 @@ pure subroutine weno3_reconstruction(wq, q, u, qmin, qmax, non_neg)
 
   wq = 0.0
 
-  if (u > 0.0) then 
+  if (u > 0.0) then
     call weno3_reconstruction_interface(wpl, wmr, q(1), q(2), q(3))
     ! positivity limiter
     if (non_neg) call PP_limiter(q(2), wmr, wpl, wq, qmin, qmax)
@@ -330,9 +330,9 @@ pure subroutine weno5NM_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp,
 end subroutine weno5NM_reconstruction_interface
 
 !> 7th-order weno reconstruction subroutine and limiter
-pure subroutine weno7_reconstruction(wq, q, u, qmin, qmax, non_neg) 
+pure subroutine weno7_reconstruction(wq, q, u, qmin, qmax, non_neg)
 
-  real, intent(in) :: q(8)       !< tracer concentration 
+  real, intent(in) :: q(8)       !< tracer concentration
                                  !! from i-3 to i+4 respectively
   real, intent(in) :: u          !< advection velocity
   real, intent(in) :: qmin, qmax !< global min and max of tracer concentration
@@ -483,7 +483,7 @@ end subroutine weno9_reconstruction
 !> 9th-order weno z-type reconstruction flux
 pure subroutine weno9_reconstruction_interface(wpl, wmr, qm4, qm3, qm2, qm1, &
                 q0, qp1, qp2, qp3, qp4)
-  real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration 
+  real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration
                                                                  !! for 7-stencil wide
   real, intent(out) :: wpl, wmr                                  !< reconstructed weno flux
 
@@ -491,8 +491,8 @@ pure subroutine weno9_reconstruction_interface(wpl, wmr, qm4, qm3, qm2, qm1, &
   real :: d0, d1, d2, d3, d4               ! linear weights
   real :: w0, w1, w2, w3, w4               ! nonlinear weights
   real :: P0, P1, P2, P3, P4               ! reconstructed polynomials
-  real :: a0, a1, a2, a3, a4                
-  real :: eps,wnorm, tau 
+  real :: a0, a1, a2, a3, a4
+  real :: eps,wnorm, tau
   integer, parameter :: r = 2
 
   d0 = 1.0/126.0 ; d1 = 10.0/63.0 ; d2 = 10.0/21.0 ; d3 = 20.0/63.0 ; d4 = 5.0/126.0
@@ -676,7 +676,7 @@ subroutine tracer_min_max_init(Reg, G, GV)
   type(verticalGrid_type),    intent(in) :: GV   !< ocean vertical grid structure
 
   type(tracer_type), pointer :: Tr=>NULL()
-  integer :: k, nz, m, ntr 
+  integer :: k, nz, m, ntr
   real :: Tmin, Tmax ! Global min and max of tracer
 
   nz = GV%ke ; ntr = Reg%ntr
@@ -697,8 +697,8 @@ end subroutine tracer_min_max_init
 !> \namespace mom_tracer_advect
 !!
 !!  This program contains the subroutines that advect tracers
-!!  horizontally (i.e. along layers) using high-order WENO schemes (Balsara et al., 2016) 
-!!  using the Z-type smoothness indicators (Borges et al., 2008). 
+!!  horizontally (i.e. along layers) using high-order WENO schemes (Balsara et al., 2016)
+!!  using the Z-type smoothness indicators (Borges et al., 2008).
 !!  We followed Suresh & Huynh (1997) and Balsara & Shu (2000 for the monotonicity preserving
 !!  used along with the WENO schemes.
 !!

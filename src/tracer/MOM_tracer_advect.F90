@@ -169,7 +169,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       "stencil is wider than the halo.")
   endif
 
-  max_iter = 2*INT(CEILING(dt/CS%dt)) + 1 
+  max_iter = 2*INT(CEILING(dt/CS%dt)) + 1
 
   if (present(max_iter_in)) max_iter = max_iter_in
   if (present(x_first_in))  x_first = x_first_in
@@ -236,7 +236,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   !$OMP end parallel
 
   isv = is ; iev = ie ; jsv = js ; jev = je
-  
+
   do itt=1,max_iter
 
     if (isv > is-stencil) then
@@ -336,7 +336,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     if (itt >= max_iter) then
       exit
     endif
-    
+
     ! Exit if there are no layers that need more iterations.
     if (isv > is-stencil) then
       do_any = 0

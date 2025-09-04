@@ -2796,7 +2796,7 @@ subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, C
   type(OBC_segment_type), pointer :: segment => NULL()
   real :: order5, order7, dx, area3, area5, area7
   real :: am3, am2, am1, a0, ap1, ap2, ap3
-  real, dimension(SZI_(G),SZJ_(G))  :: order3 
+  real, dimension(SZI_(G),SZJ_(G))  :: order3
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2806,7 +2806,7 @@ subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, C
   isl = LB%ish-1 ; iel = LB%ieh+1 ; jsl = LB%jsh ; jel = LB%jeh
 
   ! This is the stencil of the reconstruction, not the scheme overall.
-  stencil = 3 
+  stencil = 3
 
   if ((isl-stencil < G%isd) .or. (iel+stencil > G%ied)) then
     write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_x called with a ", &
@@ -2944,7 +2944,7 @@ subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, C
   type(OBC_segment_type), pointer :: segment => NULL()
   real :: order5, order7, dy, area3, area5, area7
   real :: am3, am2, am1, a0, ap1, ap2, ap3, rr
-  real, dimension(SZI_(G),SZJ_(G))  :: order3 
+  real, dimension(SZI_(G),SZJ_(G))  :: order3
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2954,7 +2954,7 @@ subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, C
   isl = LB%ish ; iel = LB%ieh ; jsl = LB%jsh-1 ; jel = LB%jeh+1
 
   ! This is the stencil of the reconstruction, not the scheme overall.
-  stencil = 3 
+  stencil = 3
 
   if ((isl < G%isd) .or. (iel > G%ied)) then
     write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_y called with a ", &
