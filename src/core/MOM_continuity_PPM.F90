@@ -277,7 +277,8 @@ end subroutine continuity_2d_fluxes
 
 !> Correct the velocities to give the specified depth-integrated transports by applying a
 !! barotropic acceleration (subject to viscous drag) to the velocities.
-subroutine continuity_adjust_vel(u, v, h, dt, G, GV, US, CS, OBC, pbv, uhbt, vhbt, visc_rem_u, visc_rem_v)
+subroutine continuity_adjust_vel(u, v, h, dt, G, GV, US, CS, OBC, pbv, uhbt, vhbt, &
+                visc_rem_u, visc_rem_v)
   type(ocean_grid_type),   intent(inout) :: G   !< Ocean grid structure.
   type(verticalGrid_type), intent(in)    :: GV  !< Vertical grid structure.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
@@ -641,7 +642,8 @@ subroutine zonal_mass_flux(u, h_in, h_W, h_E, uh, dt, G, GV, US, CS, OBC, por_fa
       enddo ; endif
       call zonal_flux_layer(u(:,j,k), h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), &
                             uh(:,j,k), duhdu(:,k), visc_rem(:,k), &
-                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS, OBC)
+                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, &
+                            por_face_areaU(:,j,k), CS, OBC)
       if (local_specified_BC) then
         do I=ish-1,ieh ; if (OBC%segnum_u(I,j) /= 0) then
           l_seg = abs(OBC%segnum_u(I,j))
@@ -780,8 +782,10 @@ subroutine zonal_mass_flux(u, h_in, h_W, h_E, uh, dt, G, GV, US, CS, OBC, por_fa
           ! NOTE: simple_OBC_pt(I) should prevent access to segment OBC_NONE
           do k=1,nz ; do I=ish-1,ieh ; if (simple_OBC_pt(I)) then
             l_seg = abs(OBC%segnum_u(I,j))
-            if ((abs(OBC%segment(l_seg)%normal_vel(I,j,k)) > 0.0) .and. (OBC%segment(l_seg)%specified)) &
-              FAuI(I) = FAuI(I) + OBC%segment(l_seg)%normal_trans(I,j,k) / OBC%segment(l_seg)%normal_vel(I,j,k)
+            if ((abs(OBC%segment(l_seg)%normal_vel(I,j,k)) > 0.0) .and. &
+                    (OBC%segment(l_seg)%specified)) &
+              FAuI(I) = FAuI(I) + &
+                     OBC%segment(l_seg)%normal_trans(I,j,k) / OBC%segment(l_seg)%normal_vel(I,j,k)
           endif ; enddo ; enddo
           do I=ish-1,ieh ; if (simple_OBC_pt(I)) then
             BT_cont%FA_u_W0(I,j) = FAuI(I) ; BT_cont%FA_u_E0(I,j) = FAuI(I)
@@ -836,7 +840,8 @@ end subroutine zonal_mass_flux
 
 
 !> Calculates the vertically integrated mass or volume fluxes through the zonal faces.
-subroutine zonal_BT_mass_flux(u, h_in, h_W, h_E, uhbt, dt, G, GV, US, CS, OBC, por_face_areaU, LB_in)
+subroutine zonal_BT_mass_flux(u, h_in, h_W, h_E, uhbt, dt, G, GV, US, CS, OBC, &
+                por_face_areaU, LB_in)
   type(ocean_grid_type),                      intent(in)  :: G    !< Ocean's grid structure.
   type(verticalGrid_type),                    intent(in)  :: GV   !< Ocean's vertical grid structure.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in)  :: u    !< Zonal velocity [L T-1 ~> m s-1]
@@ -891,7 +896,8 @@ subroutine zonal_BT_mass_flux(u, h_in, h_W, h_E, uhbt, dt, G, GV, US, CS, OBC, p
     do k=1,nz
       ! This sets uh and duhdu.
       call zonal_flux_layer(u(:,j,k), h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), uh, duhdu, ones, &
-                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS, OBC)
+                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), &
+                            CS, OBC)
       if (OBC_in_row) then ; do I=ish-1,ieh ; if (OBC%segnum_u(I,j) /= 0) then
         l_seg = abs(OBC%segnum_u(I,j))
         if (OBC%segment(l_seg)%specified) uh(I) = OBC%segment(l_seg)%normal_trans(I,j,k)
@@ -1271,7 +1277,8 @@ subroutine zonal_flux_adjust(u, h_in, h_W, h_E, uhbt, uh_tot_0, duhdu_tot_0, &
       do I=ish-1,ieh ; u_new(I) = u(I,j,k) + du(I) * visc_rem(I,k) ; enddo
       call zonal_flux_layer(u_new, h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), &
                             uh_aux(:,k), duhdu(:,k), visc_rem(:,k), &
-                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS, OBC)
+                            dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, &
+                            por_face_areaU(:,j,k), CS, OBC)
     enddo ; endif
 
     if (itt < max_itts) then
@@ -1419,11 +1426,14 @@ subroutine set_zonal_BT_cont(u, h_in, h_W, h_E, BT_cont, uh_tot_0, duhdu_tot_0, 
       u_0(I) = u(I,j,k) + du0(I) * visc_rem(I,k)
     endif ; enddo
     call zonal_flux_layer(u_0, h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), uh_0, duhdu_0, &
-                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS)
+                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, &
+                          por_face_areaU(:,j,k), CS)
     call zonal_flux_layer(u_L, h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), uh_L, duhdu_L, &
-                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS)
+                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, &
+                          por_face_areaU(:,j,k), CS)
     call zonal_flux_layer(u_R, h_in(:,j,k), h_W(:,j,k), h_E(:,j,k), uh_R, duhdu_R, &
-                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, por_face_areaU(:,j,k), CS)
+                          visc_rem(:,k), dt, G, US, j, ish, ieh, do_I, CS%vol_CFL, &
+                          por_face_areaU(:,j,k), CS)
     do I=ish-1,ieh ; if (do_I(I)) then
       FAmt_0(I) = FAmt_0(I) + duhdu_0(I)
       FAmt_L(I) = FAmt_L(I) + duhdu_L(I)
@@ -1574,7 +1584,8 @@ subroutine meridional_mass_flux(v, h_in, h_S, h_N, vh, dt, G, GV, US, CS, OBC, p
       enddo ; endif
       call merid_flux_layer(v(:,J,k), h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), &
                             vh(:,J,k), dvhdv(:,k), visc_rem(:,k), &
-                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS, OBC)
+                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, &
+                            por_face_areaV(:,:,k), CS, OBC)
       if (local_specified_BC) then
         do i=ish,ieh ; if (OBC%segnum_v(i,J) /= 0) then
           l_seg = abs(OBC%segnum_v(i,J))
@@ -1753,10 +1764,12 @@ subroutine meridional_mass_flux(v, h_in, h_S, h_N, vh, dt, G, GV, US, CS, OBC, p
   if (set_BT_cont) then ; if (allocated(BT_cont%h_v)) then
     if (present(v_cor)) then
       call meridional_flux_thickness(v_cor, h_in, h_S, h_N, BT_cont%h_v, dt, G, GV, US, LB, &
-                                    CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaV, CS, visc_rem_v)
+                                    CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaV, &
+                                    CS, visc_rem_v)
     else
       call meridional_flux_thickness(v, h_in, h_S, h_N, BT_cont%h_v, dt, G, GV, US, LB, &
-                                    CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaV, CS, visc_rem_v)
+                                    CS%vol_CFL, CS%marginal_faces, OBC, por_face_areaV, &
+                                    CS, visc_rem_v)
     endif
   endif ; endif
 
@@ -1766,7 +1779,8 @@ end subroutine meridional_mass_flux
 
 
 !> Calculates the vertically integrated mass or volume fluxes through the meridional faces.
-subroutine meridional_BT_mass_flux(v, h_in, h_S, h_N, vhbt, dt, G, GV, US, CS, OBC, por_face_areaV, LB_in)
+subroutine meridional_BT_mass_flux(v, h_in, h_S, h_N, vhbt, dt, G, GV, US, CS, OBC, &
+                por_face_areaV, LB_in)
   type(ocean_grid_type),                      intent(in)  :: G    !< Ocean's grid structure.
   type(verticalGrid_type),                    intent(in)  :: GV   !< Ocean's vertical grid structure.
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)  :: v    !< Meridional velocity [L T-1 ~> m s-1]
@@ -1821,7 +1835,8 @@ subroutine meridional_BT_mass_flux(v, h_in, h_S, h_N, vhbt, dt, G, GV, US, CS, O
     do k=1,nz
       ! This sets vh and dvhdv.
       call merid_flux_layer(v(:,J,k), h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), vh, dvhdv, ones, &
-                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS, OBC)
+                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, &
+                            por_face_areaV(:,:,k), CS, OBC)
       if (OBC_in_row) then ; do i=ish,ieh ; if (OBC%segnum_v(i,J) /= 0) then
         l_seg = abs(OBC%segnum_v(i,J))
         if (OBC%segment(l_seg)%specified) vh(i) = OBC%segment(l_seg)%normal_trans(i,J,k)
@@ -2207,7 +2222,8 @@ subroutine meridional_flux_adjust(v, h_in, h_S, h_N, vhbt, vh_tot_0, dvhdv_tot_0
       do i=ish,ieh ; v_new(i) = v(i,J,k) + dv(i) * visc_rem(i,k) ; enddo
       call merid_flux_layer(v_new, h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), &
                             vh_aux(:,k), dvhdv(:,k), visc_rem(:,k), &
-                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS, OBC)
+                            dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, &
+                            por_face_areaV(:,:,k), CS, OBC)
     enddo ; endif
 
     if (itt < max_itts) then
@@ -2355,11 +2371,14 @@ subroutine set_merid_BT_cont(v, h_in, h_S, h_N, BT_cont, vh_tot_0, dvhdv_tot_0, 
       v_0(i) = v(I,j,k) + dv0(i) * visc_rem(i,k)
     endif ; enddo
     call merid_flux_layer(v_0, h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), vh_0, dvhdv_0, &
-                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS)
+                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, &
+                          por_face_areaV(:,:,k), CS)
     call merid_flux_layer(v_L, h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), vh_L, dvhdv_L, &
-                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS)
+                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, &
+                          por_face_areaV(:,:,k), CS)
     call merid_flux_layer(v_R, h_in(:,:,k), h_S(:,:,k), h_N(:,:,k), vh_R, dvhdv_R, &
-                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, por_face_areaV(:,:,k), CS)
+                          visc_rem(:,k), dt, G, US, J, ish, ieh, do_I, CS%vol_CFL, &
+                          por_face_areaV(:,:,k), CS)
     do i=ish,ieh ; if (do_I(i)) then
       FAmt_0(i) = FAmt_0(i) + dvhdv_0(i)
       FAmt_L(i) = FAmt_L(i) + dvhdv_L(i)

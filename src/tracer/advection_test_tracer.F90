@@ -98,9 +98,11 @@ function register_advection_test_tracer(G, GV, param_file, CS, tr_Reg, restart_C
   call log_version(param_file, mdl, version, "")
 
   call get_param(param_file, mdl, "ADVECTION_TEST_X_ORIGIN", CS%x_origin, &
-        "The x-coordinate of the center of the test-functions.", units=G%x_ax_unit_short, default=0.)
+        "The x-coordinate of the center of the test-functions.", units=G%x_ax_unit_short, &
+        default=0.)
   call get_param(param_file, mdl, "ADVECTION_TEST_Y_ORIGIN", CS%y_origin, &
-        "The y-coordinate of the center of the test-functions.", units=G%y_ax_unit_short, default=0.)
+        "The y-coordinate of the center of the test-functions.", units=G%y_ax_unit_short, &
+        default=0.)
   call get_param(param_file, mdl, "ADVECTION_TEST_X_WIDTH", CS%x_width, &
         "The x-width of the test-functions.", units=G%x_ax_unit_short, default=0.)
   call get_param(param_file, mdl, "ADVECTION_TEST_Y_WIDTH", CS%y_width, &
