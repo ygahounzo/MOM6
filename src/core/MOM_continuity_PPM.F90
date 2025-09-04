@@ -2771,15 +2771,13 @@ subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, C
   ! Local variables with useful mnemonic names.
   real :: h_ip3, h_ip2, h_ip1, h_i, h_im1, h_im2, h_im3 ! Neighboring thicknesses or sensibly
                                                  ! extrapolated values [H ~> m or kg m-2]
-  real :: wh    ! WENO flux
   character(len=256) :: mesg
   integer :: i, j, isl, iel, jsl, jel, n, stencil
   logical :: local_open_BC
   type(OBC_segment_type), pointer :: segment => NULL()
-  !real :: order3, order5, order7, dx, area3, area5, area7
   real :: order5, order7, dx, area3, area5, area7
   real :: am3, am2, am1, a0, ap1, ap2, ap3
-  real, dimension(SZI_(G),SZJ_(G))  :: order3 !
+  real, dimension(SZI_(G),SZJ_(G))  :: order3 
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2789,7 +2787,7 @@ subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, C
   isl = LB%ish-1 ; iel = LB%ieh+1 ; jsl = LB%jsh ; jel = LB%jeh
 
   ! This is the stencil of the reconstruction, not the scheme overall.
-  stencil = 3 !; if (CS%weno7) stencil = 4
+  stencil = 3 
 
   if ((isl-stencil < G%isd) .or. (iel+stencil > G%ied)) then
     write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_x called with a ", &
@@ -2858,14 +2856,14 @@ subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, C
       if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
     endif
 
-    dx = G%dxT(i,j)
-
     if (order7 == 1.0) then
-      call weno7_reconstruction_interface(h_W(i,j), h_E(i,j), h_im3, h_im2, h_im1, h_i, h_ip1, h_ip2, h_ip3, h_min, dx)
+      call weno7_reconstruction_interface(h_W(i,j), h_E(i,j), h_im3, h_im2, h_im1, h_i, h_ip1, &
+              h_ip2, h_ip3, h_min)
     elseif (order5 == 1.0) then
-      call weno5_reconstruction_interface(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, h_ip2, h_min, dx)
+      call weno5_reconstruction_interface(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, &
+              h_ip2, h_min)
     elseif(order3(i,j) == 1.0) then
-      call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im1, h_i, h_ip1, h_min, dx)
+      call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im1, h_i, h_ip1, h_min)
     else
       h_W(i,j) = h_i
       h_E(i,j) = h_i
@@ -2921,15 +2919,13 @@ subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, C
   ! Local variables with useful mnemonic names.
   real :: h_jp3, h_jp2, h_jp1, h_j, h_jm1, h_jm2, h_jm3 ! Neighboring thicknesses or sensibly
                                                  ! extrapolated values [H ~> m or kg m-2]
-  real :: wh    ! WENO flux
   character(len=256) :: mesg
   integer :: i, j, isl, iel, jsl, jel, n, stencil
   logical :: local_open_BC
   type(OBC_segment_type), pointer :: segment => NULL()
-  !real :: order3, order5, order7, dy, area3, area5, area7
   real :: order5, order7, dy, area3, area5, area7
   real :: am3, am2, am1, a0, ap1, ap2, ap3, rr
-  real, dimension(SZI_(G),SZJ_(G))  :: order3 !
+  real, dimension(SZI_(G),SZJ_(G))  :: order3 
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2939,7 +2935,7 @@ subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, C
   isl = LB%ish ; iel = LB%ieh ; jsl = LB%jsh-1 ; jel = LB%jeh+1
 
   ! This is the stencil of the reconstruction, not the scheme overall.
-  stencil = 3 !; if (CS%weno7) stencil = 4
+  stencil = 3 
 
   if ((isl < G%isd) .or. (iel > G%ied)) then
     write(mesg,'("In MOM_continuity_PPM, WENO_reconstruction_y called with a ", &
@@ -3008,14 +3004,14 @@ subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, C
       if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
     endif
 
-    dy = G%dyT(i,j)
-
     if (order7 == 1.0) then
-      call weno7_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm3, h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_jp3, h_min, dy)
+      call weno7_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm3, h_jm2, h_jm1, h_j, h_jp1, &
+              h_jp2, h_jp3, h_min)
     elseif (order5 == 1.0) then
-      call weno5_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, h_min, dy)
+      call weno5_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, &
+              h_min)
     elseif (order3(i,j) == 1.0) then
-      call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm1, h_j, h_jp1, h_min, dy)
+      call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm1, h_j, h_jp1, h_min)
     else
       h_S(i,j) = h_j
       h_N(i,j) = h_j

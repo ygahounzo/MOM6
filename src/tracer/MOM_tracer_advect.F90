@@ -429,6 +429,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: u, Tmin, Tmax, wq, mu, qext, dx(6)
   logical :: non_neg
+  real :: T3(4), T5(6), T7(8), T9(10)
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -608,24 +609,19 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                    G%mask2dCu(I-2,j)*G%mask2dCu(I+2,j)
           order5 = order3*G%mask2dCu(I-3,j)*G%mask2dCu(I+3,j)
 
-          Tm2 = T_tmp(i-2,m); Tm1 = T_tmp(i-1,m); Tc = T_tmp(i,m) ;
-          Tp1 = T_tmp(i+1,m); Tp2 = T_tmp(i+2,m); Tp3 = T_tmp(i+3,m)
+          T3(:) = T_tmp(i-1:i+2,m) ; T5(:) = T_tmp(i-2:i+3,m)
 
           order7 = 0.0 ; order9 = 0.0
           if (advect_schemes(m) == ADVECT_WENO7) then
             order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
-            Tm3 = T_tmp(i-3,m); Tp4 = T_tmp(i+4,m)
+            T7(:) = T_tmp(i-3:i+4,m)
           elseif (advect_schemes(m) == ADVECT_WENO9) then
             order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
             order9 = order7*G%mask2dCu(I-5,j)*G%mask2dCu(I+5,j)
-            Tm3 = T_tmp(i-3,m); Tp4 = T_tmp(i+4,m)
-            Tm4 = T_tmp(i-4,m); Tp5 = T_tmp(i+5,m)
+            T7 = T_tmp(i-3:i+4,m) ; T9 = T_tmp(i-4:i+5,m)
           endif
 
-          u = uhh(I)
-          Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
-          mu = CFL(I)
-
+          u = uhh(I) ; mu = CFL(I)
           qext = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)
           if (u < 0.0) then
             qext = G%mask2dCu(I,j)*G%mask2dCu(I+1,j)
@@ -634,20 +630,17 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           non_neg = Tr(m)%non_negative
 
           if (order9 == 1.0) then
-            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, u, Tmin, Tmax, non_neg)
+            call weno9_reconstruction(wq, T9, u, Tr(m)%Tmingg, Tr(m)%Tmaxgg, non_neg)
           elseif (order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, u, Tmin, Tmax, non_neg)
+            call weno7_reconstruction(wq, T7, u, Tr(m)%Tmingg, Tr(m)%Tmaxgg, non_neg)
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, non_neg)
-          elseif (order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm1, Tc, Tp1, Tp2, u, Tmin, Tmax, non_neg)
+            call weno5_reconstruction(wq, T5, u, Tr(m)%Tmingg, Tr(m)%Tmaxgg, non_neg)
+          !elseif (order3 == 1.0) then
+          !  call weno3_reconstruction(wq, T3, u, Tr(m)%Tmingg, Tr(m)%Tmaxgg, non_neg)
           else
-            if (u >= 0.0) then
-              wq = Tc
-            else
-              wq = Tp1
-            endif
-            call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, u, mu, qext)
+            !wq = T3(2)
+            !if (u < 0.0) wq = T3(3)
+            call PPM_reconstruction(wq, T3, u, mu, qext)
           endif
 
           flux_x(I,j,m) = u*wq
@@ -659,13 +652,9 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                    G%mask2dCu(I-2,j)*G%mask2dCu(I+2,j)
           order5 = order3*G%mask2dCu(I-3,j)*G%mask2dCu(I+3,j)
 
-          Tm2 = T_tmp(i-2,m); Tm1 = T_tmp(i-1,m); Tc = T_tmp(i,m) ;
-          Tp1 = T_tmp(i+1,m); Tp2 = T_tmp(i+2,m); Tp3 = T_tmp(i+3,m)
+          T3(:) = T_tmp(i-1:i+2,m) ; T5(:) = T_tmp(i-2:i+3,m)
 
-          u = uhh(I)
-          Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
-          mu = CFL(I)
-
+          u = uhh(I) ; mu = CFL(I)
           qext = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)
           if (u < 0.0) then
             qext = G%mask2dCu(I,j)*G%mask2dCu(I+1,j)
@@ -677,9 +666,9 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           non_neg = Tr(m)%non_negative
 
           if (order5 == 1.0) then
-            call weno5NM_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, u, Tmin, Tmax, dx, non_neg)
+            call weno5NM_reconstruction(wq, T5, u, Tr(m)%Tmingg, Tr(m)%Tmaxgg, dx, non_neg)
           else
-            call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, u, mu, qext)
+            call PPM_reconstruction(wq, T3, u, mu, qext)
           endif
 
           flux_x(I,j,m) = u*wq
@@ -909,9 +898,9 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
   real :: order3, order5, order7, order9
-  real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
   real :: v, Tmin, Tmax, wq, mu, qext, dy(6)
   logical :: non_neg
+  real :: T3(4), T5(6), T7(8), T9(10)
 
   usePLMslope = .false.
   ! stencil for calculating slope values
@@ -1104,23 +1093,19 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                    G%mask2dCv(i,J-2)*G%mask2dCv(i,J+2)
           order5 = order3*G%mask2dCv(i,J-3)*G%mask2dCv(i,J+3)
 
-          Tm2 = T_tmp(i,m,j-2); Tm1 = T_tmp(i,m,j-1); Tc = T_tmp(i,m,j) ;
-          Tp1 = T_tmp(i,m,j+1); Tp2 = T_tmp(i,m,j+2); Tp3 = T_tmp(i,m,j+3)
+          T3 = T_tmp(i,m,j-1:j+2) ; T5 = T_tmp(i,m,j-2:j+3)
 
           order7 = 0.0 ; order9 = 0.0
           if (advect_schemes(m) == ADVECT_WENO7) then
             order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
-            Tm3 = T_tmp(i,m,j-3); Tp4 = T_tmp(i,m,j+4)
+            T7 = T_tmp(i,m,j-3:j+4)
           elseif (advect_schemes(m) == ADVECT_WENO9) then
             order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
             order9 = order7*G%mask2dCv(i,J-5)*G%mask2dCv(i,J+5)
-            Tm3 = T_tmp(i,m,j-3); Tp4 = T_tmp(i,m,j+4)
-            Tm4 = T_tmp(i,m,j-4); Tp5 = T_tmp(i,m,j+5)
+            T7 = T_tmp(i,m,j-3:j+4) ; T9 = T_tmp(i,m,j-4:j+5)
           endif
 
-          v = vhh(i,J)
-          Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
-          mu = CFL(i)
+          v = vhh(i,J) ; mu = CFL(i)
           qext = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)
           if (v < 0.0) then
             qext = G%mask2dCv(i,J)*G%mask2dCv(i,J+1)
@@ -1129,20 +1114,17 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           non_neg = Tr(m)%non_negative
 
           if (order9 == 1.0) then
-            call weno9_reconstruction(wq, Tm4, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, Tp5, v, Tmin, Tmax, non_neg)
+            call weno9_reconstruction(wq, T9, v, Tr(m)%Tmingg, Tr(m)%Tmaxgg, non_neg)
           elseif (order7 == 1.0) then
-            call weno7_reconstruction(wq, Tm3, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, Tp4, v, Tmin, Tmax, non_neg)
+            call weno7_reconstruction(wq, T7, v, Tr(m)%Tmingg, Tr(m)%Tmaxgg, non_neg)
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, non_neg)
-          elseif (order3 == 1.0) then
-            call weno3_reconstruction(wq, Tm1, Tc, Tp1, Tp2, v, Tmin, Tmax, non_neg)
+            call weno5_reconstruction(wq, T5, v, Tr(m)%Tmingg, Tr(m)%Tmaxgg, non_neg)
+          !elseif (order3 == 1.0) then
+          !  call weno3_reconstruction(wq, T3, v, Tr(m)%Tmingg, Tr(m)%Tmaxgg, non_neg)
           else
-            if (v >= 0.0) then
-               wq = Tc
-            else
-               wq = Tp1
-            endif
-            !call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, v, mu, qext)
+            !wq = T3(2)
+            !if (v < 0.0) wq = T3(3)
+            call PPM_reconstruction(wq, T3, v, mu, qext)
           endif
 
           flux_y(i,m,J) = v*wq
@@ -1154,12 +1136,9 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                    G%mask2dCv(i,J-2)*G%mask2dCv(i,J+2)
           order5 = order3*G%mask2dCv(i,J-3)*G%mask2dCv(i,J+3)
 
-          Tm2 = T_tmp(i,m,j-2); Tm1 = T_tmp(i,m,j-1); Tc = T_tmp(i,m,j) ;
-          Tp1 = T_tmp(i,m,j+1); Tp2 = T_tmp(i,m,j+2); Tp3 = T_tmp(i,m,j+3)
+          T3 = T_tmp(i,m,j-1:j+2) ; T5 = T_tmp(i,m,j-2:j+3)
 
-          v = vhh(i,J)
-          Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
-          mu = CFL(i)
+          v = vhh(i,J) ; mu = CFL(i)
           qext = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)
           if (v < 0.0) then
             qext = G%mask2dCv(i,J)*G%mask2dCv(i,J+1)
@@ -1171,9 +1150,9 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           non_neg = Tr(m)%non_negative
 
           if (order5 == 1.0) then
-            call weno5NM_reconstruction(wq, Tm2, Tm1, Tc, Tp1, Tp2, Tp3, v, Tmin, Tmax, dy, non_neg)
+            call weno5NM_reconstruction(wq, T5, v, Tr(m)%Tmingg, Tr(m)%Tmaxgg, dy, non_neg)
           else
-            call PPM_reconstruction(wq, Tm1, Tc, Tp1, Tp2, v, mu, qext)
+            call PPM_reconstruction(wq, T3, v, mu, qext)
           endif
 
           flux_y(i,m,J) = v*wq

@@ -26,11 +26,10 @@ public WENO_limiter
 contains
 
 !> 3th-order weno z-type reconstruction flux
-subroutine weno3_reconstruction_interface(wmR, wpL, qm, q0, qp, h_min, ds)
+subroutine weno3_reconstruction_interface(wmR, wpL, qm, q0, qp, h_min)
 
    real, intent(in) :: qm, q0, qp !< tracer concentration for 3-stencil wide
    real, intent(in)  :: h_min     !< The minimum thickness
-   real, intent(in) :: ds         !< grid size
    real, intent(out) :: wmR, wpL  !< weno reconstruction at the cell interfaces i-1/2 and i+1/2
 
    real :: P1, P2         ! reconstructed polynomials
@@ -43,7 +42,6 @@ subroutine weno3_reconstruction_interface(wmR, wpL, qm, q0, qp, h_min, ds)
    ! linear weights
    d1 = 1.0/3.0 ; d2 = 2.0/3.0
    eps = 1.0e-20
-   !eps = ds**2
 
    ! Compute flux at the right side of i+1/2
    ! reconstructed polynomials
@@ -86,11 +84,10 @@ subroutine weno3_reconstruction_interface(wmR, wpL, qm, q0, qp, h_min, ds)
 end subroutine weno3_reconstruction_interface
 
 !> 5th-order weno z-type reconstruction flux
-subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min, ds)
+subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min)
 
    real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
    real, intent(in)  :: h_min     !< The minimum thickness
-   real, intent(in) :: ds         !< grid size
    real, intent(out) :: wmR, wpL  !< weno reconstruction at the cell interfaces i-1/2 and i+1/2
 
    real :: P0, P1, P2         ! reconstructed polynomials
@@ -104,7 +101,6 @@ subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min,
    ! linear weights
    d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
    eps = 1.0e-20
-   !eps = ds**2
 
    ! Compute flux at left side of i+1/2
    ! First stencil
@@ -155,11 +151,10 @@ subroutine weno5_reconstruction_interface(wmR, wpL, qmm, qm, q0, qp, qpp, h_min,
 end subroutine weno5_reconstruction_interface
 
 !> 7th-order weno z-type reconstruction flux
-subroutine weno7_reconstruction_interface(wmR, wpL, qm3, qm2, qm1, q0, qp1, qp2, qp3, h_min, ds)
+subroutine weno7_reconstruction_interface(wmR, wpL, qm3, qm2, qm1, q0, qp1, qp2, qp3, h_min)
 
    real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3 !< tracer concentration for 7-stencil wide
    real, intent(in)  :: h_min     !< The minimum thickness
-   real, intent(in) :: ds         !< grid size
    real, intent(out) :: wmR, wpL  !< weno reconstruction at the cell interfaces i-1/2 and i+1/2
 
    real :: P0, P1, P2, P3     ! reconstructed polynomials
@@ -173,7 +168,6 @@ subroutine weno7_reconstruction_interface(wmR, wpL, qm3, qm2, qm1, q0, qp1, qp2,
    ! linear weights
    d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
    eps = 1.0e-20
-   !eps = ds**4
 
    ! Compute flux at the right side of i+1/2
    ! 1st stencil
@@ -336,17 +330,17 @@ subroutine WENO_limiter(h_in, wmr, wpl, h_min, G, iis, iie, jis, jie)
     ! values less than h_min.
     eps = min(h_min, h_in(i,j))
 
-    a(1) = (6.0*h_in(i,j) - (wmr(i,j) + wpl(i,j)))/4.0
-    a(2) = (wpl(i,j) - wmr(i,j))
-    a(3) = -6.0*h_in(i,j) + 3.0*(wmr(i,j) + wpl(i,j))
+    !a(1) = (6.0*h_in(i,j) - (wmr(i,j) + wpl(i,j)))/4.0
+    !a(2) = (wpl(i,j) - wmr(i,j))
+    !a(3) = -6.0*h_in(i,j) + 3.0*(wmr(i,j) + wpl(i,j))
 
-    qmin = 0.0
-    do k = 1,3
-      qmin = qmin + a(k)*(0.5*(1.0-sign(1.0,a(k)))*Fmax(k) + 0.5*(1.0+sign(1.0,a(k)))*Fmin(k))
-    enddo
+    !qmin = 0.0
+    !do k = 1,3
+    !  qmin = qmin + a(k)*(0.5*(1.0-sign(1.0,a(k)))*Fmax(k) + 0.5*(1.0+sign(1.0,a(k)))*Fmin(k))
+    !enddo
 
-    !P0 = (h_in(i,j) - w0*(wmr(i,j) + wpl(i,j)))/(1.0 - 2.0*w0)
-    !qmin = min(wmr(i,j), P0, wpl(i,j))
+    P0 = (h_in(i,j) - w0*(wmr(i,j) + wpl(i,j)))/(1.0 - 2.0*w0)
+    qmin = min(wmr(i,j), P0, wpl(i,j))
 
     theta = min(((h_in(i,j)-eps)/(h_in(i,j)-qmin)), 1.0)
     wpl(i,j) = theta*(wpl(i,j) - h_in(i,j)) + h_in(i,j)

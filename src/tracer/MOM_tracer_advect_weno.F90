@@ -22,9 +22,9 @@ public weno5NM_reconstruction
 contains
 
 !> 3rd weno reconstruction subroutine and limiter
-pure subroutine weno3_reconstruction(wq, qm, q0, qp, qp2, u, qmin, qmax, non_neg)
+pure subroutine weno3_reconstruction(wq, q, u, qmin, qmax, non_neg)
 
-  real, intent(in) :: qm, q0, qp, qp2 !< tracer concentration from cell i-2 to i+3
+  real, intent(in) :: q(4) !< tracer concentration from cell i-2 to i+3
                                                !! respectively
   real, intent(in) :: u                         !< advection velocity
   real, intent(in) :: qmin, qmax                !< global min and max of tracer concentration
@@ -38,13 +38,13 @@ pure subroutine weno3_reconstruction(wq, qm, q0, qp, qp2, u, qmin, qmax, non_neg
   wq = 0.0
 
   if (u > 0.0) then 
-    call weno3_reconstruction_interface(wpl, wmr, qm, q0, qp)
+    call weno3_reconstruction_interface(wpl, wmr, q(1), q(2), q(3))
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(q0, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(2), wmr, wpl, wq, qmin, qmax)
   elseif (u < 0.0) then
-    call weno3_reconstruction_interface(wpl, wmr, qp2, qp, q0)
+    call weno3_reconstruction_interface(wpl, wmr, q(4), q(3), q(2))
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(qp, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(3), wmr, wpl, wq, qmin, qmax)
   endif
 
   end subroutine weno3_reconstruction
@@ -61,8 +61,7 @@ pure subroutine weno3_reconstruction_interface(wpl, wmr, qm, q0, qp)
   real :: w1, w2    ! nonlinear weights
   real :: a1, a2
   real :: eps, wnorm, tau
-  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-  real :: qul, qmd, qlc, qmin, qmax, md
+  integer, parameter :: r = 2
 
   ! linear weights
   d1 = 1.0/3.0 ; d2 = 2.0/3.0
@@ -79,13 +78,13 @@ pure subroutine weno3_reconstruction_interface(wpl, wmr, qm, q0, qp)
 
   ! Alpha values
   tau = abs(b2-b1)
-  w1 = d1*(1.0 + (tau/(b1+eps))**2)
-  w2 = d2*(1.0 + (tau/(b2+eps))**2)
+  w1 = d1*(1.0 + (tau/(b1+eps))**r)
+  w2 = d2*(1.0 + (tau/(b2+eps))**r)
 
   ! Normalization
   wnorm = w1+w2
   wpl = (w1*P1 + w2*P2)/wnorm
-  if ((qp-q0)*(q0-qm) <= 0.) wpl = q0
+  !if ((qp-q0)*(q0-qm) <= 0.) wpl = q0
 
   wpl = max(min(q0,qp), wpl) ; wpl = min(max(q0,qp), wpl) ! Bound
 
@@ -100,22 +99,22 @@ pure subroutine weno3_reconstruction_interface(wpl, wmr, qm, q0, qp)
 
   ! Alpha values
   tau = abs(b2-b1)
-  w1 = d1*(1.0 + (tau/(b1+eps))**2)
-  w2 = d2*(1.0 + (tau/(b2+eps))**2)
+  w1 = d1*(1.0 + (tau/(b1+eps))**r)
+  w2 = d2*(1.0 + (tau/(b2+eps))**r)
 
   ! Normalization
   wnorm = w1+w2
   wmr = (w1*P1 + w2*P2)/wnorm
-  if ((qp-q0)*(q0-qm) <= 0.) wmr = q0
+  !if ((qp-q0)*(q0-qm) <= 0.) wmr = q0
 
   wmr = max(min(q0,qm), wmr) ; wmr = min(max(q0,qm), wmr) ! Bound
 
 end subroutine weno3_reconstruction_interface
 
 !> 5th-order weno reconstruction subroutine and limiter
-pure subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, non_neg)
+pure subroutine weno5_reconstruction(wq, q, u, qmin, qmax, non_neg)
 
-  real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 !< tracer concentration from i-2 to  i+3 respectively
+  real, intent(in) :: q(6) !< tracer concentration from i-2 to  i+3 respectively
   real, intent(in) :: u                         !< advection velocity
   real, intent(in) :: qmin, qmax                !< global min and max of tracer concentration
   logical, intent(in) :: non_neg                !< If true, this tracer is non-negative
@@ -127,13 +126,13 @@ pure subroutine weno5_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qma
   wq = 0.0
 
   if (u > 0.0) then
-    call weno5z_reconstruction_interface(wpl, wmr, qm2, qm, q0, qp, qp2)  ! i+1/2
+    call weno5z_reconstruction_interface(wpl, wmr, q(1), q(2), q(3), q(4), q(5))  ! i+1/2
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(q0, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(3), wmr, wpl, wq, qmin, qmax)
   elseif (u < 0.0) then
-    call weno5z_reconstruction_interface(wpl, wmr, qp3, qp2, qp, q0, qm)
+    call weno5z_reconstruction_interface(wpl, wmr, q(6), q(5), q(4), q(3), q(2))
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(qp, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(4), wmr, wpl, wq, qmin, qmax)
   endif
 
 end subroutine weno5_reconstruction
@@ -151,8 +150,6 @@ pure subroutine weno5z_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp)
   real :: a0, a1, a2
   real :: eps,  wnorm, tau
   integer, parameter :: r = 2
-  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-  real :: qul, qmd, qlc, qmin, qmax, md
   real :: psi
 
   ! linear weights
@@ -180,7 +177,6 @@ pure subroutine weno5z_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp)
 
   wnorm = w0+w1+w2
   wpl = (w0*P0 + w1*P1 + w2*P2)/wnorm
-  if ((qp-q0)*(q0-qm) <= 0.0) wpl = q0
 
   wpl = max(min(q0,qp), wpl) ; wpl = min(max(q0,qp), wpl) ! Bound
 
@@ -205,15 +201,14 @@ pure subroutine weno5z_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp)
 
   wnorm = w0+w1+w2
   wmr = (w0*P0 + w1*P1 + w2*P2)/wnorm
-  if ((qp-q0)*(q0-qm) <= 0.0) wmr = q0
 
   wmr = max(min(q0,qm), wmr) ; wmr = min(max(q0,qm), wmr) ! Bound
 
 end subroutine weno5z_reconstruction_interface
 
-pure subroutine weno5NM_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, qmax, ds, non_neg)
+pure subroutine weno5NM_reconstruction(wq, q, u, qmin, qmax, ds, non_neg)
 
-  real, intent(in) :: qm2, qm, q0, qp, qp2, qp3 !< tracer concentration from i-2 to  i+3 respectively
+  real, intent(in) :: q(6) !< tracer concentration from i-2 to  i+3 respectively
   real, intent(in) :: u                         !< advection velocity
   real, intent(in) :: qmin, qmax                !< global min and max of tracer concentration
   real, intent(in) :: ds(6)                     !< grid sizes
@@ -229,15 +224,15 @@ pure subroutine weno5NM_reconstruction(wq, qm2, qm, q0, qp, qp2, qp3, u, qmin, q
   if (u > 0.0) then
     ds0 = ds(1:5)
     ds1 = ds0(5:1:-1)
-    call weno5NM_reconstruction_interface(wpl, wmr, qm2, qm, q0, qp, qp2, ds0)  ! i+1/2
+    call weno5NM_reconstruction_interface(wpl, wmr, q(1), q(2), q(3), q(4), q(5), ds0)
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(q0, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(3), wmr, wpl, wq, qmin, qmax)
   elseif (u < 0.0) then
     ds0 = ds(2:6)
     ds1 = ds0(5:1:-1)
-    call weno5NM_reconstruction_interface(wpl, wmr, qp3, qp2, qp, q0, qm, ds1)
+    call weno5NM_reconstruction_interface(wpl, wmr, q(6), q(5), q(4), q(3), q(2), ds1)
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(qp, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(4), wmr, wpl, wq, qmin, qmax)
   endif
 
 end subroutine weno5NM_reconstruction
@@ -255,8 +250,6 @@ pure subroutine weno5NM_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp,
   real :: a0, a1, a2, a3
   real :: eps,  wnorm, tau
   integer, parameter :: r = 2
-  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-  real :: qul, qmd, qlc, qmin, qmax, md
   real :: qh, qhh, qhp, qhpp
 
   ! Gamma values in Weno reconstruction
@@ -295,7 +288,6 @@ pure subroutine weno5NM_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp,
 
   wnorm = w0+w1+w2
   wpl = (w0*P0 + w1*P1 + w2*P2)/wnorm
-  if ((qp-q0)*(q0-qm) <= 0.0) wpl = q0
 
   wpl = max(min(q0,qp), wpl) ; wpl = min(max(q0,qp), wpl) ! Bound
 
@@ -331,16 +323,15 @@ pure subroutine weno5NM_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp,
 
   wnorm = w0+w1+w2
   wmr = (w0*P0 + w1*P1 + w2*P2)/wnorm
-  if ((qp-q0)*(q0-qm) <= 0.0) wmr = q0
 
   wmr = max(min(q0,qm), wmr) ; wmr = min(max(q0,qm), wmr) ! Bound
 
 end subroutine weno5NM_reconstruction_interface
 
 !> 7th-order weno reconstruction subroutine and limiter
-pure subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, u, qmin, qmax, non_neg) 
+pure subroutine weno7_reconstruction(wq, q, u, qmin, qmax, non_neg) 
 
-  real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration 
+  real, intent(in) :: q(8) !< tracer concentration 
                                                          !! from i-3 to i+4 respectively
   real, intent(in) :: u                         !< advection velocity
   real, intent(in) :: qmin, qmax              !< global min and max of tracer concentration
@@ -353,13 +344,13 @@ pure subroutine weno7_reconstruction(wq, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, 
   wq = 0.0
 
   if (u > 0.0) then
-    call weno7z_reconstruction_interface(wpl, wmr, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+    call weno7z_reconstruction_interface(wpl, wmr, q(1), q(2), q(3), q(4), q(5), q(6), q(7))
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(q0, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(4), wmr, wpl, wq, qmin, qmax)
   elseif (u < 0.0) then
-    call weno7z_reconstruction_interface(wpl, wmr, qp4, qp3, qp2, qp1, q0, qm1, qm2)
+    call weno7z_reconstruction_interface(wpl, wmr, q(8), q(7), q(6), q(5), q(4), q(3), q(2))
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(qp1, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(5), wmr, wpl, wq, qmin, qmax)
   endif
 
 end subroutine weno7_reconstruction
@@ -377,8 +368,6 @@ pure subroutine weno7z_reconstruction_interface(wpl, wmr, qm3, qm2, qm1, q0, qp1
   real :: a0, a1, a2, a3
   real :: eps, tau, wnorm
   integer, parameter :: r = 2
-  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-  real :: qul, qmd, qlc, qmin, qmax, md
 
   d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
   eps = 1.0e-20
@@ -418,7 +407,6 @@ pure subroutine weno7z_reconstruction_interface(wpl, wmr, qm3, qm2, qm1, q0, qp1
   ! Normalization
   wnorm = w0+w1+w2+w3
   wpl = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
-  if ((qp1-q0)*(q0-qm1) <= 0.) wpl = q0
 
   wpl = max(min(q0,qp1), wpl) ; wpl = min(max(q0,qp1), wpl) ! Bound
 
@@ -457,15 +445,14 @@ pure subroutine weno7z_reconstruction_interface(wpl, wmr, qm3, qm2, qm1, q0, qp1
   ! Normalization
   wnorm = w0+w1+w2+w3
   wmr = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
-  if ((qp1-q0)*(q0-qm1) <= 0.) wmr = q0
 
   wmr = max(min(q0,qm1), wmr) ; wmr = min(max(q0,qm1), wmr) ! Bound
 
 end subroutine weno7z_reconstruction_interface
 
-pure subroutine weno9_reconstruction(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5, u, qmin, qmax, non_neg)
+pure subroutine weno9_reconstruction(wq, q, u, qmin, qmax, non_neg)
 
-  real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4, qp5 !< tracer concentration
+  real, intent(in) :: q(10) !< tracer concentration
                                                                      !! from i-4 to i+5
   real, intent(in) :: u                         !< advection velocity
   real, intent(in) :: qmin, qmax                !< global min and max of tracer concentration
@@ -478,13 +465,13 @@ pure subroutine weno9_reconstruction(wq, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, 
   wq = 0.0
 
   if (u > 0.0) then
-    call weno9_reconstruction_interface(wpl, wmr, qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
+    call weno9_reconstruction_interface(wpl, wmr, q(1), q(2), q(3), q(4), q(5), q(6), q(7), q(8), q(9))
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(q0, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(5), wmr, wpl, wq, qmin, qmax)
   elseif (u < 0.0) then
-    call weno9_reconstruction_interface(wpl, wmr, qp5, qp4, qp3, qp2, qp1, q0, qm1, qm2, qm3)
+    call weno9_reconstruction_interface(wpl, wmr, q(10), q(9), q(8), q(7), q(6), q(5), q(4), q(3), q(2))
     ! maximum-principle limiter
-    if (non_neg) call PP_limiter(qp1, wmr, wpl, wq, qmin, qmax)
+    if (non_neg) call PP_limiter(q(6), wmr, wpl, wq, qmin, qmax)
   endif
 
 end subroutine weno9_reconstruction
@@ -605,9 +592,9 @@ pure subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2
 end subroutine weno9_poly
 
 !> ppm reconstruction flux
-  subroutine PPM_reconstruction(wq_ppm, qm1, qc, qp1, qp2, u, mu, qext)
+subroutine PPM_reconstruction(wq_ppm, q, u, mu, qext)
 
-  real, intent(in) :: qm1, qc, qp1, qp2 !< tracer concentration for 4-stencil wide
+  real, intent(in) :: q(4) !< tracer concentration for 4-stencil wide
   real, intent(in) :: u               !< advection velocity
   real, intent(in) :: mu              !< cfl
   real, intent(in) :: qext              !< check local extrema
@@ -616,9 +603,9 @@ end subroutine weno9_poly
   real :: aL, aR, dA, mA, a6
   real :: qm, q0, qp
 
-  qm = qm1 ; q0 = qc ; qp = qp1
+  qm = q(1) ; q0 = q(2) ; qp = q(3)
   if (u < 0.0) then
-    qm = qc ; q0 = qp1 ; qp = qp2
+    qm = q(2) ; q0 = q(3) ; qp = q(4)
   endif
 
   aL = ( 5.*q0 + ( 2.*qm - qp ) )/6. ! H3 estimate
@@ -644,45 +631,6 @@ end subroutine weno9_poly
   endif
 
 end subroutine PPM_reconstruction
-
-pure subroutine PP_limiter0(q0, wmr, wpl, wq, qmin_g, qmax_g)
-
-  real, intent(in) :: q0 !< tracer concentration in cell i
-  real, intent(inout) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
-  real, intent(in) :: qmin_g, qmax_g !< global min and max of tracer concentration
-                                    !! at the initial time
-  real, intent(out) :: wq
-
-  real :: qmin, qmax, theta, eps, a(3)
-  integer :: i
-  real, parameter :: Fmin(3) = (/ 1.0,  -0.5,  0.0 /)
-  real, parameter :: Fmax(3) = (/ 1.0,   0.5,  0.25 /)
-
-  eps = min(1.0e-2, q0)
-
-  a(1) = (6.0*q0 - (wmr + wpl))/4.0
-  a(2) = (wpl - wmr)
-  a(3) = -6.0*q0 + 3.0*(wmr + wpl)
-
-  qmin = 0.0 ; qmax = 0.0
-  do i = 1,3
-    qmin = qmin + a(i)*0.5*((1.0-sign(1.0,a(i)))*Fmax(i) + (1.0+sign(1.0,a(i)))*Fmin(i))
-    qmax = qmax + a(i)*0.5*((1.0+sign(1.0,a(i)))*Fmax(i) + (1.0-sign(1.0,a(i)))*Fmin(i))
-  enddo
-
-  !theta = min(((q0-eps)/(q0-qmin)), 1.0)
-  !theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
-  !wq = theta*(wpl - q0) + q0
-
-  wq = wpl
-  if (qmax >= qmax_g) then
-    wq = q0 
-  else
-    theta = min(abs((qmin_g-q0+eps)/(qmin-q0-eps)), 1.0)
-    wq = theta*(wq - q0) + q0
-  endif 
-
-end subroutine PP_limiter0
 
 !> This is the subroutine for the maximum-principle preserving limiter
 pure subroutine PP_limiter(q0, wmr, wpl, wq, qmin_g, qmax_g)
