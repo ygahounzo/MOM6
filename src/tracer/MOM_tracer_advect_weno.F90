@@ -22,13 +22,13 @@ public weno5NM_reconstruction
 contains
 
 !> 3rd weno reconstruction subroutine and limiter
-pure subroutine weno3_reconstruction(wq, q, u, qmin, qmax, non_neg)
-
+pure subroutine weno3_reconstruction(wq, q, u, non_neg, monotonic)
   real, intent(in) :: q(4) !< tracer concentration from cell i-2 to i+3
   real, intent(in) :: u           !< advection velocity
-  real, intent(in) :: qmin, qmax  !< global min and max of tracer concentration
   logical, intent(in) :: non_neg  !< If true, this tracer is non-negative
   real, intent(out) :: wq         !< weno reconstruction at the cell
+  logical, intent(in) :: monotonic !< If true, WENO
+                                   !! TRACER_ADVECTION uses a monotonic limiter.
                                   !! interface i+1/2
 
   real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
@@ -38,19 +38,16 @@ pure subroutine weno3_reconstruction(wq, q, u, qmin, qmax, non_neg)
 
   if (u > 0.0) then
     call weno3_reconstruction_interface(wpl, wmr, q(1), q(2), q(3))
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(2), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
   elseif (u < 0.0) then
     call weno3_reconstruction_interface(wpl, wmr, q(4), q(3), q(2))
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(3), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
   endif
 
-  end subroutine weno3_reconstruction
+end subroutine weno3_reconstruction
 
 !> 3rd-order weno z-type reconstruction flux
 pure subroutine weno3_reconstruction_interface(wpl, wmr, qm, q0, qp)
-
   real, intent(in) :: qm, q0, qp !< tracer concentration for 5-stencil wide
   real, intent(out) :: wpl, wmr  !< reconstructed weno flux
 
@@ -83,8 +80,7 @@ pure subroutine weno3_reconstruction_interface(wpl, wmr, qm, q0, qp)
   ! Normalization
   wnorm = w1+w2
   wpl = (w1*P1 + w2*P2)/wnorm
-  !if ((qp-q0)*(q0-qm) <= 0.) wpl = q0
-
+  if ((qp-q0)*(q0-qm) <= 0.) wpl = q0
   wpl = max(min(q0,qp), wpl) ; wpl = min(max(q0,qp), wpl) ! Bound
 
   ! Compute flux at the right side of i-1/2
@@ -104,20 +100,19 @@ pure subroutine weno3_reconstruction_interface(wpl, wmr, qm, q0, qp)
   ! Normalization
   wnorm = w1+w2
   wmr = (w1*P1 + w2*P2)/wnorm
-  !if ((qp-q0)*(q0-qm) <= 0.) wmr = q0
-
+  if ((qp-q0)*(q0-qm) <= 0.) wmr = q0
   wmr = max(min(q0,qm), wmr) ; wmr = min(max(q0,qm), wmr) ! Bound
 
 end subroutine weno3_reconstruction_interface
 
 !> 5th-order weno reconstruction subroutine and limiter
-pure subroutine weno5_reconstruction(wq, q, u, qmin, qmax, non_neg)
-
+pure subroutine weno5_reconstruction(wq, q, u, non_neg, monotonic)
   real, intent(in) :: q(6)       !< tracer concentration from i-2 to  i+3 respectively
   real, intent(in) :: u          !< advection velocity
-  real, intent(in) :: qmin, qmax !< global min and max of tracer concentration
-  logical, intent(in) :: non_neg !< If true, this tracer is non-negative
+  logical, intent(in) :: non_neg  !< If true, this tracer is non-negative
   real, intent(out) :: wq        !< weno reconstruction at the interface i+1/2
+  logical, intent(in) :: monotonic !< If true, WENO
+                                   !! TRACER_ADVECTION uses a monotonic limiter.
 
   real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
   real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
@@ -126,21 +121,20 @@ pure subroutine weno5_reconstruction(wq, q, u, qmin, qmax, non_neg)
 
   if (u > 0.0) then
     call weno5z_reconstruction_interface(wpl, wmr, q(1), q(2), q(3), q(4), q(5))  ! i+1/2
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(3), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
+    call WENO_monotonicity_limiter(q(1), q(2), q(3), q(4), q(5), wmr, wpl, wq, non_neg, monotonic)
   elseif (u < 0.0) then
     call weno5z_reconstruction_interface(wpl, wmr, q(6), q(5), q(4), q(3), q(2))
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(4), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
+    call WENO_monotonicity_limiter(q(6), q(5), q(4), q(3), q(2), wmr, wpl, wq, non_neg, monotonic)
   endif
 
 end subroutine weno5_reconstruction
 
 !> 5th-order weno z-type reconstruction flux
 pure subroutine weno5z_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp)
-
   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
-  real, intent(out) :: wpl, wmr                  !< reconstructed weno flux
+  real, intent(out) :: wpl, wmr            !< reconstructed weno flux
 
   real :: P0, P1, P2         ! reconstructed polynomials
   real :: b0, b1, b2         ! smoothness indicator
@@ -149,7 +143,8 @@ pure subroutine weno5z_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp)
   real :: a0, a1, a2
   real :: eps,  wnorm, tau
   integer, parameter :: r = 2
-  real :: psi
+  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
+  real :: qul, qmd, qlc, qmin, qmax, md
 
   ! linear weights
   d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
@@ -175,8 +170,9 @@ pure subroutine weno5z_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp)
   w2 = d2*(1.0 + (tau/(b2+eps))**r)
 
   wnorm = w0+w1+w2
-  wpl = (w0*P0 + w1*P1 + w2*P2)/wnorm
+  w0 = w0/wnorm ; w1 = w1/wnorm ; w2 = w2/wnorm
 
+  wpl = w0*P0 + w1*P1 + w2*P2
   wpl = max(min(q0,qp), wpl) ; wpl = min(max(q0,qp), wpl) ! Bound
 
   ! Compute flux at the right side of i-1/2
@@ -199,21 +195,22 @@ pure subroutine weno5z_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp)
   w2 = d2*(1.0 + (tau/(b2+eps))**r)
 
   wnorm = w0+w1+w2
-  wmr = (w0*P0 + w1*P1 + w2*P2)/wnorm
+  w0 = w0/wnorm ; w1 = w1/wnorm ; w2 = w2/wnorm
 
+  wmr = w0*P0 + w1*P1 + w2*P2
   wmr = max(min(q0,qm), wmr) ; wmr = min(max(q0,qm), wmr) ! Bound
 
 end subroutine weno5z_reconstruction_interface
 
 !> 5th-order weno reconstruction for non-uniform grid and limiter
-pure subroutine weno5NM_reconstruction(wq, q, u, qmin, qmax, ds, non_neg)
-
-  real, intent(in) :: q(6) !< tracer concentration from i-2 to  i+3 respectively
-  real, intent(in) :: u                         !< advection velocity
-  real, intent(in) :: qmin, qmax                !< global min and max of tracer concentration
-  real, intent(in) :: ds(6)                     !< grid sizes
-  logical, intent(in) :: non_neg                !< If true, this tracer is non-negative
-  real, intent(out) :: wq                       !< weno reconstruction at the interface i+1/2
+pure subroutine weno5NM_reconstruction(wq, q, u, ds, non_neg, monotonic)
+  real, intent(in) :: q(6)    !< tracer concentration from i-2 to  i+3 respectively
+  real, intent(in) :: u       !< advection velocity
+  real, intent(in) :: ds(6)   !< grid sizes
+  logical, intent(in) :: non_neg  !< If true, this tracer is non-negative
+  real, intent(out) :: wq     !< weno reconstruction at the interface i+1/2
+  logical, intent(in) :: monotonic !< If true, WENO
+                                   !! TRACER_ADVECTION uses a monotonic limiter.
 
   real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
   real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
@@ -225,21 +222,20 @@ pure subroutine weno5NM_reconstruction(wq, q, u, qmin, qmax, ds, non_neg)
     ds0 = ds(1:5)
     ds1 = ds0(5:1:-1)
     call weno5NM_reconstruction_interface(wpl, wmr, q(1), q(2), q(3), q(4), q(5), ds0)
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(3), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
+    call WENO_monotonicity_limiter(q(1), q(2), q(3), q(4), q(5), wmr, wpl, wq, non_neg, monotonic)
   elseif (u < 0.0) then
     ds0 = ds(2:6)
     ds1 = ds0(5:1:-1)
     call weno5NM_reconstruction_interface(wpl, wmr, q(6), q(5), q(4), q(3), q(2), ds1)
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(4), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
+    call WENO_monotonicity_limiter(q(6), q(5), q(4), q(3), q(2), wmr, wpl, wq, non_neg, monotonic)
   endif
 
 end subroutine weno5NM_reconstruction
 
 !> 5th-order weno z-type reconstruction flux for non-uniform grid
 pure subroutine weno5NM_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp, dx)
-
   real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
   real, intent(in) :: dx(5)                !< grid sizes
   real, intent(out) :: wpl, wmr                  !< reconstructed weno flux
@@ -289,7 +285,6 @@ pure subroutine weno5NM_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp,
 
   wnorm = w0+w1+w2
   wpl = (w0*P0 + w1*P1 + w2*P2)/wnorm
-
   wpl = max(min(q0,qp), wpl) ; wpl = min(max(q0,qp), wpl) ! Bound
 
   ! Compute flux at the right side of i-1/2
@@ -324,20 +319,19 @@ pure subroutine weno5NM_reconstruction_interface(wpl, wmr, qmm, qm, q0, qp, qpp,
 
   wnorm = w0+w1+w2
   wmr = (w0*P0 + w1*P1 + w2*P2)/wnorm
-
   wmr = max(min(q0,qm), wmr) ; wmr = min(max(q0,qm), wmr) ! Bound
 
 end subroutine weno5NM_reconstruction_interface
 
 !> 7th-order weno reconstruction subroutine and limiter
-pure subroutine weno7_reconstruction(wq, q, u, qmin, qmax, non_neg)
-
+pure subroutine weno7_reconstruction(wq, q, u, non_neg, monotonic)
   real, intent(in) :: q(8)       !< tracer concentration
                                  !! from i-3 to i+4 respectively
   real, intent(in) :: u          !< advection velocity
-  real, intent(in) :: qmin, qmax !< global min and max of tracer concentration
-  logical, intent(in) :: non_neg !< If true, this tracer is non-negative
   real, intent(out) :: wq        !< weno reconstruction at the interface i+1/2
+  logical, intent(in) :: non_neg  !< If true, this tracer is non-negative
+  logical, intent(in) :: monotonic !< If true, WENO
+                                   !! TRACER_ADVECTION uses a monotonic limiter.
 
   real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
   real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
@@ -346,21 +340,20 @@ pure subroutine weno7_reconstruction(wq, q, u, qmin, qmax, non_neg)
 
   if (u > 0.0) then
     call weno7z_reconstruction_interface(wpl, wmr, q(1), q(2), q(3), q(4), q(5), q(6), q(7))
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(4), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
+    call WENO_monotonicity_limiter(q(2), q(3), q(4), q(5), q(6), wmr, wpl, wq, non_neg, monotonic)
   elseif (u < 0.0) then
     call weno7z_reconstruction_interface(wpl, wmr, q(8), q(7), q(6), q(5), q(4), q(3), q(2))
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(5), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
+    call WENO_monotonicity_limiter(q(7), q(6), q(5), q(4), q(3), wmr, wpl, wq, non_neg, monotonic)
   endif
 
 end subroutine weno7_reconstruction
 
 !> 7th-order weno z-type reconstruction flux
 pure subroutine weno7z_reconstruction_interface(wpl, wmr, qm3, qm2, qm1, q0, qp1, qp2, qp3)
-
   real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3 !< tracer concentration for 7-stencil wide
-  real, intent(out) :: wpl, wmr                              !< reconstructed weno flux
+  real, intent(out) :: wpl, wmr                        !< reconstructed weno flux
 
   real :: P0, P1, P2, P3     ! reconstructed polynomials
   real :: b0, b1, b2, b3     ! smoothness indicator
@@ -369,6 +362,8 @@ pure subroutine weno7z_reconstruction_interface(wpl, wmr, qm3, qm2, qm1, q0, qp1
   real :: a0, a1, a2, a3
   real :: eps, tau, wnorm
   integer, parameter :: r = 2
+  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
+  real :: qul, qmd, qlc, qmin, qmax, md
 
   d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
   eps = 1.0e-20
@@ -407,8 +402,9 @@ pure subroutine weno7z_reconstruction_interface(wpl, wmr, qm3, qm2, qm1, q0, qp1
 
   ! Normalization
   wnorm = w0+w1+w2+w3
-  wpl = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
+  w0 = w0/wnorm ; w1 = w1/wnorm ; w2 = w2/wnorm ; w3 = w3/wnorm
 
+  wpl = w0*P0 + w1*P1 + w2*P2 + w3*P3
   wpl = max(min(q0,qp1), wpl) ; wpl = min(max(q0,qp1), wpl) ! Bound
 
   ! Compute flux at the right side of i-1/2
@@ -445,21 +441,22 @@ pure subroutine weno7z_reconstruction_interface(wpl, wmr, qm3, qm2, qm1, q0, qp1
 
   ! Normalization
   wnorm = w0+w1+w2+w3
-  wmr = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
+  w0 = w0/wnorm ; w1 = w1/wnorm ; w2 = w2/wnorm ; w3 = w3/wnorm
 
+  wmr = w0*P0 + w1*P1 + w2*P2 + w3*P3
   wmr = max(min(q0,qm1), wmr) ; wmr = min(max(q0,qm1), wmr) ! Bound
 
 end subroutine weno7z_reconstruction_interface
 
 !> 9th-order weno reconstruction subroutine and limiter
-pure subroutine weno9_reconstruction(wq, q, u, qmin, qmax, non_neg)
-
-  real, intent(in) :: q(10) !< tracer concentration
-                            !! from i-4 to i+5
-  real, intent(in) :: u             !< advection velocity
-  real, intent(in) :: qmin, qmax    !< global min and max of tracer concentration
-  logical, intent(in) :: non_neg    !< If true, this tracer is non-negative
-  real, intent(out) :: wq           !< weno reconstruction at the interface i+1/2
+pure subroutine weno9_reconstruction(wq, q, u, non_neg, monotonic)
+  real, intent(in) :: q(10)      !< tracer concentration
+                                 !! from i-4 to i+5
+  real, intent(in) :: u          !< advection velocity
+  real, intent(out) :: wq        !< weno reconstruction at the interface i+1/2
+  logical, intent(in) :: non_neg !< If true, this tracer is non-negative
+  logical, intent(in) :: monotonic !< If true, WENO
+                                   !! TRACER_ADVECTION uses a monotonic limiter.
 
   real :: wmr ! wmr : weno reconstruction on the cell interface i-1/2
   real :: wpl ! wpl : weno reconstruction on the cell interface i+1/2
@@ -469,13 +466,13 @@ pure subroutine weno9_reconstruction(wq, q, u, qmin, qmax, non_neg)
   if (u > 0.0) then
     call weno9_reconstruction_interface(wpl, wmr, q(1), q(2), q(3), q(4), &
             q(5), q(6), q(7), q(8), q(9))
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(5), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
+    call WENO_monotonicity_limiter(q(2), q(3), q(4), q(5), q(6), wmr, wpl, wq, non_neg, monotonic)
   elseif (u < 0.0) then
     call weno9_reconstruction_interface(wpl, wmr, q(10), q(9), q(8), q(7), &
             q(6), q(5), q(4), q(3), q(2))
-    ! positivity limiter
-    if (non_neg) call PP_limiter(q(6), wmr, wpl, wq, qmin, qmax)
+    ! Monotonicity limiter
+    call WENO_monotonicity_limiter(q(7), q(6), q(5), q(4), q(3), wmr, wpl, wq, non_neg, monotonic)
   endif
 
 end subroutine weno9_reconstruction
@@ -513,6 +510,7 @@ pure subroutine weno9_reconstruction_interface(wpl, wmr, qm4, qm3, qm2, qm1, &
   ! Normalization
   wnorm = w0+w1+w2+w3+w4
   wpl = (w0*P0 + w1*P1 + w2*P2 + w3*P3 + w4*P4)/wnorm
+  wpl = max(min(q0,qp1), wpl) ; wpl = min(max(q0,qp1), wpl) ! Bound
 
   ! Compute flux at the right side of i+1/2
   call weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, &
@@ -529,13 +527,12 @@ pure subroutine weno9_reconstruction_interface(wpl, wmr, qm4, qm3, qm2, qm1, &
   ! Normalization
   wnorm = w0+w1+w2+w3+w4
   wmr = (w0*P0 + w1*P1 + w2*P2 + w3*P3 + w4*P4)/wnorm
-
+  wmr = max(min(q0,qm1), wmr) ; wmr = min(max(q0,qm1), wmr) ! Bound
 
 end subroutine weno9_reconstruction_interface
 
 pure subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1, q0, &
                 qp1, qp2, qp3, qp4)
-
   real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration
                                                                  !! for 9-stencil wide
   real, intent(out) :: P0, P1, P2, P3, P4    !< recontructed polynomials
@@ -599,7 +596,6 @@ end subroutine weno9_poly
 
 !> ppm reconstruction flux
 subroutine PPM_reconstruction(wq_ppm, q, u, mu, qext)
-
   real, intent(in) :: q(4) !< tracer concentration for 4-stencil wide
   real, intent(in) :: u               !< advection velocity
   real, intent(in) :: mu              !< cfl
@@ -638,39 +634,88 @@ subroutine PPM_reconstruction(wq_ppm, q, u, mu, qext)
 
 end subroutine PPM_reconstruction
 
-!> This is the subroutine for the maximum-principle preserving limiter
-pure subroutine PP_limiter(q0, wmr, wpl, wq, qmin_g, qmax_g)
+!> This is the subroutine for the WENO limiter
+pure subroutine WENO_monotonicity_limiter(qmm, qm, q0, qp, qpp, wmr0, wpl0, wq, non_neg, monotonic)
+  real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
+  real, intent(in) :: wmr0, wpl0           !< reconstructed weno flux
+  logical, intent(in) :: non_neg           !< If true, this tracer is non-negative
+  logical, intent(in) :: monotonic         !< If true, WENO
+                                           !! TRACER_ADVECTION uses a monotonic limiter.
+  real, intent(out) :: wq                  !< weno reconstruction at the interface i+1/2
+                                           !! after applying the limiter
 
-  real, intent(in) :: q0    !< tracer concentration in cell i
-  real, intent(in) :: wmr, wpl   !< weno reconstruction on the cell interface i-1/2 and i+1/2
-  real, intent(in) :: qmin_g, qmax_g !< global min and max of tracer concentration
-                                     !! at the initial time
-  real, intent(out) :: wq           !< weno reconstruction at the interface i+1/2
-                                    !! after applying the limiter
+  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
+  real :: qul, qmd, qlc, qmin, qmax, md
+  real :: wmr, wpl, w0, eps, P0, theta
 
-  real :: w0         !< w0 : 1st weight of N Gauss-Legendre quadrature weights
-                     !< over [-1/2,1/2],
-                     !< N is weno reconstruction order
-  real :: theta, eps, qmin, qmax
-  real :: P0
+  wmr = wmr0 ; wpl = wpl0
 
-  wq = 0.0
-  w0 = 5.0/18.0
+  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
 
-  P0 = (q0 - w0*(wmr + wpl))/(1.0 - 2.0*w0)
+  if (monotonic) then
+    ! Monotonicity Preserving at interface i+1/2
+    dm1 = qmm - 2.0*qm + q0
+    dd0 = qp  - 2.0*q0 + qm
+    dd1 = qpp - 2.0*qp + q0
 
-  qmin = min(wmr, P0, wpl)
-  qmax = max(wmr, P0, wpl)
+    mm1 = 0.5*(sign(1.0,(4.0*dd0-dd1)) + sign(1.0,(4.0*dd1-dd0))) * &
+           min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+    mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
+    dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
 
-  eps = min(1.0e-2, q0)
-  theta = min(abs((qmax_g-q0)/(qmax-q0)), abs((qmin_g-q0+eps)/(qmin-q0)), 1.0)
-  wq = theta*(wpl - q0) + q0
+    mm1 = 0.5*(sign(1.0,4.0*dm1-dd0) + sign(1.0,4.0*dd0-dm1)) * &
+           min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+    mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+    dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
 
-end subroutine PP_limiter
+    qul = q0 + 2.0*(q0-qm)
+    qmd = 0.5*(q0 + qp) - 0.5*dm4p
+    qlc = 0.5*(3.0*q0-qm) + (4.0/3.0)*dm4m
+
+    qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+    qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+    wpl = max( min(qmin,qmax), wpl) ; wpl = min( max(qmin,qmax), wpl)
+
+    ! Monotonicity Preserving at interface i-1/2
+    dm1 = qpp - 2.0*qp + q0
+    dd0 = qm  - 2.0*q0 + qp
+    dd1 = qmm - 2.0*qm + q0
+
+    mm1 = 0.5*(sign(1.0,(4.0*dd0-dd1)) + sign(1.0,(4.0*dd1-dd0))) * &
+           min(abs(4.0*dd0-dd1),abs(4.0*dd1-dd0))
+    mm2 = 0.5*(sign(1.0,dd0) + sign(1.0,dd1))*min(abs(dd0),abs(dd1))
+    dm4p = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+    mm1 = 0.5*(sign(1.0,(4.0*dm1-dd0)) + sign(1.0,(4.0*dd0-dm1))) * &
+           min(abs(4.0*dm1-dd0),abs(4.0*dd0-dm1))
+    mm2 = 0.5*(sign(1.0,dm1) + sign(1.0,dd0))*min(abs(dm1),abs(dd0))
+    dm4m = 0.5*(sign(1.0,mm1) + sign(1.0,mm2))*min(abs(mm1),abs(mm2))
+
+    qul = q0 + 2.0*(q0-qp)
+    qmd = 0.5*(q0 + qm) - 0.5*dm4p
+    qlc = 0.5*(3.0*q0-qp) + (4.0/3.0)*dm4m
+
+    qmin = max(min(q0,qm,qmd),min(q0,qul,qlc))
+    qmax = min(max(q0,qm,qmd),max(q0,qul,qlc))
+    wmr = max( min(qmin,qmax), wmr) ; wmr = min( max(qmin,qmax), wmr)
+  endif
+
+  ! Non-negative limiter of Zhang & Shu (2011)
+  if (non_neg) then
+    w0 = 5.0/18.0
+    eps = min(1.0e-2, q0)
+    P0 = (q0 - w0*(wmr + wpl))/(1.0 - 2.0*w0)
+    qmin = min(wmr, P0, wpl)
+    theta = min(abs((q0-eps)/(q0-qmin)), 1.0)
+    wq = theta*(wpl - q0) + q0
+  else
+    wq = wpl
+  endif
+
+end subroutine WENO_monotonicity_limiter
 
 !> Find the min and max of the tracer to use in max-principle limiter with WENO reconstructions
 subroutine tracer_min_max_init(Reg, G, GV)
-
   type(tracer_registry_type), pointer    :: Reg  !< pointer to the tracer registry
   type(ocean_grid_type),      intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type),    intent(in) :: GV   !< ocean vertical grid structure

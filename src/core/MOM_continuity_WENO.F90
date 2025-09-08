@@ -330,17 +330,17 @@ subroutine WENO_limiter(h_in, wmr, wpl, h_min, G, iis, iie, jis, jie)
     ! values less than h_min.
     eps = min(h_min, h_in(i,j))
 
-    !a(1) = (6.0*h_in(i,j) - (wmr(i,j) + wpl(i,j)))/4.0
-    !a(2) = (wpl(i,j) - wmr(i,j))
-    !a(3) = -6.0*h_in(i,j) + 3.0*(wmr(i,j) + wpl(i,j))
+    a(1) = (6.0*h_in(i,j) - (wmr(i,j) + wpl(i,j)))/4.0
+    a(2) = (wpl(i,j) - wmr(i,j))
+    a(3) = -6.0*h_in(i,j) + 3.0*(wmr(i,j) + wpl(i,j))
 
-    !qmin = 0.0
-    !do k = 1,3
-    !  qmin = qmin + a(k)*(0.5*(1.0-sign(1.0,a(k)))*Fmax(k) + 0.5*(1.0+sign(1.0,a(k)))*Fmin(k))
-    !enddo
+    qmin = 0.0
+    do k = 1,3
+      qmin = qmin + a(k)*(0.5*(1.0-sign(1.0,a(k)))*Fmax(k) + 0.5*(1.0+sign(1.0,a(k)))*Fmin(k))
+    enddo
 
-    P0 = (h_in(i,j) - w0*(wmr(i,j) + wpl(i,j)))/(1.0 - 2.0*w0)
-    qmin = min(wmr(i,j), P0, wpl(i,j))
+    !P0 = (h_in(i,j) - w0*(wmr(i,j) + wpl(i,j)))/(1.0 - 2.0*w0)
+    !qmin = min(wmr(i,j), P0, wpl(i,j))
 
     theta = min(((h_in(i,j)-eps)/(h_in(i,j)-qmin)), 1.0)
     wpl(i,j) = theta*(wpl(i,j) - h_in(i,j)) + h_in(i,j)
