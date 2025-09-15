@@ -2884,8 +2884,8 @@ subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, C
     elseif(order3(i,j) == 1.0) then
       call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im1, h_i, h_ip1, h_min)
     else
-      h_W(i,j) = h_i
-      h_E(i,j) = h_i
+      h_W(i,j) = 0.5*(h_i+h_im1)
+      h_E(i,j) = 0.5*(h_i+h_ip1)
     endif
   enddo ; enddo
 
@@ -3032,8 +3032,8 @@ subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, C
     elseif (order3(i,j) == 1.0) then
       call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm1, h_j, h_jp1, h_min)
     else
-      h_S(i,j) = h_j
-      h_N(i,j) = h_j
+      h_S(i,j) = 0.5*(h_j+h_jm1)
+      h_N(i,j) = 0.5*(h_j+h_jp1)
     endif
   enddo ; enddo
 

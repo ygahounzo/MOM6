@@ -25,6 +25,7 @@ use MOM_tracer_advect_schemes, only : set_tracer_advect_scheme, TracerAdvectionS
 use MOM_tracer_advect_weno, only : weno3_reconstruction, weno5_reconstruction
 use MOM_tracer_advect_weno, only : weno7_reconstruction, weno9_reconstruction, PPM_reconstruction
 use MOM_tracer_advect_weno, only : weno5NM_reconstruction
+use MOM_tracer_advect_weno, only : tracer_min_max_init
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -41,10 +42,9 @@ type, public :: tracer_advect_CS ; private
   logical :: debug                 !< If true, write verbose checksums for debugging purposes.
   logical :: useHuynhStencilBug = .false. !< If true, use the incorrect stencil width.
                                    !! This is provided for compatibility with legacy simuations.
-  logical :: monotonic = .true.   !< If true, WENO TRACER_ADVECTION uses a monotonic limiter.
+  logical :: monotonic = .false.   !< If true, WENO TRACER_ADVECTION uses a monotonic limiter.
                                    !! The default (false) is to use a simple positive definite
                                    !! limiter for tracers that are non-negative.
-                                   !! The monotonic limiter is used for all other tracers.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
   integer :: default_advect_scheme = -1 !< Determines which reconstruction to use
 end type tracer_advect_CS
@@ -433,9 +433,10 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
   real :: order3, order5, order7, order9
   real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
-  real :: u, Tmin, Tmax, wq, mu, qext, dx(6)
+  real :: u, Tmin, Tmax, wq, mu, qext, dx(5)
   logical :: non_neg
-  real :: T3(4), T5(6), T7(8), T9(10), dx0
+  real :: T3(3), T5(5), T7(7), T9(9), dx0
+  real :: area3, area5, area7
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -611,43 +612,51 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
               (advect_schemes(m) == ADVECT_WENO9)) then
         do I=is-1,ie
 
-          T3(:) = T_tmp(i-1:i+2,m) ; T5(:) = T_tmp(i-2:i+3,m)
+          ! centre cell depending on upstream direction
+          if (uhh(I) >= 0.0) then
+            i_up = i
+          else
+            i_up = i+1
+          endif
 
-          order3 = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)*G%mask2dCu(I+1,j)* &
-                   G%mask2dCu(I-2,j)*G%mask2dCu(I+2,j)
+          T3(:) = T_tmp(i_up-1:i_up+1,m) ; T5(:) = T_tmp(i_up-2:i_up+2,m)
+
+          order3 = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)!*G%mask2dCu(I_up+1,j)
+          area3 = min(hprev(i_up-1,j,k),hprev(i_up,j,k),hprev(i_up+1,j,k))
+          if (area3 <= G%areaT(i_up,j)*min_h) order3 = 0.0
 
           u = uhh(I) ; mu = CFL(I)
-          if (u >= 0.0) then
-            qext = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)
-            if (hprev(i,j,k) <= G%areaT(i,j)*min_h) order3 = 0.0
-          else
-            qext = G%mask2dCu(I,j)*G%mask2dCu(I+1,j)
-            if (hprev(i+1,j,k) <= G%areaT(i+1,j)*min_h) order3 = 0.0
-          endif
+          qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
 
-          order5 = order3*G%mask2dCu(I-3,j)*G%mask2dCu(I+3,j)
+          order5 = order3*G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up+1,j)
+          area5 = min(area3,hprev(i_up-2,j,k),hprev(i_up+2,j,k))
+          if (area5 <= G%areaT(i_up,j)*min_h) order5 = 0.0
 
           order7 = 0.0 ; order9 = 0.0
-          if (advect_schemes(m) == ADVECT_WENO7) then
-            order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
-            T7(:) = T_tmp(i-3:i+4,m)
+          if ( (advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
+            order7 = order5*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
+            T7(:) = T_tmp(i_up-3:i_up+3,m)
+            area7 = min(area5,hprev(i_up-3,j,k),hprev(i_up+3,j,k))
+            if (area7 <= G%areaT(i_up,j)*min_h) order7 = 0.0
           elseif (advect_schemes(m) == ADVECT_WENO9) then
-            order7 = order5*G%mask2dCu(I-4,j)*G%mask2dCu(I+4,j)
-            order9 = order7*G%mask2dCu(I-5,j)*G%mask2dCu(I+5,j)
-            T7 = T_tmp(i-3:i+4,m) ; T9 = T_tmp(i-4:i+5,m)
+            order9 = order7*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
+            T9 = T_tmp(i_up-4:i_up+4,m)
           endif
 
-          non_neg = Tr(m)%non_negative
+          !Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
+          !non_neg = Tr(m)%non_negative
+
           if (order9 == 1.0) then
-            call weno9_reconstruction(wq, T9, u, non_neg, monotonic)
+            call weno9_reconstruction(wq, T9, u, mu)
           elseif (order7 == 1.0) then
-            call weno7_reconstruction(wq, T7, u, non_neg, monotonic)
+            call weno7_reconstruction(wq, T7, u, mu)
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, T5, u, non_neg, monotonic)
+            call weno5_reconstruction(wq, T5, u, mu)
           !elseif (order3 == 1.0) then
-          !  call weno3_reconstruction(wq, T3, u, non_neg, monotonic)
+          !  call weno3_reconstruction(wq, T3, u, mu)
           else
             call PPM_reconstruction(wq, T3, u, mu, qext)
+            !wq = T3(2)
           endif
 
           flux_x(I,j,m) = u*wq
@@ -655,30 +664,32 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
       elseif (advect_schemes(m) == ADVECT_WENO5NM) then
         do I=is-1,ie
 
-          T3(:) = T_tmp(i-1:i+2,m) ; T5(:) = T_tmp(i-2:i+3,m)
-
-          order3 = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)*G%mask2dCu(I+1,j)* &
-                   G%mask2dCu(I-2,j)*G%mask2dCu(I+2,j)
-
-          u = uhh(I) ; mu = CFL(I)
-          if (u >= 0.0) then
-            qext = G%mask2dCu(I,j)*G%mask2dCu(I-1,j)
-            !if (qext*(T3(3)-T3(2))*(T3(2)-T3(1)) <= 0.0) order3 = 0.0
-            if (hprev(i,j,k) <= G%areaT(i,j)*min_h) order3 = 0.0
+          ! centre cell depending on upstream direction
+          if (uhh(I) >= 0.0) then
+            i_up = i
           else
-            qext = G%mask2dCu(I,j)*G%mask2dCu(I+1,j)
-            !if (qext*(T3(4)-T3(3))*(T3(3)-T3(2)) <= 0.0) order3 = 0.0
-            if (hprev(i+1,j,k) <= G%areaT(i+1,j)*min_h) order3 = 0.0
+            i_up = i+1
           endif
 
-          order5 = order3*G%mask2dCu(I-3,j)*G%mask2dCu(I+3,j)
+          T3(:) = T_tmp(i_up-1:i_up+1,m) ; T5(:) = T_tmp(i_up-2:i_up+2,m)
+
+          order3 = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)!*G%mask2dCu(I_up+1,j)
+          area3 = min(hprev(i_up-1,j,k),hprev(i_up,j,k),hprev(i_up+1,j,k))
+          if (area3 <= G%areaT(i_up,j)*min_h) order3 = 0.0
+
+          u = uhh(I) ; mu = CFL(I)
+          qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+
+          order5 = order3*G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up+1,j)
+          area5 = min(area3,hprev(i_up-2,j,k),hprev(i_up+2,j,k))
+          if (area5 <= G%areaT(i_up,j)*min_h) order5 = 0.0
 
           dx(1) = G%dxCu(I-2,j) ; dx(2) = G%dxCu(I-1,j) ; dx(3) = G%dxCu(I,j)
-          dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j) ; dx(6) = G%dxCu(I+3,j)
+          dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j)
 
-          non_neg = Tr(m)%non_negative
+          !non_neg = Tr(m)%non_negative
           if (order5 == 1.0) then
-            call weno5NM_reconstruction(wq, T5, u, dx, non_neg, monotonic)
+            call weno5NM_reconstruction(wq, T5, u, dx, mu)
           else
             call PPM_reconstruction(wq, T3, u, mu, qext)
           endif
@@ -912,9 +923,10 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
   real :: order3, order5, order7, order9
-  real :: v, Tmin, Tmax, wq, mu, qext, dy(6)
+  real :: v, Tmin, Tmax, wq, mu, qext, dy(5)
   logical :: non_neg
-  real :: T3(4), T5(6), T7(8), T9(10), dy0
+  real :: T3(3), T5(5), T7(7), T9(9), dy0
+  real :: area3, area5, area7
 
   usePLMslope = .false.
   ! stencil for calculating slope values
@@ -1103,44 +1115,51 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             (advect_schemes(m) == ADVECT_WENO9)) then
         do i=is,ie
 
-          T3 = T_tmp(i,m,j-1:j+2) ; T5 = T_tmp(i,m,j-2:j+3)
+          ! centre cell depending on upstream direction
+          if (vhh(i,J) >= 0.0) then
+            j_up = j
+          else
+            j_up = j + 1
+          endif
 
-          order3 = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)*G%mask2dCv(i,J+1)* &
-                   G%mask2dCv(i,J-2)*G%mask2dCv(i,J+2)
+          T3 = T_tmp(i,m,j_up-1:j_up+1) ; T5 = T_tmp(i,m,j_up-2:j_up+2)
+
+          order3 = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)!*G%mask2dCv(i,J_up+1)
+          area3 = min(hprev(i,j_up-1,k), hprev(i,j_up,k), hprev(i,j_up+1,k))
+          if (area3 <= G%areaT(i,j_up)*min_h) order3 = 0.0
 
           v = vhh(i,J) ; mu = CFL(i)
-          if (v >= 0.0) then
-            qext = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)
-            if (hprev(i,j,k) <= G%areaT(i,j)*min_h) order3 = 0.0
-          else
-            qext = G%mask2dCv(i,J)*G%mask2dCv(i,J+1)
-            if (hprev(i,j+1,k) <= G%areaT(i,j+1)*min_h) order3 = 0.0
-          endif
+          qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
 
-
-          order5 = order3*G%mask2dCv(i,J-3)*G%mask2dCv(i,J+3)
+          order5 = order3*G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up+1)
+          area5 = min(area3, hprev(i,j_up-2,k), hprev(i,j_up+2,k))
+          if (area5 <= G%areaT(i,j_up)*min_h) order5 = 0.0
 
           order7 = 0.0 ; order9 = 0.0
-          if (advect_schemes(m) == ADVECT_WENO7) then
-            order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
-            T7 = T_tmp(i,m,j-3:j+4)
+          if ((advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
+            order7 = order5*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
+            T7 = T_tmp(i,m,j_up-3:j_up+3)
+            area7 = min(area5, hprev(i,j_up-3,k), hprev(i,j_up+3,k))
+            if (area7 <= G%areaT(i,j_up)*min_h) order7 = 0.0
           elseif (advect_schemes(m) == ADVECT_WENO9) then
-            order7 = order5*G%mask2dCv(i,J-4)*G%mask2dCv(i,J+4)
-            order9 = order7*G%mask2dCv(i,J-5)*G%mask2dCv(i,J+5)
-            T7 = T_tmp(i,m,j-3:j+4) ; T9 = T_tmp(i,m,j-4:j+5)
+            order9 = order7*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
+            T9 = T_tmp(i,m,j_up-4:j_up+4)
           endif
 
-          non_neg = Tr(m)%non_negative
+          !Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
+          !non_neg = Tr(m)%non_negative
+
           if (order9 == 1.0) then
-            call weno9_reconstruction(wq, T9, v, non_neg, monotonic)
+            call weno9_reconstruction(wq, T9, v, mu)
           elseif (order7 == 1.0) then
-            call weno7_reconstruction(wq, T7, v, non_neg, monotonic)
+            call weno7_reconstruction(wq, T7, v, mu)
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, T5, v, non_neg, monotonic)
+            call weno5_reconstruction(wq, T5, v, mu)
           !elseif (order3 == 1.0) then
-          !  call weno3_reconstruction(wq, T3, v, mu, non_neg, monotonic)
+          !  call weno3_reconstruction(wq, T3, v, mu)
           else
             call PPM_reconstruction(wq, T3, v, mu, qext)
+            !wq = T3(2)
           endif
 
           flux_y(i,m,J) = v*wq
@@ -1148,30 +1167,32 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
       elseif (advect_schemes(m) == ADVECT_WENO5NM) then
         do i=is,ie
 
-          T3 = T_tmp(i,m,j-1:j+2) ; T5 = T_tmp(i,m,j-2:j+3)
-
-          order3 = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)*G%mask2dCv(i,J+1)* &
-                   G%mask2dCv(i,J-2)*G%mask2dCv(i,J+2)
-
-          v = vhh(i,J) ; mu = CFL(i)
-          if (v >= 0.0) then
-            qext = G%mask2dCv(i,J)*G%mask2dCv(i,J-1)
-            !if (qext*(T3(3)-T3(2))*(T3(2)-T3(1)) <= 0.0) order3 = 0.0
-            if (hprev(i,j,k) <= G%areaT(i,j)*min_h) order3 = 0.0
+          ! centre cell depending on upstream direction
+          if (vhh(i,J) >= 0.0) then
+            j_up = j
           else
-            qext = G%mask2dCv(i,J)*G%mask2dCv(i,J+1)
-            !if (qext*(T3(4)-T3(3))*(T3(3)-T3(2)) <= 0.0) order3 = 0.0
-            if (hprev(i,j+1,k) <= G%areaT(i,j+1)*min_h) order3 = 0.0
+            j_up = j + 1
           endif
 
-          order5 = order3*G%mask2dCv(i,J-3)*G%mask2dCv(i,J+3)
+          T3 = T_tmp(i,m,j_up-1:j_up+1) ; T5 = T_tmp(i,m,j_up-2:j_up+2)
+
+          order3 = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)!*G%mask2dCv(i,J_up+1)
+          area3 = min(hprev(i,j_up-1,k), hprev(i,j_up,k), hprev(i,j_up+1,k))
+          if (area3 <= G%areaT(i,j_up)*min_h) order3 = 0.0
+
+          v = vhh(i,J) ; mu = CFL(i)
+          qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+
+          order5 = order3*G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up+1)
+          area5 = min(area3, hprev(i,j_up-2,k), hprev(i,j_up+2,k))
+          if (area5 <= G%areaT(i,j_up)*min_h) order5 = 0.0
 
           dy(1) = G%dyCv(i,J-2) ; dy(2) = G%dyCv(i,J-1) ; dy(3) = G%dyCv(i,J)
-          dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2) ; dy(6) = G%dyCv(i,J+3)
+          dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2)
 
-          non_neg = Tr(m)%non_negative
+          !non_neg = Tr(m)%non_negative
           if (order5 == 1.0) then
-            call weno5NM_reconstruction(wq, T5, v, dy, non_neg, monotonic)
+            call weno5NM_reconstruction(wq, T5, v, dy, mu)
           else
             call PPM_reconstruction(wq, T3, v, mu, qext)
           endif
@@ -1397,8 +1418,7 @@ subroutine tracer_advect_init(Time, G, US, param_file, diag, CS)
     call get_param(param_file, mdl, "MONOTONIC_TRACER_ADVECTION", CS%monotonic, &
           desc="If true, WENO TRACER_ADVECTION uses a monotonic limiter. \n"// &
                "The default (false) is to use a simple positive definite limiter \n"// &
-               "for tracers that are non-negative. The monotonic limiter is used \"// &
-               "for all other tracers.", default=.true.)
+               "for tracers that are non-negative.", default=.false.)
   endif
 
   id_clock_advect = cpu_clock_id('(Ocean advect tracer)', grain=CLOCK_MODULE)
