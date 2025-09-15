@@ -116,9 +116,9 @@ use MOM_open_boundary,         only : ocean_OBC_type, open_boundary_end
 use MOM_open_boundary,         only : register_temp_salt_segments, update_segment_tracer_reservoirs
 use MOM_open_boundary,         only : setup_OBC_tracer_reservoirs
 use MOM_open_boundary,         only : open_boundary_register_restarts, remap_OBC_fields
-use MOM_open_boundary,         only : initialize_segment_data, rotate_OBC_config
-use MOM_open_boundary,         only : update_OBC_segment_data, open_boundary_halo_update
-use MOM_open_boundary,         only : write_OBC_info, chksum_OBC_segments
+use MOM_open_boundary,         only : open_boundary_setup_vert, initialize_segment_data
+use MOM_open_boundary,         only : update_OBC_segment_data, rotate_OBC_config
+use MOM_open_boundary,         only : open_boundary_halo_update, write_OBC_info, chksum_OBC_segments
 use MOM_porous_barriers,       only : porous_widths_layer, porous_widths_interface, porous_barriers_init
 use MOM_porous_barriers,       only : porous_barrier_CS
 use MOM_set_visc,              only : set_viscous_BBL, set_viscous_ML, set_visc_CS
@@ -674,7 +674,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
   if (do_dyn) then
     n_max = 1
     if (time_interval > CS%dt) n_max = ceiling(time_interval/CS%dt - 0.001)
-    ntstep = 1 ! initialization
+
     dt = time_interval / real(n_max)
     thermo_does_span_coupling = (CS%thermo_spans_coupling .and. &
                                 (CS%dt_therm > 1.5*cycle_time))
@@ -687,7 +687,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     elseif (.not.do_thermo) then
       dt_therm = CS%dt_therm
       if (present(cycle_length)) dt_therm = min(CS%dt_therm, cycle_length)
-      ! ntstep is not used.
+      ntstep = 1 ! ntstep is initialized to avoid an error in a secondary logical test,
+                 ! but the nonzero value of ntstep does not matter when do_thermo is false.
     else
       ntstep = MAX(1, MIN(n_max, floor(CS%dt_therm/dt + 0.001)))
       dt_therm = dt*ntstep
@@ -699,7 +700,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     elseif (.not.do_thermo) then
       dt_tr_adv = CS%dt_tr_adv
       if (present(cycle_length)) dt_tr_adv = min(CS%dt_tr_adv, cycle_length)
-      ! ntstep is not used.
+      ! ntastep is not used.
     else
       ntastep = MAX(1, MIN(n_max, floor(CS%dt_tr_adv/dt + 0.001)))
       dt_tr_adv = dt*ntastep
@@ -2614,7 +2615,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                "The time between OBC segment data updates for OBGC tracers. "//&
                "This must be an integer multiple of DT and DT_THERM. "//&
                "The default is set to DT.", &
-               units="s", default=US%T_to_s*CS%dt, scale=US%s_to_T, do_not_log=.not.associated(CS%OBC))
+               units="s", default=US%T_to_s*CS%dt, scale=US%s_to_T, do_not_log=.not.associated(OBC_in))
 
   ! This is here in case these values are used inappropriately.
   use_frazil = .false. ; bound_salinity = .false. ; use_p_surf_in_EOS = .false.
@@ -2803,6 +2804,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     call get_param(param_file, "MOM", "INDEX_TURNS", turns, &
         "Number of counterclockwise quarter-turn index rotations.", &
         default=1, debuggingParam=.true.)
+  else
+    turns = 0
   endif
 
   ! Set up the model domain and grids.
@@ -2872,13 +2875,6 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     CS%Hmix_UV = (US%Z_to_m * GV%m_to_H) * Hmix_UV_z
   endif
   CS%HFrz = (US%Z_to_m * GV%m_to_H) * HFrz_z
-
-  if (associated(OBC_in)) then
-    ! This call allocates the arrays on the segments for open boundary data and initializes the
-    ! relevant vertical remapping structures.   It can only occur after the vertical grid has been
-    ! initialized.
-    call initialize_segment_data(G_in, GV, US, OBC_in, param_file)
-  endif
 
   !   Shift from using the temporary dynamic grid type to using the final (potentially static)
   ! and properly rotated ocean-specific grid type and horizontal index type.
@@ -3078,6 +3074,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
            CS%mixedlayer_restrat_CSp, restart_CSp)
 
   if (associated(CS%OBC)) then
+    ! This call initializes the relevant vertical remapping structures.
+    call open_boundary_setup_vert(GV, US, CS%OBC)
+
     ! Set up remaining information about open boundary conditions that is needed for OBCs.
     ! Package specific changes to OBCs occur here.
     call call_OBC_register(G, GV, US, param_file, CS%update_OBC_CSp, CS%OBC, CS%tracer_Reg)
@@ -3086,7 +3085,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     ! could occur with the call to update_OBC_data or after the main initialization.
     if (use_temperature) &
       call register_temp_salt_segments(GV, US, CS%OBC, CS%tracer_Reg, param_file)
-    !This is the equivalent call to register_temp_salt_segments for external tracers with OBC
+    ! This is the equivalent call to register_temp_salt_segments for external tracers with OBC
     call call_tracer_register_obc_segments(GV, param_file, CS%tracer_flow_CSp, CS%tracer_Reg, CS%OBC)
 
     ! This needs the number of tracers and to have called any code that sets whether
@@ -3094,9 +3093,12 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     call open_boundary_register_restarts(HI, GV, US, CS%OBC, CS%tracer_Reg, &
                           param_file, restart_CSp, use_temperature)
 
+    ! This call allocates the arrays on the segments for open boundary data, but it must occur
+    ! after any calls to call_tracer_register_obc_segments.
+    call initialize_segment_data(GV, US, CS%OBC, param_file, turns)
+
     if (CS%debug_OBCs) call write_OBC_info(CS%OBC, G, GV, US)
   endif
-
 
   if (present(waves_CSp)) then
     call waves_register_restarts(waves_CSp, HI, GV, US, param_file, restart_CSp)
@@ -3138,7 +3140,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call callTree_waypoint("returned from MOM_initialize_coord() (initialize_MOM)")
 
   if (CS%use_ALE_algorithm) then
-    call ALE_init(param_file, GV, US, G%max_depth, CS%ALE_CSp)
+    call ALE_init(param_file, G, GV, US, G%max_depth, CS%ALE_CSp)
     call callTree_waypoint("returned from ALE_init() (initialize_MOM)")
   endif
 
@@ -3179,7 +3181,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
       CS%tv%T => T_in
       CS%tv%S => S_in
 
-      if (associated(OBC_in)) then
+      if (associated(CS%OBC)) then
         ! Log this parameter in MOM_initialize_state
         call get_param(param_file, "MOM", "OBC_RESERVOIR_INIT_BUG", OBC_reservoir_init_bug, &
                    "If true, set the OBC tracer reservoirs at the startup of a new run from the "//&
@@ -3260,12 +3262,12 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
       call ice_shelf_query(ice_shelf_CSp,G,CS%frac_shelf_h, CS%mass_shelf)
       call MOM_initialize_state(CS%u, CS%v, CS%h, CS%tv, Time, G, GV, US, &
           param_file, dirs, restart_CSp, CS%ALE_CSp, CS%tracer_Reg, &
-          CS%sponge_CSp, CS%ALE_sponge_CSp,CS%oda_incupd_CSp, CS%OBC, Time_in, &
-          frac_shelf_h=CS%frac_shelf_h, mass_shelf=CS%mass_shelf)
+          CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%OBC, Time_in, &
+          frac_shelf_h=CS%frac_shelf_h, mass_shelf=CS%mass_shelf, OBC_for_bug=CS%OBC)
     else
       call MOM_initialize_state(CS%u, CS%v, CS%h, CS%tv, Time, G, GV, US, &
           param_file, dirs, restart_CSp, CS%ALE_CSp, CS%tracer_Reg, &
-          CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%OBC, Time_in)
+          CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%OBC, Time_in, OBC_for_bug=CS%OBC)
     endif
 
     ! Reset the first direction if it was found in a restart file.
