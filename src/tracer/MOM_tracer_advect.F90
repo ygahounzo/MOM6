@@ -294,14 +294,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
         ! First, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                       isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, &
-                      local_advect_scheme, CS%monotonic)
+                      local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         !  Next, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme, CS%monotonic)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -317,14 +317,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
         ! First, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                       isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, &
-                      local_advect_scheme, CS%monotonic)
+                      local_advect_scheme)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! Next, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme, CS%monotonic)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -370,7 +370,7 @@ end subroutine advect_tracer
 !> This subroutine does 1-d flux-form advection in the zonal direction using
 !! a monotonic piecewise linear scheme.
 subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advect_schemes, monotonic)
+                    is, ie, js, je, k, G, GV, US, advect_schemes)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr  !< The number of tracers
@@ -392,8 +392,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
-  logical,                                   intent(in)    :: monotonic !< If true, WENO
-                                                 !! TRACER_ADVECTION uses a monotonic limiter.
 
   real, dimension(SZI_(G),ntr) :: &
     slope_x             ! The concentration slope per grid point [conc].
@@ -643,9 +641,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             T9 = T_tmp(i_up-4:i_up+4,m)
           endif
 
-          !Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
-          !non_neg = Tr(m)%non_negative
-
           if (order9 == 1.0) then
             call weno9_reconstruction(wq, T9, u, mu)
           elseif (order7 == 1.0) then
@@ -687,7 +682,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           dx(1) = G%dxCu(I-2,j) ; dx(2) = G%dxCu(I-1,j) ; dx(3) = G%dxCu(I,j)
           dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j)
 
-          !non_neg = Tr(m)%non_negative
           if (order5 == 1.0) then
             call weno5NM_reconstruction(wq, T5, u, dx, mu)
           else
@@ -861,7 +855,7 @@ end subroutine advect_x
 !> This subroutine does 1-d flux-form advection using a monotonic piecewise
 !! linear scheme.
 subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advect_schemes, monotonic)
+                    is, ie, js, je, k, G, GV, US, advect_schemes)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr !< The number of tracers
@@ -883,8 +877,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
-  logical,                                   intent(in)    :: monotonic !< If true, WENO
-                                                 !! TRACER_ADVECTION uses a monotonic limiter.
 
   real, dimension(SZI_(G),ntr,SZJ_(G)) :: &
     slope_y                     ! The concentration slope per grid point [conc].
@@ -1146,9 +1138,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             T9 = T_tmp(i,m,j_up-4:j_up+4)
           endif
 
-          !Tmin = Tr(m)%Tmingg ; Tmax = Tr(m)%Tmaxgg
-          !non_neg = Tr(m)%non_negative
-
           if (order9 == 1.0) then
             call weno9_reconstruction(wq, T9, v, mu)
           elseif (order7 == 1.0) then
@@ -1190,7 +1179,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           dy(1) = G%dyCv(i,J-2) ; dy(2) = G%dyCv(i,J-1) ; dy(3) = G%dyCv(i,J)
           dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2)
 
-          !non_neg = Tr(m)%non_negative
           if (order5 == 1.0) then
             call weno5NM_reconstruction(wq, T5, v, dy, mu)
           else

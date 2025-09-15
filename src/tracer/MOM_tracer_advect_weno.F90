@@ -601,12 +601,12 @@ subroutine PPM_reconstruction(wq_ppm, q, u, mu, qext)
     aR = (3.*q0) - 2.*aL
   endif
 
-  a6 = 6.*q0 - 3. * (aR + aL) ! Curvature
+  a6 = 6.0*q0 - 3.0 * (aR + aL) ! Curvature
 
   if (u >= 0.0) then
-    wq_ppm = aR - 0.5*mu*((aR-aL) - a6*(1. - 2./3. * mu))
+    wq_ppm = aR - 0.5*mu*((aR-aL) - a6*(1.0 - 2.0/3.0 * mu))
   else
-    wq_ppm = aL + 0.5*mu*((aR-aL) + a6*(1. - 2./3. * mu))
+    wq_ppm = aL + 0.5*mu*((aR-aL) + a6*(1.0 - 2.0/3.0 * mu))
   endif
 
 end subroutine PPM_reconstruction
@@ -621,7 +621,7 @@ pure subroutine WENO_monotonicity_limiter(qm, q0, qp, wmr, wpl, mu)
   real :: dA, mA, a6, wtmp
 
   dA = wpl - wmr ; mA = 0.5*(wpl+wmr)
-  if ((qp-q0)*(q0-qm) <= 0.) then
+  if ((qp-q0)*(q0-qm) <= 0.0) then
     wpl = q0 ; wmr = q0
   elseif ( dA*(q0 - mA) > (dA*dA)/6.0 ) then
     wmr = (3.0*q0) - 2.0*wpl
@@ -629,9 +629,9 @@ pure subroutine WENO_monotonicity_limiter(qm, q0, qp, wmr, wpl, mu)
     wpl = (3.0*q0) - 2.0*wmr
   endif
 
-  a6 = 6.*q0 - 3. * (wpl + wmr)
-  wtmp = wpl - 0.5*mu*((wpl-wmr) - a6*(1. - 2./3. * mu))
-  wmr = wmr + 0.5*mu*((wpl-wmr) + a6*(1. - 2./3. * mu))
+  a6 = 6.0*q0 - 3.0 * (wpl + wmr)
+  wtmp = wpl - 0.5*mu*((wpl-wmr) - a6*(1.0 - 2.0/3.0 * mu))
+  wmr = wmr + 0.5*mu*((wpl-wmr) + a6*(1.0 - 2.0/3.0 * mu))
   wpl = wtmp
 
 end subroutine WENO_monotonicity_limiter
