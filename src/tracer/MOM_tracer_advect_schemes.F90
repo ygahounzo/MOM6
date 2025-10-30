@@ -15,6 +15,7 @@ integer, parameter :: ADVECT_WENO5      = 3 !< WENO5 advection scheme
 integer, parameter :: ADVECT_WENO5NM    = 4 !< WENO5NM advection scheme
 integer, parameter :: ADVECT_WENO7      = 5 !< WENO7 advection scheme
 integer, parameter :: ADVECT_WENO9      = 6 !< WENO9 advection scheme
+integer, parameter :: ADVECT_PPMCS      = 7 !< PPM:CS advection scheme
 
 !> Documentation for tracer advection schemes
 character(len=*), parameter :: TracerAdvectionSchemeDoc = &
@@ -23,7 +24,8 @@ character(len=*), parameter :: TracerAdvectionSchemeDoc = &
                  "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n"//&
                  "  WENO5  - Weighted Essentially Non-Oscillatory, 5th order\n"//&
                  "  WENO7  - Weighted Essentially Non-Oscillatory, 7th order\n"//&
-                 "  WENO9  - Weighted Essentially Non-Oscillatory, 9th order"
+                 "  WENO9  - Weighted Essentially Non-Oscillatory, 9th order\n"//&
+                 "  PPM:CS - Piecewise Parabolic Method (Colella-Sekora)"
 
 contains
 
@@ -49,6 +51,8 @@ subroutine set_tracer_advect_scheme(scheme_value, advect_scheme_name)
       scheme_value = ADVECT_WENO7
     case ("WENO9")
       scheme_value = ADVECT_WENO9
+    case ("PPM:CS")
+      scheme_value = ADVECT_PPMCS
     case default
       call MOM_error(FATAL, "set_tracer_advect_scheme: "//&
            "Unknown TRACER_ADVECTION_SCHEME = "//trim(advect_scheme_name))

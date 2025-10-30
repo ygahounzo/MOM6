@@ -2797,6 +2797,7 @@ subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, C
   real :: order5, order7, dx, area3, area5, area7
   real :: am3, am2, am1, a0, ap1, ap2, ap3
   real, dimension(SZI_(G),SZJ_(G))  :: order3
+  real :: a7(7)
 
   local_open_BC = .false.
   if (associated(OBC)) then
@@ -2842,50 +2843,19 @@ subroutine WENO_reconstruction_x(h_in, h_W, h_E, G, LB, h_min, monotonic, OBC, C
 
   do j=jsl,jel ; do i=isl,iel
     ! Neighboring values should take into account any boundaries.
-    h_im2 = G%mask2dT(i-2,j) * h_in(i-2,j) + (1.0-G%mask2dT(i-2,j)) * h_in(i-1,j)
-    h_im1 = G%mask2dT(i-1,j) * h_in(i-1,j) + (1.0-G%mask2dT(i-1,j)) * h_in(i,j)
-    h_i = h_in(i,j)
-    h_ip1 = G%mask2dT(i+1,j) * h_in(i+1,j) + (1.0-G%mask2dT(i+1,j)) * h_in(i,j)
-    h_ip2 = G%mask2dT(i+2,j) * h_in(i+2,j) + (1.0-G%mask2dT(i+2,j)) * h_in(i+1,j)
 
-    am2 = G%mask2dT(i-2,j)*G%areaT(i-2,j)
-    am1 = G%mask2dT(i-1,j)*G%areaT(i-1,j)
-    a0 = G%mask2dT(i,j)*G%areaT(i,j)
-    ap1 = G%mask2dT(i+1,j)*G%areaT(i+1,j)
-    ap2 = G%mask2dT(i+2,j)*G%areaT(i+2,j)
-
-    area3 = min(am1*h_im1, a0*h_i, ap1*h_ip1)
-    area5 = min(area3, am2*h_im2, ap2*h_ip2)
-
-    !order3(i,j) = G%mask2dT(i-1,j)*G%mask2dT(i,j)*G%mask2dT(i+1,j)
     order5 = order3(i,j)*G%mask2dT(i-2,j)*G%mask2dT(i+2,j)
-
-    if (area3 <= G%areaT(i,j)*h_min) order3(i,j) = 0.0
-    if (area5 <= G%areaT(i,j)*h_min) order5 = 0.0
-
-    order7 = 0.0
-    if (CS%weno7) then
-      h_im3 = G%mask2dT(i-3,j) * h_in(i-3,j) + (1.0-G%mask2dT(i-3,j)) * h_in(i-2,j)
-      h_ip3 = G%mask2dT(i+3,j) * h_in(i+3,j) + (1.0-G%mask2dT(i+3,j)) * h_in(i+2,j)
-
-      am3 = G%mask2dT(i-3,j)*G%areaT(i-3,j)
-      ap3 = G%mask2dT(i+3,j)*G%areaT(i+3,j)
-      area7 = min(area5, am3*h_im3, ap3*h_ip3)
-      order7 = order5*G%mask2dT(i-3,j)*G%mask2dT(i+3,j)
-      if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
-    endif
+    if (CS%weno7) order7 = order5*G%mask2dT(i-3,j)*G%mask2dT(i+3,j)
 
     if (order7 == 1.0) then
-      call weno7_reconstruction_interface(h_W(i,j), h_E(i,j), h_im3, h_im2, h_im1, h_i, h_ip1, &
-              h_ip2, h_ip3, h_min)
+      call weno7_reconstruction_interface(h_W(i,j), h_E(i,j), h_in(i-3:i+3,j), h_min)
     elseif (order5 == 1.0) then
-      call weno5_reconstruction_interface(h_W(i,j), h_E(i,j), h_im2, h_im1, h_i, h_ip1, &
-              h_ip2, h_min)
+      call weno5_reconstruction_interface(h_W(i,j), h_E(i,j), h_in(i-2:i+2,j), h_min)
     elseif(order3(i,j) == 1.0) then
-      call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_im1, h_i, h_ip1, h_min)
+      call weno3_reconstruction_interface(h_W(i,j), h_E(i,j), h_in(i-1:i+1,j), h_min)
     else
-      h_W(i,j) = 0.5*(h_i+h_im1)
-      h_E(i,j) = 0.5*(h_i+h_ip1)
+      h_W(i,j) = h_in(i,j) !0.5*(h_i+h_im1)
+      h_E(i,j) = h_in(i,j) !0.5*(h_i+h_ip1)
     endif
   enddo ; enddo
 
@@ -2942,8 +2912,7 @@ subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, C
   integer :: i, j, isl, iel, jsl, jel, n, stencil
   logical :: local_open_BC
   type(OBC_segment_type), pointer :: segment => NULL()
-  real :: order5, order7, dy, area3, area5, area7
-  real :: am3, am2, am1, a0, ap1, ap2, ap3, rr
+  real :: order5, order7
   real, dimension(SZI_(G),SZJ_(G))  :: order3
 
   local_open_BC = .false.
@@ -2988,52 +2957,22 @@ subroutine WENO_reconstruction_y(h_in, h_S, h_N, G, LB, h_min, monotonic, OBC, C
     enddo
   endif
 
+  order7 = 0.0
   do j=jsl,jel ; do i=isl,iel
     ! Neighboring values should take into account any boundaries.
-    h_jm2 = G%mask2dT(i,j-2) * h_in(i,j-2) + (1.0-G%mask2dT(i,j-2)) * h_in(i,j-1)
-    h_jm1 = G%mask2dT(i,j-1) * h_in(i,j-1) + (1.0-G%mask2dT(i,j-1)) * h_in(i,j)
-    h_j = h_in(i,j)
-    h_jp1 = G%mask2dT(i,j+1) * h_in(i,j+1) + (1.0-G%mask2dT(i,j+1)) * h_in(i,j)
-    h_jp2 = G%mask2dT(i,j+2) * h_in(i,j+2) + (1.0-G%mask2dT(i,j+2)) * h_in(i,j+1)
 
-    am2 = G%mask2dT(i,j-2)*G%areaT(i,j-2)
-    am1 = G%mask2dT(i,j-1)*G%areaT(i,j-1)
-    a0  = G%mask2dT(i,j)*G%areaT(i,j)
-    ap1 = G%mask2dT(i,j+1)*G%areaT(i,j+1)
-    ap2 = G%mask2dT(i,j+2)*G%areaT(i,j+2)
-
-    area3 = min(am1*h_jm1, a0*h_j, ap1*h_jp1)
-    area5 = min(area3, am2*h_jm2, ap2*h_jp2)
-
-    !order3(i,j) = G%mask2dT(i,j-1)*G%mask2dT(i,j)*G%mask2dT(i,j+1)
     order5 = order3(i,j)*G%mask2dT(i,j-2)*G%mask2dT(i,j+2)
-
-    if (area3 <= G%areaT(i,j)*h_min) order3(i,j) = 0.0
-    if (area5 <= G%areaT(i,j)*h_min) order5 = 0.0
-
-    order7 = 0.0
-    if (CS%weno7) then
-      h_jm3 = G%mask2dT(i,j-3) * h_in(i,j-3) + (1.0-G%mask2dT(i,j-3)) * h_in(i,j-2)
-      h_jp3 = G%mask2dT(i,j+3) * h_in(i,j+3) + (1.0-G%mask2dT(i,j+3)) * h_in(i,j+2)
-
-      am3 = G%mask2dT(i,j-3)*G%areaT(i,j-3)
-      ap3 = G%mask2dT(i,j+3)*G%areaT(i,j+3)
-      area7 = min(area5, am3*h_jm3, ap3*h_jp3)
-      order7 = order5*G%mask2dT(i,j-3)*G%mask2dT(i,j+3)
-      if (area7 <= G%areaT(i,j)*h_min) order7 = 0.0
-    endif
+    if (CS%weno7) order7 = order5*G%mask2dT(i,j-3)*G%mask2dT(i,j+3)
 
     if (order7 == 1.0) then
-      call weno7_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm3, h_jm2, h_jm1, h_j, h_jp1, &
-              h_jp2, h_jp3, h_min)
+      call weno7_reconstruction_interface(h_S(i,j), h_N(i,j), h_in(i,j-3:j+3), h_min)
     elseif (order5 == 1.0) then
-      call weno5_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm2, h_jm1, h_j, h_jp1, h_jp2, &
-              h_min)
+      call weno5_reconstruction_interface(h_S(i,j), h_N(i,j), h_in(i,j-2:j+2), h_min)
     elseif (order3(i,j) == 1.0) then
-      call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_jm1, h_j, h_jp1, h_min)
+      call weno3_reconstruction_interface(h_S(i,j), h_N(i,j), h_in(i,j-1:j+1), h_min)
     else
-      h_S(i,j) = 0.5*(h_j+h_jm1)
-      h_N(i,j) = 0.5*(h_j+h_jp1)
+      h_S(i,j) = h_in(i,j) !0.5*(h_j+h_jm1)
+      h_N(i,j) = h_in(i,j) !0.5*(h_j+h_jp1)
     endif
   enddo ; enddo
 

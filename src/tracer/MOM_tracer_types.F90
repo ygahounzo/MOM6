@@ -101,8 +101,8 @@ type, public :: tracer_type
   logical :: remap_tr = .true.        !< If true, this tracer should be vertically remapped
   logical :: non_negative = .true.  !< If true, this tracer is non-negative
   integer :: advect_scheme = -1  !< flag for advection scheme
-  real  :: Tmingg           !< global min of tracer
-  real  :: Tmaxgg           !< global max of tracer
+  real :: Tmingg          !< global min of tracer
+  real :: Tmaxgg          !< global max of tracer
 
   integer :: diag_form = 1  !< An integer indicating which template is to be used to label diagnostics.
   !>@{ Diagnostic IDs

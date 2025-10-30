@@ -20,7 +20,7 @@ use MOM_unit_scaling,    only : unit_scale_type
 use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_tracer_advect_schemes, only : ADVECT_PLM, ADVECT_PPMH3, ADVECT_PPM
 use MOM_tracer_advect_schemes, only : ADVECT_WENO5, ADVECT_WENO7, ADVECT_WENO9
-use MOM_tracer_advect_schemes, only : ADVECT_WENO5NM
+use MOM_tracer_advect_schemes, only : ADVECT_WENO5NM, ADVECT_PPMCS
 use MOM_tracer_advect_schemes, only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
 use MOM_tracer_advect_weno, only : weno3_reconstruction, weno5_reconstruction
 use MOM_tracer_advect_weno, only : weno7_reconstruction, weno9_reconstruction, PPM_reconstruction
@@ -47,6 +47,7 @@ type, public :: tracer_advect_CS ; private
                                    !! limiter for tracers that are non-negative.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
   integer :: default_advect_scheme = -1 !< Determines which reconstruction to use
+
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -164,6 +165,8 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
        stencil_local = 4
      elseif (local_advect_scheme(m) == ADVECT_WENO9) then
        stencil_local = 5
+     elseif (local_advect_scheme(m) == ADVECT_PPMCS) then
+       stencil_local = 3
      endif
      stencil = max(stencil, stencil_local)
   enddo
@@ -172,6 +175,9 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     call MOM_error(FATAL, "MOM_tracer_advect: "//&
       "stencil is wider than the halo.")
   endif
+
+  ! Find the min and max of the tracers
+  call tracer_min_max_init(Reg, G, GV, local_advect_scheme)
 
   max_iter = 2*INT(CEILING(dt/CS%dt)) + 1
 
@@ -430,11 +436,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
   real :: order3, order5, order7, order9
-  real :: Tm3, Tm2, Tm1, Tp1, Tp2, Tp3, Tp4, Tm4, Tm5, Tp5
-  real :: u, Tmin, Tmax, wq, mu, qext, dx(5)
-  logical :: non_neg
-  real :: T3(3), T5(5), T7(7), T9(9), dx0
-  real :: area3, area5, area7
+  real :: u, wq, mu, qext, dx(5)
+  real :: T3(3), T5(5), T7(7), T9(9)
+  real :: Tmm, Tpp, D0, Dml, Dmr, Dlim
+  real :: am, ap, D06, Dc, Dl, Dr, s, mak, Cl, sc, sm, sp, Dmm, theta
+  real :: area3(3), area5(5), area7(7), wq_ppm, Ti_tmp
+  real, dimension(SZIB_(G),SZJ_(G),ntr) :: flux_ppm_x
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -606,8 +613,132 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
+      elseif (advect_schemes(m) == ADVECT_PPMCS) then
+        !if (Tr(m)%non_negative) Tr(m)%conc_underflow = 1.0e-10
+        do I=is-1,ie
+          ! centre cell depending on upstream direction
+          if (uhh(I) >= 0.0) then
+            i_up = i
+          else
+            i_up = i+1
+          endif
+
+          Dr = 0.0 ; Dl = 0.0 ; D06 = 0.0
+          qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+          mak = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*G%mask2dCu(I_up+1,j)
+          !T5(:) = T_tmp(i_up-2:i_up+2,m)
+          !area5 = G%areaT(i_up-2:i_up+2,j)*T5
+          !if ( (minval(area5) <= G%areaT(i_up,j)*1.0e-2) .or. &
+          if ( (minval(hprev(i_up-2:i_up+2,j,k)) < G%areaT(i_up,j)*min_h) ) mak = 0.0
+
+          ! Implementation of PPM-CS
+          Tp = T_tmp(i_up+1,m) ; Tc = T_tmp(i_up,m) ; Tm = T_tmp(i_up-1,m)
+          Tpp = T_tmp(i_up+2,m) ; Tmm = T_tmp(i_up-2,m)
+
+          if (mak == 0.) then
+            aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
+            aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
+            aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
+            aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR) ! Bound
+
+            dA = aR - aL ; mA = 0.5*( aR + aL )
+            if (G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)*(Tp-Tc)*(Tc-Tm) <= 0.) then
+              aL = Tc ; aR = Tc ! PCM for local extrema and boundary cells
+            elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
+              aL = (3.*Tc) - 2.*aR
+            elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
+              aR = (3.*Tc) - 2.*aL
+            endif
+          else
+
+            Cl = 1.25
+
+            aL = (((-3.*Tmm + 27.*Tm) + (47.*Tc - 13.*Tp)) + 2.*Tpp)/60.
+            aR = (((2.*Tmm - 13.*Tm) + (47.*Tc + 27.*Tp)) - 3.*Tpp)/60.
+
+            !if ((aL < min(Tm,Tc)) .or. (aL > max(Tm,Tc))) then
+            if ((Tc-aL)*(aL-Tm) < 0.) then
+              D0 = 3.*((Tm - 2.*aL) + Tc)
+              Dml = Cl*((Tmm - 2.*Tm) + Tc)
+              Dmr = Cl*((Tm - 2.*Tc) + Tp)
+
+              Dlim = 0.0
+              if ((Dmr-D0)*(D0-Dml) < 0.0) then
+                if ((D0*Dml > 0.) .and. (D0*Dmr > 0.)) then  ! same sign, nonzero
+                  Dlim = sign( min(abs(Dml), abs(Dmr), abs(D0)), D0)
+                end if
+              !  aL = 0.5*((Tm + Tc) - Dlim/3.)
+              !else
+              !  aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6.
+              !  aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL)
+              endif
+              aL = 0.5*((Tm + Tc) - Dlim/3.)
+            end if
+
+            !if ((aR < min(Tc,Tp)) .or. (aR > max(Tc,Tp))) then
+            if ((Tp-aR)*(aR-Tc) < 0.) then
+              D0 = 3.*((Tc - 2.*aR) + Tp)
+              Dml = Cl*((Tm - 2.*Tc) + Tp)
+              Dmr = Cl*((Tc - 2.*Tp) + Tpp)
+
+              Dlim = 0.0
+              if ((Dmr-D0)*(D0-Dml) < 0.0) then
+                if ((D0*Dml > 0.) .and. (D0*Dmr > 0.)) then  ! same sign, nonzero
+                  Dlim = sign( min(abs(Dml), abs(Dmr), abs(D0)), D0)
+                end if
+              !  aR = 0.5*((Tc + Tp) - Dlim/3.)
+              !else
+              !  aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6.
+              !  aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR)
+              endif
+              aR = 0.5*((Tc + Tp) - Dlim/3.)
+            end if
+
+            dA = aR - aL ; mA = 0.5*( aR + aL )
+            if (((Tp-Tc)*(Tc-Tm) <= 0.) .or. ((aR-Tc)*(Tc-aL) <= 0.)) then
+              D06 = 6.*(aL - 2.*Tc + aR)
+              Dl = Cl*((Tmm - 2.*Tm) + Tc)
+              Dc = Cl*((Tm - 2.*Tc) + Tp)
+              Dr = Cl*((Tc - 2.*Tp) + Tpp)
+
+              !D0 = abs(D06)/(abs(Tp-Tc) + 1.0e-6)
+              !D0 = abs(Dc)/(abs(Tp-Tm) + 1.0e-12)
+              !D0 = abs(Dc)/((abs(Tp-Tc)+abs(Tc-Tm)) + 1.0e-12)
+              !D0 = abs(Tp-Tc)/(min(abs(Tp),abs(Tm)) + 1.0e-12)
+              !Dc = Cl*((Tm - 2.*Tc) + Tp)
+              !gradCS_x(I,j,k) = 0.0!Dr
+
+              Dlim = 0.
+              !if (((Dr-D06)*(D06-Dl) < 0.0)) then !.and. (D0 < 0.05)) then
+              !  if ((D06*Dc > 0.) .and. (D06*Dl > 0.) .and. (D06*Dr > 0.)) then
+              !    Dlim = sign( min(abs(Dl), abs(Dr), abs(Dc), abs(D06)), D06)
+              !    Dlim = Dlim/D06
+              !  endif
+              !endif
+              aL = Tc + Dlim*(aL - Tc)
+              aR = Tc + Dlim*(aR - Tc)
+            elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
+              aL = (3.*Tc) - 2.*aR
+            elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
+              aR = (3.*Tc) - 2.*aL
+            endif
+          endif
+
+          a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
+
+          if (uhh(I) >= 0.0) then
+            flux_x(I,j,m) = uhh(I)*( aR - 0.5 * CFL(I) * ( &
+                 ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
+          else
+            flux_x(I,j,m) = uhh(I)*( aL + 0.5 * CFL(I) * ( &
+                 ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
+          endif
+        enddo
       elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
               (advect_schemes(m) == ADVECT_WENO9)) then
+        order7 = 0.0 ; order9 = 0.0
+        if (Tr(m)%non_negative) Tr(m)%Tmingg = 0.0
+
         do I=is-1,ie
 
           ! centre cell depending on upstream direction
@@ -619,27 +750,21 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
           T3(:) = T_tmp(i_up-1:i_up+1,m) ; T5(:) = T_tmp(i_up-2:i_up+2,m)
 
-          order3 = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)!*G%mask2dCu(I_up+1,j)
-          area3 = min(hprev(i_up-1,j,k),hprev(i_up,j,k),hprev(i_up+1,j,k))
-          if (area3 <= G%areaT(i_up,j)*min_h) order3 = 0.0
+          order3 = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+          order5 = order3*G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up+1,j)
 
           u = uhh(I) ; mu = CFL(I)
           qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
 
-          order5 = order3*G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up+1,j)
-          area5 = min(area3,hprev(i_up-2,j,k),hprev(i_up+2,j,k))
-          if (area5 <= G%areaT(i_up,j)*min_h) order5 = 0.0
-
-          order7 = 0.0 ; order9 = 0.0
           if ( (advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
             order7 = order5*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
             T7(:) = T_tmp(i_up-3:i_up+3,m)
-            area7 = min(area5,hprev(i_up-3,j,k),hprev(i_up+3,j,k))
-            if (area7 <= G%areaT(i_up,j)*min_h) order7 = 0.0
           elseif (advect_schemes(m) == ADVECT_WENO9) then
             order9 = order7*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
             T9 = T_tmp(i_up-4:i_up+4,m)
           endif
+
+          call PPM_reconstruction(wq_ppm, T3, u, mu, qext)
 
           if (order9 == 1.0) then
             call weno9_reconstruction(wq, T9, u, mu)
@@ -647,14 +772,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             call weno7_reconstruction(wq, T7, u, mu)
           elseif (order5 == 1.0) then
             call weno5_reconstruction(wq, T5, u, mu)
-          !elseif (order3 == 1.0) then
-          !  call weno3_reconstruction(wq, T3, u, mu)
           else
-            call PPM_reconstruction(wq, T3, u, mu, qext)
-            !wq = T3(2)
+            wq = wq_ppm
           endif
 
-          flux_x(I,j,m) = u*wq
+          flux_x(I,j,m) = wq
+          flux_ppm_x(I,j,m) = wq_ppm
         enddo
       elseif (advect_schemes(m) == ADVECT_WENO5NM) then
         do I=is-1,ie
@@ -668,27 +791,23 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
           T3(:) = T_tmp(i_up-1:i_up+1,m) ; T5(:) = T_tmp(i_up-2:i_up+2,m)
 
-          order3 = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)!*G%mask2dCu(I_up+1,j)
-          area3 = min(hprev(i_up-1,j,k),hprev(i_up,j,k),hprev(i_up+1,j,k))
-          if (area3 <= G%areaT(i_up,j)*min_h) order3 = 0.0
+          order3 = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+          order5 = order3*G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up+1,j)
 
           u = uhh(I) ; mu = CFL(I)
           qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+          dx(:) = G%dxCu(I-2:I+2,j)
 
-          order5 = order3*G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up+1,j)
-          area5 = min(area3,hprev(i_up-2,j,k),hprev(i_up+2,j,k))
-          if (area5 <= G%areaT(i_up,j)*min_h) order5 = 0.0
-
-          dx(1) = G%dxCu(I-2,j) ; dx(2) = G%dxCu(I-1,j) ; dx(3) = G%dxCu(I,j)
-          dx(4) = G%dxCu(I+1,j) ; dx(5) = G%dxCu(I+2,j)
+          call PPM_reconstruction(wq_ppm, T3, u, mu, qext)
 
           if (order5 == 1.0) then
             call weno5NM_reconstruction(wq, T5, u, dx, mu)
           else
-            call PPM_reconstruction(wq, T3, u, mu, qext)
+            wq = wq_ppm
           endif
 
-          flux_x(I,j,m) = u*wq
+          flux_x(I,j,m) = wq
+          flux_ppm_x(I,j,m) = wq_ppm
         enddo
       else ! PLM
         do I=is-1,ie
@@ -731,7 +850,14 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                   ntr_id = segment%tr_reg%Tr(m)%ntr_index
                   if (allocated(segment%tr_Reg%Tr(m)%tres)) then
                     flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
-                  else ; flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc ; endif
+                    if (advect_schemes(m) > 2) &
+                            flux_ppm_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
+                  !else ; flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc ; endif
+                  else
+                    flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                    if (advect_schemes(m) > 2) &
+                            flux_ppm_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                  endif
                 enddo
               endif
             endif
@@ -755,7 +881,14 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                 ntr_id = segment%tr_reg%Tr(m)%ntr_index
                 if (allocated(segment%tr_Reg%Tr(m)%tres)) then
                   flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
-                else; flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc; endif
+                  if (advect_schemes(m) > 2) &
+                          flux_ppm_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
+                !else; flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc; endif
+                else
+                  flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                  if (advect_schemes(m) > 2) &
+                          flux_ppm_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                endif
               enddo
             endif
           endif
@@ -806,8 +939,14 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
       do i=is,ie
         if (do_i(i,j)) then
           if (Ihnew(i) > 0.0) then
+            Tc = Tr(m)%t(i,j,k)
             Tr(m)%t(i,j,k) = (Tr(m)%t(i,j,k) * hlst(i) - &
                               (flux_x(I,j,m) - flux_x(I-1,j,m))) * Ihnew(i)
+            if ( (advect_schemes(m) > 2) .and. &
+                    ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) .or.(Tr(m)%t(i,j,k) > Tr(m)%Tmaxgg)) ) then
+              Tr(m)%t(i,j,k) = (Tc * hlst(i) - &
+                              (flux_ppm_x(I,j,m) - flux_ppm_x(I-1,j,m))) * Ihnew(i)
+            endif
           endif
         endif
       enddo
@@ -832,7 +971,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   endif ; enddo ! End of j-loop.
 
   ! Do user controlled underflow of the tracer concentrations.
-  do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
+  do m=1,ntr ; if (Tr(m)%conc_underflow >= 0.0) then
     do j=js,je ; do i=is,ie
       if (abs(Tr(m)%t(i,j,k)) < Tr(m)%conc_underflow) Tr(m)%t(i,j,k) = 0.0
     enddo ; enddo
@@ -915,10 +1054,13 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
   real :: order3, order5, order7, order9
-  real :: v, Tmin, Tmax, wq, mu, qext, dy(5)
-  logical :: non_neg
-  real :: T3(3), T5(5), T7(7), T9(9), dy0
-  real :: area3, area5, area7
+  real :: v, wq, mu, qext, dy(5)
+  real :: T3(3), T5(5), T7(7), T9(9)
+  real :: Tmm, Tpp, D0, Dml, Dmr, Dlim
+  real :: am, ap, D06, Dc, Dl, Dr, s, mak, Cl
+  real :: area3(3), area5(5), area7(7)
+  real :: sc, sm, sp, wq_ppm, Ti_tmp
+  real, dimension(SZI_(G),ntr,SZJB_(G)) :: flux_ppm_y
 
   usePLMslope = .false.
   ! stencil for calculating slope values
@@ -1103,8 +1245,131 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
+      elseif (advect_schemes(m) == ADVECT_PPMCS) then
+        !if (Tr(m)%non_negative) Tr(m)%conc_underflow = 1.0e-10
+        do i=is,ie
+          ! centre cell depending on upstream direction
+          if (vhh(i,J) >= 0.0) then
+            j_up = j
+          else
+            j_up = j + 1
+          endif
+
+          Dr = 0.0 ; Dl = 0.0; D06 = 0.0
+          qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+          mak = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up+1)
+          !T5 = T_tmp(i,m,j_up-2:j_up+2)
+          !area5 = G%areaT(i,j_up-2:j_up+2)*T5
+          !if ( (minval(area5) <= G%areaT(i,j_up)*1.0e-2) .or. &
+          if ( (minval(hprev(i,j_up-2:j_up+2,k)) <= G%areaT(i,j_up)*min_h) ) mak = 0.0
+
+          ! Implementation of PPM-CS
+          Tp = T_tmp(i,m,j_up+1) ; Tc = T_tmp(i,m,j_up) ; Tm = T_tmp(i,m,j_up-1)
+          Tpp = T_tmp(i,m,j_up+2) ; Tmm = T_tmp(i,m,j_up-2)
+
+          if (mak == 0.) then
+            aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
+            aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
+            aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
+            aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR) ! Bound
+
+            dA = aR - aL ; mA = 0.5*( aR + aL )
+            if (G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)*(Tp-Tc)*(Tc-Tm) <= 0.) then
+              aL = Tc ; aR = Tc ! PCM for local extrema and boundary cells
+            elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
+              aL = (3.*Tc) - 2.*aR
+            elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
+              aR = (3.*Tc) - 2.*aL
+            endif
+          else
+
+            Cl = 1.25
+
+            aL = (((-3.*Tmm + 27.*Tm) + (47.*Tc - 13.*Tp)) + 2.*Tpp)/60.
+            aR = (((2.*Tmm - 13.*Tm) + (47.*Tc + 27.*Tp)) - 3.*Tpp)/60.
+
+            !if ((aL < min(Tm,Tc)) .or. (aL > max(Tm,Tc))) then
+            if ((Tc-aL)*(aL-Tm) < 0.) then
+              D0 = 3.*((Tm - 2.*aL) + Tc)
+              Dml = Cl*((Tmm - 2.*Tm) + Tc)
+              Dmr = Cl*((Tm - 2.*Tc) + Tp)
+
+              Dlim = 0.0
+              if ((Dmr-D0)*(D0-Dml) < 0.0) then
+                if ((D0*Dml > 0.) .and. (D0*Dmr > 0.)) then  ! same sign, nonzero
+                  Dlim = sign( min(abs(Dml), abs(Dmr), abs(D0)), D0)
+                end if
+              !  aL = 0.5*((Tm + Tc) - Dlim/3.)
+              !else
+              !  aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6.
+              !  aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL)
+              endif
+              aL = 0.5*((Tm + Tc) - Dlim/3.)
+            end if
+
+            !if ((aR < min(Tc,Tp)) .or. (aR > max(Tc,Tp))) then
+            if ((Tp-aR)*(aR-Tp) < 0.) then
+              D0 = 3.*((Tc - 2.*aR) + Tp)
+              Dml = Cl*((Tm - 2.*Tc) + Tp)
+              Dmr = Cl*((Tc - 2.*Tp) + Tpp)
+
+              Dlim = 0.0
+              if ((Dmr-D0)*(D0-Dml) < 0.0) then
+                if ((D0*Dml > 0.) .and. (D0*Dmr > 0.)) then  ! same sign, nonzero
+                  Dlim = sign( min(abs(Dml), abs(Dmr), abs(D0)), D0)
+                end if
+              !  aR = 0.5*((Tc + Tp) - Dlim/3.)
+              !else
+              !  aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6.
+              !  aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR)
+              endif
+              aR = 0.5*((Tc + Tp) - Dlim/3.)
+            end if
+
+            dA = aR - aL ; mA = 0.5*( aR + aL )
+            if (((Tm-Tc)*(Tc-Tp) <= 0.) .or. ((aR-Tc)*(Tc-aL) <= 0.)) then
+              D06 = 6.*(aL - 2.*Tc + aR)
+              Dl = Cl*((Tmm - 2.*Tm) + Tc)
+              Dc = Cl*((Tm - 2.*Tc) + Tp)
+              Dr = Cl*((Tc - 2.*Tp) + Tpp)
+
+              !D0 = abs(Dc)/((abs(Tp-Tc)+abs(Tc-Tm)) + 1.0e-12)
+              !D0 = abs(Tp-Tm)/(min(abs(Tp),abs(Tm)) + 1.0e-12)
+              !Dc = Cl*((Tm - 2.*Tc) + Tp)
+
+              !gradCS_y(i,J,k) = 0.0 !Dr
+
+              Dlim = 0.
+              !if (((Dr-D06)*(D06-Dl) < 0.0)) then ! .and. (D0 < 0.05)) then
+              !  if ((D06*Dc > 0.) .and. (D06*Dl > 0.) .and. (D06*Dr > 0.)) then
+              !    Dlim = sign( min(abs(Dl), abs(Dr), abs(Dc), abs(D06)), D06)
+              !    Dlim = Dlim/D06
+              !  endif
+              !endif
+              aL = Tc + Dlim*(aL - Tc)
+              aR = Tc + Dlim*(aR - Tc)
+            elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
+              aL = (3.*Tc) - 2.*aR
+            elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
+              aR = (3.*Tc) - 2.*aL
+            endif
+          endif
+
+          a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
+
+          if (vhh(i,J) >= 0.0) then
+            flux_y(i,m,J) = vhh(i,J)*( aR - 0.5 * CFL(i) * ( &
+                 ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
+          else
+            flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * CFL(i) * ( &
+                 ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
+          endif
+        enddo
       elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
             (advect_schemes(m) == ADVECT_WENO9)) then
+        order7 = 0.0 ; order9 = 0.0
+        if (Tr(m)%non_negative) Tr(m)%Tmingg = 0.0
+
         do i=is,ie
 
           ! centre cell depending on upstream direction
@@ -1116,27 +1381,21 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
           T3 = T_tmp(i,m,j_up-1:j_up+1) ; T5 = T_tmp(i,m,j_up-2:j_up+2)
 
-          order3 = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)!*G%mask2dCv(i,J_up+1)
-          area3 = min(hprev(i,j_up-1,k), hprev(i,j_up,k), hprev(i,j_up+1,k))
-          if (area3 <= G%areaT(i,j_up)*min_h) order3 = 0.0
+          order3 = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+          order5 = order3*G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up+1)
 
           v = vhh(i,J) ; mu = CFL(i)
           qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
 
-          order5 = order3*G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up+1)
-          area5 = min(area3, hprev(i,j_up-2,k), hprev(i,j_up+2,k))
-          if (area5 <= G%areaT(i,j_up)*min_h) order5 = 0.0
-
-          order7 = 0.0 ; order9 = 0.0
           if ((advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
             order7 = order5*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
             T7 = T_tmp(i,m,j_up-3:j_up+3)
-            area7 = min(area5, hprev(i,j_up-3,k), hprev(i,j_up+3,k))
-            if (area7 <= G%areaT(i,j_up)*min_h) order7 = 0.0
           elseif (advect_schemes(m) == ADVECT_WENO9) then
             order9 = order7*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
             T9 = T_tmp(i,m,j_up-4:j_up+4)
           endif
+
+          call PPM_reconstruction(wq_ppm, T3, v, mu, qext)
 
           if (order9 == 1.0) then
             call weno9_reconstruction(wq, T9, v, mu)
@@ -1144,14 +1403,12 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             call weno7_reconstruction(wq, T7, v, mu)
           elseif (order5 == 1.0) then
             call weno5_reconstruction(wq, T5, v, mu)
-          !elseif (order3 == 1.0) then
-          !  call weno3_reconstruction(wq, T3, v, mu)
           else
-            call PPM_reconstruction(wq, T3, v, mu, qext)
-            !wq = T3(2)
+            wq = wq_ppm
           endif
 
-          flux_y(i,m,J) = v*wq
+          flux_y(i,m,J) = wq
+          flux_ppm_y(i,m,J) = wq_ppm
         enddo
       elseif (advect_schemes(m) == ADVECT_WENO5NM) then
         do i=is,ie
@@ -1165,27 +1422,23 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
           T3 = T_tmp(i,m,j_up-1:j_up+1) ; T5 = T_tmp(i,m,j_up-2:j_up+2)
 
-          order3 = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)!*G%mask2dCv(i,J_up+1)
-          area3 = min(hprev(i,j_up-1,k), hprev(i,j_up,k), hprev(i,j_up+1,k))
-          if (area3 <= G%areaT(i,j_up)*min_h) order3 = 0.0
+          order3 = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+          order5 = order3*G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up+1)
 
           v = vhh(i,J) ; mu = CFL(i)
           qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+          dy(:) = G%dyCv(i,J-2:J+2)
 
-          order5 = order3*G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up+1)
-          area5 = min(area3, hprev(i,j_up-2,k), hprev(i,j_up+2,k))
-          if (area5 <= G%areaT(i,j_up)*min_h) order5 = 0.0
-
-          dy(1) = G%dyCv(i,J-2) ; dy(2) = G%dyCv(i,J-1) ; dy(3) = G%dyCv(i,J)
-          dy(4) = G%dyCv(i,J+1) ; dy(5) = G%dyCv(i,J+2)
+          call PPM_reconstruction(wq_ppm, T3, v, mu, qext)
 
           if (order5 == 1.0) then
             call weno5NM_reconstruction(wq, T5, v, dy, mu)
           else
-            call PPM_reconstruction(wq, T3, v, mu, qext)
+            wq = wq_ppm
           endif
 
-          flux_y(i,m,J) = v*wq
+          flux_y(i,m,J) = wq
+          flux_ppm_y(i,m,J) = wq_ppm
         enddo
       else ! PLM
         do i=is,ie
@@ -1228,8 +1481,14 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                     ntr_id = segment%tr_reg%Tr(m)%ntr_index
                     if (allocated(segment%tr_Reg%Tr(m)%tres)) then
                       flux_y(i,ntr_id,J) = vhh(i,J)*OBC%segment(n)%tr_Reg%Tr(m)%tres(i,J,k)
+                      if (advect_schemes(m) > 2) &
+                              flux_ppm_y(i,ntr_id,J) = &
+                                        vhh(i,J)*OBC%segment(n)%tr_Reg%Tr(m)%tres(i,J,k)
                     else
                       flux_y(i,ntr_id,J) = vhh(i,J)*OBC%segment(n)%tr_Reg%Tr(m)%OBC_inflow_conc
+                      if (advect_schemes(m) > 2) &
+                         flux_ppm_y(i,ntr_id,J) = &
+                                vhh(i,J)*OBC%segment(n)%tr_Reg%Tr(m)%OBC_inflow_conc
                     endif
                   enddo
                 endif
@@ -1254,7 +1513,14 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                   ntr_id = segment%tr_reg%Tr(m)%ntr_index
                   if (allocated(segment%tr_Reg%Tr(m)%tres)) then
                     flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%tres(i,J,k)
-                  else ; flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc ; endif
+                    if (advect_schemes(m) > 2) &
+                            flux_ppm_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%tres(i,J,k)
+                  !else ; flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc ; endif
+                  else
+                    flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                    if (advect_schemes(m) > 2) &
+                            flux_ppm_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                  endif
                 enddo
               endif
             enddo
@@ -1312,8 +1578,14 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
     ! update tracer and save some diagnostics
     do m=1,ntr
       do i=is,ie ; if (do_i(i,j)) then
+        Tc = Tr(m)%t(i,j,k)
         Tr(m)%t(i,j,k) = (Tr(m)%t(i,j,k) * hlst(i) - &
                           (flux_y(i,m,J) - flux_y(i,m,J-1))) * Ihnew(i)
+        if ( (advect_schemes(m) > 2) .and. & !(Tr(m)%t(i,j,k) < Tr(m)%Tmingg) ) then
+                ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) .or.(Tr(m)%t(i,j,k) > Tr(m)%Tmaxgg)) ) then
+          Tr(m)%t(i,j,k) = (Tc * hlst(i) - &
+                          (flux_ppm_y(i,m,J) - flux_ppm_y(i,m,J-1))) * Ihnew(i)
+        endif
       endif ; enddo
 
       ! diagnose convergence of flux_y and add to convergence of flux_x.
@@ -1330,7 +1602,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   endif ; enddo ! End of j-loop.
 
   ! Do user controlled underflow of the tracer concentrations.
-  do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
+  do m=1,ntr ; if (Tr(m)%conc_underflow >= 0.0) then
     do j=js,je ; do i=is,ie
       if (abs(Tr(m)%t(i,j,k)) < Tr(m)%conc_underflow) Tr(m)%t(i,j,k) = 0.0
     enddo ; enddo
