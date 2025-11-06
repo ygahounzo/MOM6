@@ -36,11 +36,9 @@ subroutine weno3_reconstruction_interface(wmR, wpL, q, h_min)
   real :: w1, w2         ! nonlinear weights
   real :: d1, d2         ! linear weights
   real :: eps,  wnorm, tau
-  integer, parameter :: r = 2
 
   ! linear weights
   d1 = 1.0/3.0 ; d2 = 2.0/3.0
-  eps = 1.0e-20
 
   ! Compute flux at the right side of i+1/2
   ! reconstructed polynomials
@@ -78,8 +76,6 @@ subroutine weno3_reconstruction_interface(wmR, wpL, q, h_min)
   wnorm = w1+w2
   wmR = (w1*P1 + w2*P2)/wnorm
 
-  !call PP_limiter(q0, wmR, wpL, h_min)
-
 end subroutine weno3_reconstruction_interface
 
 !> 5th-order weno z-type reconstruction flux
@@ -94,11 +90,9 @@ subroutine weno5_reconstruction_interface(wmR, wpL, q, h_min)
   real :: d0, d1, d2         ! linear weights
   real :: a0, a1, a2
   real :: eps,  wnorm, tau
-  integer, parameter :: r = 2
 
   ! linear weights
   d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
-  eps = 1.0e-20
 
   ! Compute flux at left side of i+1/2
   ! First stencil
@@ -123,7 +117,6 @@ subroutine weno5_reconstruction_interface(wmR, wpL, q, h_min)
   wpL = (w0*P0 + w1*P1 + w2*P2)/wnorm
 
   ! Compute flux at the right side of i-1/2
-  !d0 = 3.0/10.0 ; d1 = 6.0/10.0 ; d2 = 1.0/10.0
   ! First stencil
   P0 = (2.0*q(5) - 7.0*q(4) + 11.0*q(3))/6.0
   b0 = (13.0/12.0)*(q(5) - 2.0*q(4) + q(3))**2 + 0.25*(q(5) - 4.0*q(4) + 3.0*q(3))**2
@@ -145,8 +138,6 @@ subroutine weno5_reconstruction_interface(wmR, wpL, q, h_min)
   wnorm = w0+w1+w2
   wmR = (w0*P0 + w1*P1 + w2*P2)/wnorm
 
-  !call PP_limiter(q0, wmR, wpL, h_min)
-
 end subroutine weno5_reconstruction_interface
 
 !> 7th-order weno z-type reconstruction flux
@@ -161,11 +152,9 @@ subroutine weno7_reconstruction_interface(wmR, wpL, q, h_min)
   real :: d0, d1, d2, d3     ! nonlinear weights
   real :: a0, a1, a2, a3
   real :: eps, tau, wnorm
-  integer, parameter :: r = 2
 
   ! linear weights
   d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
-  eps = 1.0e-20
 
   ! Compute flux at the right side of i+1/2
   ! 1st stencil
@@ -205,7 +194,6 @@ subroutine weno7_reconstruction_interface(wmR, wpL, q, h_min)
   wpL = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
 
   ! Compute flux at the right side of i-1/2
-  !d0 = 4.0/35.0 ;  d1 = 18.0/35.0 ; d2 = 12.0/35.0 ; d3 = 1.0/35.0
   ! 1st stencil
   P0 = (-3.0*q(7) + 13.0*q(6) - 23.0*q(5) + 25.0*q(4))/12.0
   b0 = q(7)*(547.0*q(7) - 3882.0*q(6) + 4642.0*q(5) - 1854.0*q(4)) + &
@@ -241,8 +229,6 @@ subroutine weno7_reconstruction_interface(wmR, wpL, q, h_min)
   ! Normalization
   wnorm = w0+w1+w2+w3
   wmR = (w0*P0 + w1*P1 + w2*P2 + w3*P3)/wnorm
-
-  !call PP_limiter(q0, wmR, wpL, h_min)
 
 end subroutine weno7_reconstruction_interface
 
@@ -283,9 +269,7 @@ subroutine WENO_limiter(h_in, wmr, wpl, h_min, G, iis, iie, jis, jie)
   integer,                           intent(in)  :: jis      !< Start of j index range.
   integer,                           intent(in)  :: jie      !< End of j index range.
 
-  real :: qmin, theta, eps, a(3)
-  !real, parameter :: Fmin(3) = (/ 1.0,  -0.5,  0.0 /)
-  !real, parameter :: Fmax(3) = (/ 1.0,   0.5,  0.25 /)
+  real :: qmin, theta, eps
   integer :: i,j,k
   real :: w0, P0
 
@@ -295,15 +279,6 @@ subroutine WENO_limiter(h_in, wmr, wpl, h_min, G, iis, iie, jis, jie)
     ! This limiter prevents undershooting minima within the domain with
     ! values less than h_min.
     eps = min(h_min, h_in(i,j))
-
-    !a(1) = (6.0*h_in(i,j) - (wmr(i,j) + wpl(i,j)))/4.0
-    !a(2) = (wpl(i,j) - wmr(i,j))
-    !a(3) = -6.0*h_in(i,j) + 3.0*(wmr(i,j) + wpl(i,j))
-
-    !qmin = 0.0
-    !do k = 1,3
-    !  qmin = qmin + a(k)*(0.5*(1.0-sign(1.0,a(k)))*Fmax(k) + 0.5*(1.0+sign(1.0,a(k)))*Fmin(k))
-    !enddo
 
     P0 = (h_in(i,j) - w0*(wmr(i,j) + wpl(i,j)))/(1.0 - 2.0*w0)
     qmin = min(wmr(i,j), P0, wpl(i,j))

@@ -20,7 +20,7 @@ use MOM_unit_scaling,    only : unit_scale_type
 use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_tracer_advect_schemes, only : ADVECT_PLM, ADVECT_PPMH3, ADVECT_PPM
 use MOM_tracer_advect_schemes, only : ADVECT_WENO5, ADVECT_WENO7, ADVECT_WENO9
-use MOM_tracer_advect_schemes, only : ADVECT_WENO5NM, ADVECT_PPMCS
+use MOM_tracer_advect_schemes, only : ADVECT_WENO5NM
 use MOM_tracer_advect_schemes, only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
 use MOM_tracer_advect_weno, only : weno3_reconstruction, weno5_reconstruction
 use MOM_tracer_advect_weno, only : weno7_reconstruction, weno9_reconstruction, PPM_reconstruction
@@ -165,8 +165,6 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
        stencil_local = 4
      elseif (local_advect_scheme(m) == ADVECT_WENO9) then
        stencil_local = 5
-     elseif (local_advect_scheme(m) == ADVECT_PPMCS) then
-       stencil_local = 3
      endif
      stencil = max(stencil, stencil_local)
   enddo
@@ -436,11 +434,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
   real :: order3, order5, order7, order9
-  real :: u, wq, mu, qext, dx(5)
+  real :: u, wq, mu, qext, dx(5), wq_ppm
   real :: T3(3), T5(5), T7(7), T9(9)
-  real :: Tmm, Tpp, D0, Dml, Dmr, Dlim
-  real :: am, ap, D06, Dc, Dl, Dr, s, mak, Cl, sc, sm, sp, Dmm, theta
-  real :: area3(3), area5(5), area7(7), wq_ppm, Ti_tmp
   real, dimension(SZIB_(G),SZJ_(G),ntr) :: flux_ppm_x
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
@@ -601,127 +596,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             aL = (3.*Tc) - 2.*aR
           elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
             aR = (3.*Tc) - 2.*aL
-          endif
-
-          a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
-
-          if (uhh(I) >= 0.0) then
-            flux_x(I,j,m) = uhh(I)*( aR - 0.5 * CFL(I) * ( &
-                 ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
-          else
-            flux_x(I,j,m) = uhh(I)*( aL + 0.5 * CFL(I) * ( &
-                 ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
-          endif
-        enddo
-      elseif (advect_schemes(m) == ADVECT_PPMCS) then
-        !if (Tr(m)%non_negative) Tr(m)%conc_underflow = 1.0e-10
-        do I=is-1,ie
-          ! centre cell depending on upstream direction
-          if (uhh(I) >= 0.0) then
-            i_up = i
-          else
-            i_up = i+1
-          endif
-
-          Dr = 0.0 ; Dl = 0.0 ; D06 = 0.0
-          qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
-          mak = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*G%mask2dCu(I_up+1,j)
-          !T5(:) = T_tmp(i_up-2:i_up+2,m)
-          !area5 = G%areaT(i_up-2:i_up+2,j)*T5
-          !if ( (minval(area5) <= G%areaT(i_up,j)*1.0e-2) .or. &
-          if ( (minval(hprev(i_up-2:i_up+2,j,k)) < G%areaT(i_up,j)*min_h) ) mak = 0.0
-
-          ! Implementation of PPM-CS
-          Tp = T_tmp(i_up+1,m) ; Tc = T_tmp(i_up,m) ; Tm = T_tmp(i_up-1,m)
-          Tpp = T_tmp(i_up+2,m) ; Tmm = T_tmp(i_up-2,m)
-
-          if (mak == 0.) then
-            aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
-            aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
-            aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
-            aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR) ! Bound
-
-            dA = aR - aL ; mA = 0.5*( aR + aL )
-            if (G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)*(Tp-Tc)*(Tc-Tm) <= 0.) then
-              aL = Tc ; aR = Tc ! PCM for local extrema and boundary cells
-            elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
-              aL = (3.*Tc) - 2.*aR
-            elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
-              aR = (3.*Tc) - 2.*aL
-            endif
-          else
-
-            Cl = 1.25
-
-            aL = (((-3.*Tmm + 27.*Tm) + (47.*Tc - 13.*Tp)) + 2.*Tpp)/60.
-            aR = (((2.*Tmm - 13.*Tm) + (47.*Tc + 27.*Tp)) - 3.*Tpp)/60.
-
-            !if ((aL < min(Tm,Tc)) .or. (aL > max(Tm,Tc))) then
-            if ((Tc-aL)*(aL-Tm) < 0.) then
-              D0 = 3.*((Tm - 2.*aL) + Tc)
-              Dml = Cl*((Tmm - 2.*Tm) + Tc)
-              Dmr = Cl*((Tm - 2.*Tc) + Tp)
-
-              Dlim = 0.0
-              if ((Dmr-D0)*(D0-Dml) < 0.0) then
-                if ((D0*Dml > 0.) .and. (D0*Dmr > 0.)) then  ! same sign, nonzero
-                  Dlim = sign( min(abs(Dml), abs(Dmr), abs(D0)), D0)
-                end if
-              !  aL = 0.5*((Tm + Tc) - Dlim/3.)
-              !else
-              !  aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6.
-              !  aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL)
-              endif
-              aL = 0.5*((Tm + Tc) - Dlim/3.)
-            end if
-
-            !if ((aR < min(Tc,Tp)) .or. (aR > max(Tc,Tp))) then
-            if ((Tp-aR)*(aR-Tc) < 0.) then
-              D0 = 3.*((Tc - 2.*aR) + Tp)
-              Dml = Cl*((Tm - 2.*Tc) + Tp)
-              Dmr = Cl*((Tc - 2.*Tp) + Tpp)
-
-              Dlim = 0.0
-              if ((Dmr-D0)*(D0-Dml) < 0.0) then
-                if ((D0*Dml > 0.) .and. (D0*Dmr > 0.)) then  ! same sign, nonzero
-                  Dlim = sign( min(abs(Dml), abs(Dmr), abs(D0)), D0)
-                end if
-              !  aR = 0.5*((Tc + Tp) - Dlim/3.)
-              !else
-              !  aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6.
-              !  aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR)
-              endif
-              aR = 0.5*((Tc + Tp) - Dlim/3.)
-            end if
-
-            dA = aR - aL ; mA = 0.5*( aR + aL )
-            if (((Tp-Tc)*(Tc-Tm) <= 0.) .or. ((aR-Tc)*(Tc-aL) <= 0.)) then
-              D06 = 6.*(aL - 2.*Tc + aR)
-              Dl = Cl*((Tmm - 2.*Tm) + Tc)
-              Dc = Cl*((Tm - 2.*Tc) + Tp)
-              Dr = Cl*((Tc - 2.*Tp) + Tpp)
-
-              !D0 = abs(D06)/(abs(Tp-Tc) + 1.0e-6)
-              !D0 = abs(Dc)/(abs(Tp-Tm) + 1.0e-12)
-              !D0 = abs(Dc)/((abs(Tp-Tc)+abs(Tc-Tm)) + 1.0e-12)
-              !D0 = abs(Tp-Tc)/(min(abs(Tp),abs(Tm)) + 1.0e-12)
-              !Dc = Cl*((Tm - 2.*Tc) + Tp)
-              !gradCS_x(I,j,k) = 0.0!Dr
-
-              Dlim = 0.
-              !if (((Dr-D06)*(D06-Dl) < 0.0)) then !.and. (D0 < 0.05)) then
-              !  if ((D06*Dc > 0.) .and. (D06*Dl > 0.) .and. (D06*Dr > 0.)) then
-              !    Dlim = sign( min(abs(Dl), abs(Dr), abs(Dc), abs(D06)), D06)
-              !    Dlim = Dlim/D06
-              !  endif
-              !endif
-              aL = Tc + Dlim*(aL - Tc)
-              aR = Tc + Dlim*(aR - Tc)
-            elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
-              aL = (3.*Tc) - 2.*aR
-            elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
-              aR = (3.*Tc) - 2.*aL
-            endif
           endif
 
           a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
@@ -942,8 +816,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             Tc = Tr(m)%t(i,j,k)
             Tr(m)%t(i,j,k) = (Tr(m)%t(i,j,k) * hlst(i) - &
                               (flux_x(I,j,m) - flux_x(I-1,j,m))) * Ihnew(i)
-            if ( (advect_schemes(m) > 2) .and. &
-                    ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) .or.(Tr(m)%t(i,j,k) > Tr(m)%Tmaxgg)) ) then
+            if ( (advect_schemes(m) > 2) .and. ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) & !) ) then
+                    .or.( Tr(m)%t(i,j,k) > Tr(m)%Tmaxgg)) ) then
               Tr(m)%t(i,j,k) = (Tc * hlst(i) - &
                               (flux_ppm_x(I,j,m) - flux_ppm_x(I-1,j,m))) * Ihnew(i)
             endif
@@ -1055,11 +929,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
   real :: order3, order5, order7, order9
   real :: v, wq, mu, qext, dy(5)
-  real :: T3(3), T5(5), T7(7), T9(9)
-  real :: Tmm, Tpp, D0, Dml, Dmr, Dlim
-  real :: am, ap, D06, Dc, Dl, Dr, s, mak, Cl
-  real :: area3(3), area5(5), area7(7)
-  real :: sc, sm, sp, wq_ppm, Ti_tmp
+  real :: T3(3), T5(5), T7(7), T9(9), wq_ppm
   real, dimension(SZI_(G),ntr,SZJB_(G)) :: flux_ppm_y
 
   usePLMslope = .false.
@@ -1233,126 +1103,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             aL = (3.*Tc) - 2.*aR
           elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
             aR = (3.*Tc) - 2.*aL
-          endif
-
-          a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
-
-          if (vhh(i,J) >= 0.0) then
-            flux_y(i,m,J) = vhh(i,J)*( aR - 0.5 * CFL(i) * ( &
-                 ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
-          else
-            flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * CFL(i) * ( &
-                 ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
-          endif
-        enddo
-      elseif (advect_schemes(m) == ADVECT_PPMCS) then
-        !if (Tr(m)%non_negative) Tr(m)%conc_underflow = 1.0e-10
-        do i=is,ie
-          ! centre cell depending on upstream direction
-          if (vhh(i,J) >= 0.0) then
-            j_up = j
-          else
-            j_up = j + 1
-          endif
-
-          Dr = 0.0 ; Dl = 0.0; D06 = 0.0
-          qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
-          mak = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up+1)
-          !T5 = T_tmp(i,m,j_up-2:j_up+2)
-          !area5 = G%areaT(i,j_up-2:j_up+2)*T5
-          !if ( (minval(area5) <= G%areaT(i,j_up)*1.0e-2) .or. &
-          if ( (minval(hprev(i,j_up-2:j_up+2,k)) <= G%areaT(i,j_up)*min_h) ) mak = 0.0
-
-          ! Implementation of PPM-CS
-          Tp = T_tmp(i,m,j_up+1) ; Tc = T_tmp(i,m,j_up) ; Tm = T_tmp(i,m,j_up-1)
-          Tpp = T_tmp(i,m,j_up+2) ; Tmm = T_tmp(i,m,j_up-2)
-
-          if (mak == 0.) then
-            aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6. ! H3 estimate
-            aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL) ! Bound
-            aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6. ! H3 estimate
-            aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR) ! Bound
-
-            dA = aR - aL ; mA = 0.5*( aR + aL )
-            if (G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)*(Tp-Tc)*(Tc-Tm) <= 0.) then
-              aL = Tc ; aR = Tc ! PCM for local extrema and boundary cells
-            elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
-              aL = (3.*Tc) - 2.*aR
-            elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
-              aR = (3.*Tc) - 2.*aL
-            endif
-          else
-
-            Cl = 1.25
-
-            aL = (((-3.*Tmm + 27.*Tm) + (47.*Tc - 13.*Tp)) + 2.*Tpp)/60.
-            aR = (((2.*Tmm - 13.*Tm) + (47.*Tc + 27.*Tp)) - 3.*Tpp)/60.
-
-            !if ((aL < min(Tm,Tc)) .or. (aL > max(Tm,Tc))) then
-            if ((Tc-aL)*(aL-Tm) < 0.) then
-              D0 = 3.*((Tm - 2.*aL) + Tc)
-              Dml = Cl*((Tmm - 2.*Tm) + Tc)
-              Dmr = Cl*((Tm - 2.*Tc) + Tp)
-
-              Dlim = 0.0
-              if ((Dmr-D0)*(D0-Dml) < 0.0) then
-                if ((D0*Dml > 0.) .and. (D0*Dmr > 0.)) then  ! same sign, nonzero
-                  Dlim = sign( min(abs(Dml), abs(Dmr), abs(D0)), D0)
-                end if
-              !  aL = 0.5*((Tm + Tc) - Dlim/3.)
-              !else
-              !  aL = ( 5.*Tc + ( 2.*Tm - Tp ) )/6.
-              !  aL = max( min(Tc,Tm), aL) ; aL = min( max(Tc,Tm), aL)
-              endif
-              aL = 0.5*((Tm + Tc) - Dlim/3.)
-            end if
-
-            !if ((aR < min(Tc,Tp)) .or. (aR > max(Tc,Tp))) then
-            if ((Tp-aR)*(aR-Tp) < 0.) then
-              D0 = 3.*((Tc - 2.*aR) + Tp)
-              Dml = Cl*((Tm - 2.*Tc) + Tp)
-              Dmr = Cl*((Tc - 2.*Tp) + Tpp)
-
-              Dlim = 0.0
-              if ((Dmr-D0)*(D0-Dml) < 0.0) then
-                if ((D0*Dml > 0.) .and. (D0*Dmr > 0.)) then  ! same sign, nonzero
-                  Dlim = sign( min(abs(Dml), abs(Dmr), abs(D0)), D0)
-                end if
-              !  aR = 0.5*((Tc + Tp) - Dlim/3.)
-              !else
-              !  aR = ( 5.*Tc + ( 2.*Tp - Tm ) )/6.
-              !  aR = max( min(Tc,Tp), aR) ; aR = min( max(Tc,Tp), aR)
-              endif
-              aR = 0.5*((Tc + Tp) - Dlim/3.)
-            end if
-
-            dA = aR - aL ; mA = 0.5*( aR + aL )
-            if (((Tm-Tc)*(Tc-Tp) <= 0.) .or. ((aR-Tc)*(Tc-aL) <= 0.)) then
-              D06 = 6.*(aL - 2.*Tc + aR)
-              Dl = Cl*((Tmm - 2.*Tm) + Tc)
-              Dc = Cl*((Tm - 2.*Tc) + Tp)
-              Dr = Cl*((Tc - 2.*Tp) + Tpp)
-
-              !D0 = abs(Dc)/((abs(Tp-Tc)+abs(Tc-Tm)) + 1.0e-12)
-              !D0 = abs(Tp-Tm)/(min(abs(Tp),abs(Tm)) + 1.0e-12)
-              !Dc = Cl*((Tm - 2.*Tc) + Tp)
-
-              !gradCS_y(i,J,k) = 0.0 !Dr
-
-              Dlim = 0.
-              !if (((Dr-D06)*(D06-Dl) < 0.0)) then ! .and. (D0 < 0.05)) then
-              !  if ((D06*Dc > 0.) .and. (D06*Dl > 0.) .and. (D06*Dr > 0.)) then
-              !    Dlim = sign( min(abs(Dl), abs(Dr), abs(Dc), abs(D06)), D06)
-              !    Dlim = Dlim/D06
-              !  endif
-              !endif
-              aL = Tc + Dlim*(aL - Tc)
-              aR = Tc + Dlim*(aR - Tc)
-            elseif ( dA*(Tc-mA) > (dA*dA)/6. ) then
-              aL = (3.*Tc) - 2.*aR
-            elseif ( dA*(Tc-mA) < - (dA*dA)/6. ) then
-              aR = (3.*Tc) - 2.*aL
-            endif
           endif
 
           a6 = 6.*Tc - 3. * (aR + aL) ! Curvature
@@ -1581,8 +1331,9 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         Tc = Tr(m)%t(i,j,k)
         Tr(m)%t(i,j,k) = (Tr(m)%t(i,j,k) * hlst(i) - &
                           (flux_y(i,m,J) - flux_y(i,m,J-1))) * Ihnew(i)
-        if ( (advect_schemes(m) > 2) .and. & !(Tr(m)%t(i,j,k) < Tr(m)%Tmingg) ) then
-                ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) .or.(Tr(m)%t(i,j,k) > Tr(m)%Tmaxgg)) ) then
+        !if ( (advect_schemes(m) > 2) .and. (Tr(m)%t(i,j,k) < Tr(m)%Tmingg) ) then
+        if ( (advect_schemes(m) > 2) .and. ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) & !) then
+                .or.(Tr(m)%t(i,j,k) > Tr(m)%Tmaxgg)) ) then
           Tr(m)%t(i,j,k) = (Tc * hlst(i) - &
                           (flux_ppm_y(i,m,J) - flux_ppm_y(i,m,J-1))) * Ihnew(i)
         endif
