@@ -50,7 +50,6 @@ pure subroutine weno3_reconstruction_interface(wpl, qm, q0, qp)
   real :: d1, d2    ! linear weights
   real :: P1, P2    ! reconstructed polynomials
   real :: w1, w2    ! nonlinear weights
-  real :: a1, a2
   real :: wnorm, tau
 
   ! linear weights
@@ -107,7 +106,6 @@ pure subroutine weno5z_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, mu)
   real :: b0, b1, b2         ! smoothness indicator
   real :: w0, w1, w2         ! nonlinear weights
   real :: d0, d1, d2         ! linear weights
-  real :: a0, a1, a2
   real :: eps,  wnorm, tau
   real, parameter :: C1_6 = 1.0/6.0  ! [nondim]
   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
@@ -141,8 +139,6 @@ pure subroutine weno5z_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, mu)
 
   ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
   alpha = (1.0-mu)/mu
-  !alpha = 2.0
-
   qul = q0 + alpha*(q0-qm)
 
   dm1 = qmm - 2.0*qm + q0
@@ -150,10 +146,10 @@ pure subroutine weno5z_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, mu)
   dd1 = qpp - 2.0*qp + q0
 
   mm1 = 4.0*dd0-dd1 ; mm2 = 4.0*dd1-dd0
-  dm4m = minmod2(mm1, mm2)
+  dm4p = minmod4(mm1, mm2, dd0, dd1)
 
   mm1 = 4.0*dm1-dd0 ; mm2 = 4.0*dd0-dm1
-  dm4m = minmod2(mm1, mm2)
+  dm4m = minmod4(mm1, mm2, dm1, dd0)
 
   qmd = 0.5*(q0 + qp) - 0.5*dm4p
   qlc = 0.5*(q0+qul) + 0.5*alpha*dm4m
@@ -240,8 +236,6 @@ pure subroutine weno5NM_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, dx, 
 
   ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
   alpha = (1.0-mu)/mu
-  !alpha = 2.0
-
   qul = q0 + alpha*(q0-qm)
 
   dm1 = qmm - 2.0*qm + q0
@@ -249,10 +243,10 @@ pure subroutine weno5NM_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, dx, 
   dd1 = qpp - 2.0*qp + q0
 
   mm1 = 4.0*dd0-dd1 ; mm2 = 4.0*dd1-dd0
-  dm4p = minmod2(mm1, mm2)
+  dm4p = minmod4(mm1, mm2, dd0, dd1)
 
   mm1 = 4.0*dm1-dd0 ; mm2 = 4.0*dd0-dm1
-  dm4m = minmod2(mm1, mm2)
+  dm4m = minmod4(mm1, mm2, dm1, dd0)
 
   qmd = 0.5*(q0 + qp) - 0.5*dm4p
   qlc = 0.5*(q0+qul) + 0.5*alpha*dm4m
@@ -260,6 +254,7 @@ pure subroutine weno5NM_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, dx, 
   qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
   qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
   wpl = max( min(qmin,qmax), wpl) ; wpl = min( max(qmin,qmax), wpl)
+  if ((qp-q0)*(q0-qm) <= 0.) wpl = q0
 
 end subroutine weno5NM_reconstruction_interface
 
@@ -293,7 +288,6 @@ pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2
   real :: b0, b1, b2, b3     ! smoothness indicator
   real :: w0, w1, w2, w3     ! nonlinear weights
   real :: d0, d1, d2, d3     ! nonlinear weights
-  real :: a0, a1, a2, a3
   real :: eps, tau, wnorm
   real, parameter :: C1_12 = 1.0/12.0  ! [nondim]
   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
@@ -340,8 +334,6 @@ pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2
 
   ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
   alpha = (1.0-mu)/mu
-  !alpha = 2.0
-
   qul = q0 + alpha*(q0-qm1)
 
   dm1 = qm2 - 2.0*qm1 + q0
@@ -349,10 +341,10 @@ pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2
   dd1 = qp2 - 2.0*qp1 + q0
 
   mm1 = 4.0*dd0-dd1 ; mm2 = 4.0*dd1-dd0
-  dm4m = minmod2(mm1, mm2)
+  dm4p = minmod4(mm1, mm2, dd0, dd1)
 
   mm1 = 4.0*dm1-dd0 ; mm2 = 4.0*dd0-dm1
-  dm4m = minmod2(mm1, mm2)
+  dm4m = minmod4(mm1, mm2, dm1, dd0)
 
   qmd = 0.5*(q0 + qp1) - 0.5*dm4p
   qlc = 0.5*(q0+qul) + 0.5*alpha*dm4m
@@ -390,14 +382,13 @@ pure subroutine weno9_reconstruction_interface(wpl, qm4, qm3, qm2, qm1, &
                 q0, qp1, qp2, qp3, qp4, mu)
   real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration
                                                                  !! for 9-stencil wide
-  real, intent(in) :: mu                                    !< cfl
-  real, intent(out) :: wpl                                  !< reconstruction value
+  real, intent(in) :: mu                                         !< cfl
+  real, intent(out) :: wpl                                       !< reconstruction value
 
   real :: b0, b1, b2, b3, b4               ! smoothness indicator
   real :: d0, d1, d2, d3, d4               ! linear weights
   real :: w0, w1, w2, w3, w4               ! nonlinear weights
   real :: P0, P1, P2, P3, P4               ! reconstructed polynomials
-  real :: a0, a1, a2, a3, a4
   real :: eps,wnorm, tau
   real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
   real :: qul, qmd, qlc, qmin, qmax, alpha
@@ -424,8 +415,6 @@ pure subroutine weno9_reconstruction_interface(wpl, qm4, qm3, qm2, qm1, &
 
   ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
   alpha = (1.0-mu)/mu
-  !alpha = 2.0
-
   qul = q0 + alpha*(q0-qm1)
 
   dm1 = qm2 - 2.0*qm1 + q0
@@ -433,10 +422,10 @@ pure subroutine weno9_reconstruction_interface(wpl, qm4, qm3, qm2, qm1, &
   dd1 = qp2 - 2.0*qp1 + q0
 
   mm1 = 4.0*dd0-dd1 ; mm2 = 4.0*dd1-dd0
-  dm4p = minmod2(mm1, mm2)
+  dm4p = minmod4(mm1, mm2, dd0, dd1)
 
   mm1 = 4.0*dm1-dd0 ; mm2 = 4.0*dd0-dm1
-  dm4m = minmod2(mm1, mm2)
+  dm4m = minmod4(mm1, mm2, dm1, dd0)
 
   qmd = 0.5*(q0 + qp1) - 0.5*dm4p
   qlc = 0.5*(q0+qul) + 0.5*alpha*dm4m
@@ -548,12 +537,12 @@ subroutine PPM_reconstruction(wq_ppm, q, u, mu, qext)
 end subroutine PPM_reconstruction
 
 !> Compute the factor for the WENO weights
-pure function weight_fac(tau, b) result(fac)
+pure function weight_fac(tau, b) result(factor)
   real, intent(in)  :: tau  !< Difference of the smoothness indicator [A ~> a]
   real, intent(in)  :: b    !< The smoothness indicator [A ~> a]
-  real :: fac               !< The factor for the weight [nondim]
+  real :: factor               !< The factor for the weight [nondim]
 
-  fac = 1.0e40; if (abs(b) > 1.0e-20*tau) fac = (1.0 + tau / b)**2
+  factor = 1.0e40; if (abs(b) > 1.0e-20*tau) factor = (1.0 + tau / b)**2
 
 end function weight_fac
 

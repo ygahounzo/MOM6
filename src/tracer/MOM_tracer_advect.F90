@@ -726,7 +726,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                     flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
                     if (advect_schemes(m) > 2) &
                             flux_ppm_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
-                  !else ; flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc ; endif
                   else
                     flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
                     if (advect_schemes(m) > 2) &
@@ -757,7 +756,6 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                   flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
                   if (advect_schemes(m) > 2) &
                           flux_ppm_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
-                !else; flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc; endif
                 else
                   flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
                   if (advect_schemes(m) > 2) &
@@ -816,7 +814,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             Tc = Tr(m)%t(i,j,k)
             Tr(m)%t(i,j,k) = (Tr(m)%t(i,j,k) * hlst(i) - &
                               (flux_x(I,j,m) - flux_x(I-1,j,m))) * Ihnew(i)
-            if ( (advect_schemes(m) > 2) .and. ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) & !) ) then
+            if ( (advect_schemes(m) > 2) .and. ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) &
                     .or.( Tr(m)%t(i,j,k) > Tr(m)%Tmaxgg)) ) then
               Tr(m)%t(i,j,k) = (Tc * hlst(i) - &
                               (flux_ppm_x(I,j,m) - flux_ppm_x(I-1,j,m))) * Ihnew(i)
@@ -845,7 +843,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   endif ; enddo ! End of j-loop.
 
   ! Do user controlled underflow of the tracer concentrations.
-  do m=1,ntr ; if (Tr(m)%conc_underflow >= 0.0) then
+  do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
     do j=js,je ; do i=is,ie
       if (abs(Tr(m)%t(i,j,k)) < Tr(m)%conc_underflow) Tr(m)%t(i,j,k) = 0.0
     enddo ; enddo
@@ -928,8 +926,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
   real :: order3, order5, order7, order9
-  real :: v, wq, mu, qext, dy(5)
-  real :: T3(3), T5(5), T7(7), T9(9), wq_ppm
+  real :: v, wq, mu, qext, dy(5), wq_ppm
+  real :: T3(3), T5(5), T7(7), T9(9)
   real, dimension(SZI_(G),ntr,SZJB_(G)) :: flux_ppm_y
 
   usePLMslope = .false.
@@ -1265,7 +1263,6 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                     flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%tres(i,J,k)
                     if (advect_schemes(m) > 2) &
                             flux_ppm_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%tres(i,J,k)
-                  !else ; flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc ; endif
                   else
                     flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
                     if (advect_schemes(m) > 2) &
@@ -1281,7 +1278,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
   else ! not domore_v.
     do i=is,ie ; vhh(i,J) = 0.0 ; enddo
-    do m=1,ntr ; do i=is,ie ; flux_y(i,m,J) = 0.0 ; enddo ; enddo
+    do m=1,ntr ; do i=is,ie ; flux_y(i,m,J) = 0.0 ; flux_ppm_y(i,m,J) = 0.0 ; enddo ; enddo
   endif ; enddo ! End of j-loop
 
   do J=js-1,je ; do i=is,ie
@@ -1331,8 +1328,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         Tc = Tr(m)%t(i,j,k)
         Tr(m)%t(i,j,k) = (Tr(m)%t(i,j,k) * hlst(i) - &
                           (flux_y(i,m,J) - flux_y(i,m,J-1))) * Ihnew(i)
-        !if ( (advect_schemes(m) > 2) .and. (Tr(m)%t(i,j,k) < Tr(m)%Tmingg) ) then
-        if ( (advect_schemes(m) > 2) .and. ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) & !) then
+        if ( (advect_schemes(m) > 2) .and. ((Tr(m)%t(i,j,k) < Tr(m)%Tmingg) &
                 .or.(Tr(m)%t(i,j,k) > Tr(m)%Tmaxgg)) ) then
           Tr(m)%t(i,j,k) = (Tc * hlst(i) - &
                           (flux_ppm_y(i,m,J) - flux_ppm_y(i,m,J-1))) * Ihnew(i)
@@ -1353,7 +1349,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   endif ; enddo ! End of j-loop.
 
   ! Do user controlled underflow of the tracer concentrations.
-  do m=1,ntr ; if (Tr(m)%conc_underflow >= 0.0) then
+  do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
     do j=js,je ; do i=is,ie
       if (abs(Tr(m)%t(i,j,k)) < Tr(m)%conc_underflow) Tr(m)%t(i,j,k) = 0.0
     enddo ; enddo
