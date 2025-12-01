@@ -21,30 +21,25 @@ public weno5NM_reconstruction
 
 contains
 
-!> 3rd weno reconstruction subroutine and limiter
-pure subroutine weno3_reconstruction(wq, q, u, mu)
-  real, intent(in) :: q(3)   !< tracer concentration from cell i-1 to i+1
-  real, intent(in) :: u      !< advection velocity
-  real, intent(in) :: mu     !< cfl
-  real, intent(out) :: wq    !< weno flux
-
-  real :: wpl ! weno reconstruction on the cell interface
+!> 3rd weno reconstruction subroutine
+pure subroutine weno3_reconstruction(wq, q, u)
+  real, intent(in) :: q(3)   !< tracer concentration from cell i-1 to i+1 [conc]
+  real, intent(in) :: u      !< advective flux [H L2 ~> m3 or kg]
+  real, intent(out) :: wq    !< weno tracer concentration at the cell interface i+1/2  [conc]
 
   wq = 0.0
   if (u > 0.0) then
-    call weno3_reconstruction_interface(wpl, q(1), q(2), q(3))
+    call weno3_reconstruction_interface(wq, q(1), q(2), q(3))
   elseif (u < 0.0) then
-    call weno3_reconstruction_interface(wpl, q(3), q(2), q(1))
+    call weno3_reconstruction_interface(wq, q(3), q(2), q(1))
   endif
-
-  wq = u*wpl
 
 end subroutine weno3_reconstruction
 
 !> 3rd-order weno z-type reconstruction flux
 pure subroutine weno3_reconstruction_interface(wpl, qm, q0, qp)
-  real, intent(in) :: qm, q0, qp !< tracer concentration for 5-stencil wide
-  real, intent(out) :: wpl       !< reconstruction value
+  real, intent(in) :: qm, q0, qp !< tracer concentration [conc]
+  real, intent(out) :: wpl       !< weno tracer concentrations at the cell interface +1/2 [conc]
 
   real :: b1, b2    ! smoothness indicator
   real :: d1, d2    ! linear weights
@@ -72,35 +67,29 @@ pure subroutine weno3_reconstruction_interface(wpl, qm, q0, qp)
   wnorm = 1.0/(w1 + w2)
   w1 = w1*wnorm ; w2 = w2*wnorm
   wpl = w1*P1 + w2*P2
-  !if ((qp-q0)*(q0-qm) <= 0.) wpl = q0
+  if ((qp-q0)*(q0-qm) <= 0.) wpl = q0
 
 end subroutine weno3_reconstruction_interface
 
-!> 5th-order weno reconstruction subroutine and limiter
-pure subroutine weno5_reconstruction(wq, q, u, mu)
-  real, intent(in) :: q(5)       !< tracer concentration from i-2 to  i+3 respectively
-  real, intent(in) :: u          !< advection velocity
-  real, intent(in) :: mu         !< cfl
-  real, intent(out) :: wq        !< weno flux
-
-  real :: wpl ! weno reconstruction on the cell interface
+!> 5th-order weno reconstruction subroutine
+pure subroutine weno5_reconstruction(wq, q, u)
+  real, intent(in) :: q(5)   !< tracer concentration from cell i-2 to i+2 [conc]
+  real, intent(in) :: u      !< advective flux [H L2 ~> m3 or kg]
+  real, intent(out) :: wq    !< weno tracer concentration at the cell interface i+1/2  [conc]
 
   wq = 0.0
   if ( u > 0.0) then
-    call weno5z_reconstruction_interface(wpl, q(1), q(2), q(3), q(4), q(5), mu)
+    call weno5z_reconstruction_interface(wq, q(1), q(2), q(3), q(4), q(5))
   elseif ( u < 0.0) then
-    call weno5z_reconstruction_interface(wpl, q(5), q(4), q(3), q(2), q(1), mu)
+    call weno5z_reconstruction_interface(wq, q(5), q(4), q(3), q(2), q(1))
   endif
-
-  wq = u*wpl
 
 end subroutine weno5_reconstruction
 
 !> 5th-order weno z-type reconstruction flux
-pure subroutine weno5z_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, mu)
-  real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
-  real, intent(in) :: mu                   !< cfl
-  real, intent(out) :: wpl                 !< reconstruction value
+pure subroutine weno5z_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp)
+  real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration [conc]
+  real, intent(out) :: wpl        !< weno tracer concentrations at the cell interface +1/2 [conc]
 
   real :: P0, P1, P2         ! reconstructed polynomials
   real :: b0, b1, b2         ! smoothness indicator
@@ -108,8 +97,6 @@ pure subroutine weno5z_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, mu)
   real :: d0, d1, d2         ! linear weights
   real :: eps,  wnorm, tau
   real, parameter :: C1_6 = 1.0/6.0  ! [nondim]
-  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-  real :: qul, qmd, qlc, qmin, qmax, alpha
 
   ! linear weights
   d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
@@ -136,57 +123,31 @@ pure subroutine weno5z_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, mu)
   wnorm = 1.0/((w0 + w1) + w2)
   w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
   wpl = w0*P0 + w1*P1 + w2*P2
-
-  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
-  alpha = (1.0-mu)/mu
-  qul = q0 + alpha*(q0-qm)
-
-  dm1 = qmm - 2.0*qm + q0
-  dd0 = qp  - 2.0*q0 + qm
-  dd1 = qpp - 2.0*qp + q0
-
-  mm1 = 4.0*dd0-dd1 ; mm2 = 4.0*dd1-dd0
-  dm4p = minmod4(mm1, mm2, dd0, dd1)
-
-  mm1 = 4.0*dm1-dd0 ; mm2 = 4.0*dd0-dm1
-  dm4m = minmod4(mm1, mm2, dm1, dd0)
-
-  qmd = 0.5*(q0 + qp) - 0.5*dm4p
-  qlc = 0.5*(q0+qul) + 0.5*alpha*dm4m
-
-  qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-  qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-  wpl = max( min(qmin,qmax), wpl) ; wpl = min( max(qmin,qmax), wpl)
+  wpl = max( min(q0,qp), wpl) ; wpl = min( max(q0,qp), wpl)
 
 end subroutine weno5z_reconstruction_interface
 
-!> 5th-order weno reconstruction for non-uniform grid and limiter
-pure subroutine weno5NM_reconstruction(wq, q, u, ds, mu)
-  real, intent(in) :: q(5)    !< tracer concentration for 5-stencil wide
-  real, intent(in) :: u       !< advection velocity
+!> 5th-order weno reconstruction for non-uniform grid
+pure subroutine weno5NM_reconstruction(wq, q, u, ds)
+  real, intent(in) :: q(5)    !< tracer concentration from i-2 to i+2 [conc]
+  real, intent(in) :: u       !< advective flux [H L2 ~> m3 or kg]
   real, intent(in) :: ds(5)   !< grid sizes
-  real, intent(in) :: mu      !< cfl
-  real, intent(out) :: wq     !< reconstruction value
-
-  real :: wpl ! weno reconstruction on the cell interface
+  real, intent(out) :: wq     !< weno tracer concentration at the cell interface i+1/2  [conc]
 
   wq = 0.0
   if (u > 0.0) then
-    call weno5NM_reconstruction_interface(wpl, q(1), q(2), q(3), q(4), q(5), ds, mu)
+    call weno5NM_reconstruction_interface(wq, q(1), q(2), q(3), q(4), q(5), ds)
   elseif (u < 0.0) then
-    call weno5NM_reconstruction_interface(wpl, q(5), q(4), q(3), q(2), q(1), ds, mu)
+    call weno5NM_reconstruction_interface(wq, q(5), q(4), q(3), q(2), q(1), ds)
   endif
-
-  wq = u*wpl
 
 end subroutine weno5NM_reconstruction
 
 !> 5th-order weno z-type reconstruction flux for non-uniform grid
-pure subroutine weno5NM_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, dx, mu)
-  real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration for 5-stencil wide
+pure subroutine weno5NM_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, dx)
+  real, intent(in) :: qmm, qm, q0, qp, qpp !< tracer concentration [conc]
   real, intent(in) :: dx(5)                !< grid sizes
-  real, intent(in) :: mu                   !< cfl
-  real, intent(out) :: wpl                 !< reconstruction value
+  real, intent(out) :: wpl         !< weno tracer concentrations at the cell interface +1/2 [conc]
 
   real :: P0, P1, P2         ! reconstructed polynomials
   real :: b0, b1, b2         ! smoothness indicator
@@ -195,8 +156,6 @@ pure subroutine weno5NM_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, dx, 
   real :: a0, a1, a2, a3
   real :: eps,  wnorm, tau
   real :: qh, qhh, qhp, qhpp
-  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-  real :: qul, qmd, qlc, qmin, qmax, alpha
 
   ! Gamma values in Weno reconstruction
   d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
@@ -233,56 +192,29 @@ pure subroutine weno5NM_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, dx, 
   wnorm = 1.0/((w0 + w1) + w2)
   w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
   wpl = w0*P0 + w1*P1 + w2*P2
-
-  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
-  alpha = (1.0-mu)/mu
-  qul = q0 + alpha*(q0-qm)
-
-  dm1 = qmm - 2.0*qm + q0
-  dd0 = qp  - 2.0*q0 + qm
-  dd1 = qpp - 2.0*qp + q0
-
-  mm1 = 4.0*dd0-dd1 ; mm2 = 4.0*dd1-dd0
-  dm4p = minmod4(mm1, mm2, dd0, dd1)
-
-  mm1 = 4.0*dm1-dd0 ; mm2 = 4.0*dd0-dm1
-  dm4m = minmod4(mm1, mm2, dm1, dd0)
-
-  qmd = 0.5*(q0 + qp) - 0.5*dm4p
-  qlc = 0.5*(q0+qul) + 0.5*alpha*dm4m
-
-  qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-  qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-  wpl = max( min(qmin,qmax), wpl) ; wpl = min( max(qmin,qmax), wpl)
-  if ((qp-q0)*(q0-qm) <= 0.) wpl = q0
+  wpl = max( min(q0,qp), wpl) ; wpl = min( max(q0,qp), wpl)
 
 end subroutine weno5NM_reconstruction_interface
 
-!> 7th-order weno reconstruction subroutine and limiter
-pure subroutine weno7_reconstruction(wq, q, u, mu)
-  real, intent(in) :: q(7)       !< tracer concentration for 7-stencil wide
-  real, intent(in) :: u          !< advection velocity
-  real, intent(in) :: mu         !< cfl
-  real, intent(out) :: wq        !< weno flux
-
-  real :: wpl ! weno reconstruction on the cell interface
+!> 7th-order weno reconstruction subroutine
+pure subroutine weno7_reconstruction(wq, q, u)
+  real, intent(in) :: q(7)  !< tracer concentration from i-3 to i+3 [conc]
+  real, intent(in) :: u     !< advective flux [H L2 ~> m3 or kg]
+  real, intent(out) :: wq   !< weno tracer concentration at the cell interface i+1/2  [conc]
 
   wq = 0.0
   if (u > 0.0) then
-    call weno7z_reconstruction_interface(wpl, q(1), q(2), q(3), q(4), q(5), q(6), q(7), mu)
+    call weno7z_reconstruction_interface(wq, q(1), q(2), q(3), q(4), q(5), q(6), q(7))
   elseif (u < 0.0) then
-    call weno7z_reconstruction_interface(wpl, q(7), q(6), q(5), q(4), q(3), q(2), q(1), mu)
+    call weno7z_reconstruction_interface(wq, q(7), q(6), q(5), q(4), q(3), q(2), q(1))
   endif
-
-  wq = u*wpl
 
 end subroutine weno7_reconstruction
 
 !> 7th-order weno z-type reconstruction flux
-pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3, mu)
-  real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3 !< tracer concentration for 7-stencil wide
-  real, intent(in) :: mu                               !< cfl
-  real, intent(out) :: wpl                             !< reconstruction value
+pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3)
+  real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3 !< tracer concentration [conc]
+  real, intent(out) :: wpl         !< weno tracer concentrations at the cell interface +1/2 [conc]
 
   real :: P0, P1, P2, P3     ! reconstructed polynomials
   real :: b0, b1, b2, b3     ! smoothness indicator
@@ -290,8 +222,6 @@ pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2
   real :: d0, d1, d2, d3     ! nonlinear weights
   real :: eps, tau, wnorm
   real, parameter :: C1_12 = 1.0/12.0  ! [nondim]
-  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-  real :: qul, qmd, qlc, qmin, qmax, alpha
 
   d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
 
@@ -331,67 +261,38 @@ pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2
   wnorm = 1.0/((w0 + w1) + (w2 + w3))
   w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm ; w3 = w3*wnorm
   wpl = w0*P0 + w1*P1 + w2*P2 + w3*P3
-
-  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
-  alpha = (1.0-mu)/mu
-  qul = q0 + alpha*(q0-qm1)
-
-  dm1 = qm2 - 2.0*qm1 + q0
-  dd0 = qp1  - 2.0*q0 + qm1
-  dd1 = qp2 - 2.0*qp1 + q0
-
-  mm1 = 4.0*dd0-dd1 ; mm2 = 4.0*dd1-dd0
-  dm4p = minmod4(mm1, mm2, dd0, dd1)
-
-  mm1 = 4.0*dm1-dd0 ; mm2 = 4.0*dd0-dm1
-  dm4m = minmod4(mm1, mm2, dm1, dd0)
-
-  qmd = 0.5*(q0 + qp1) - 0.5*dm4p
-  qlc = 0.5*(q0+qul) + 0.5*alpha*dm4m
-
-  qmin = max(min(q0,qp1,qmd),min(q0,qul,qlc))
-  qmax = min(max(q0,qp1,qmd),max(q0,qul,qlc))
-  wpl = max( min(qmin,qmax), wpl) ; wpl = min( max(qmin,qmax), wpl)
+  wpl = max( min(q0,qp1), wpl) ; wpl = min( max(q0,qp1), wpl)
 
 end subroutine weno7z_reconstruction_interface
 
-!> 9th-order weno reconstruction subroutine and limiter
-pure subroutine weno9_reconstruction(wq, q, u, mu)
-  real, intent(in) :: q(9)       !< tracer concentrationi for 9-stencil wide
-  real, intent(in) :: u          !< advection velocity
-  real, intent(in) :: mu         !< cfl
-  real, intent(out) :: wq        !< weno flux
-
-  real :: wpl ! weno reconstruction on the cell interface
+!> 9th-order weno reconstruction subroutine
+pure subroutine weno9_reconstruction(wq, q, u)
+  real, intent(in) :: q(9)  !< tracer concentration from i-4 to i+4 [conc]
+  real, intent(in) :: u     !< advective flux [H L2 ~> m3 or kg]
+  real, intent(out) :: wq   !< weno tracer concentration at the cell interface i+1/2  [conc]
 
   wq = 0.0
   if (u > 0.0) then
-    call weno9_reconstruction_interface(wpl, q(1), q(2), q(3), q(4), &
-          q(5), q(6), q(7), q(8), q(9), mu)
+    call weno9_reconstruction_interface(wq, q(1), q(2), q(3), q(4), &
+          q(5), q(6), q(7), q(8), q(9))
   else
-    call weno9_reconstruction_interface(wpl, q(9), q(8), q(7), q(6), &
-          q(5), q(4), q(3), q(2), q(1), mu)
+    call weno9_reconstruction_interface(wq, q(9), q(8), q(7), q(6), &
+          q(5), q(4), q(3), q(2), q(1))
   endif
-
-  wq = u*wpl
 
 end subroutine weno9_reconstruction
 
 !> 9th-order weno z-type reconstruction flux
 pure subroutine weno9_reconstruction_interface(wpl, qm4, qm3, qm2, qm1, &
-                q0, qp1, qp2, qp3, qp4, mu)
-  real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration
-                                                                 !! for 9-stencil wide
-  real, intent(in) :: mu                                         !< cfl
-  real, intent(out) :: wpl                                       !< reconstruction value
+                q0, qp1, qp2, qp3, qp4)
+  real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration [conc]
+  real, intent(out) :: wpl      !< weno tracer concentrations at the cell interface i+1/2 [conc]
 
   real :: b0, b1, b2, b3, b4               ! smoothness indicator
   real :: d0, d1, d2, d3, d4               ! linear weights
   real :: w0, w1, w2, w3, w4               ! nonlinear weights
   real :: P0, P1, P2, P3, P4               ! reconstructed polynomials
   real :: eps,wnorm, tau
-  real :: dm1, dd0, dd1, dm4p, dm4m, mm1, mm2
-  real :: qul, qmd, qlc, qmin, qmax, alpha
 
   d0 = 1.0/126.0 ; d1 = 10.0/63.0 ; d2 = 10.0/21.0 ; d3 = 20.0/63.0 ; d4 = 5.0/126.0
 
@@ -412,34 +313,13 @@ pure subroutine weno9_reconstruction_interface(wpl, qm4, qm3, qm2, qm1, &
   w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
   w3 = w3*wnorm ; w4 = w4*wnorm
   wpl = w0*P0 + w1*P1 + w2*P2 + w3*P3 + w4*P4
-
-  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
-  alpha = (1.0-mu)/mu
-  qul = q0 + alpha*(q0-qm1)
-
-  dm1 = qm2 - 2.0*qm1 + q0
-  dd0 = qp1  - 2.0*q0 + qm1
-  dd1 = qp2 - 2.0*qp1 + q0
-
-  mm1 = 4.0*dd0-dd1 ; mm2 = 4.0*dd1-dd0
-  dm4p = minmod4(mm1, mm2, dd0, dd1)
-
-  mm1 = 4.0*dm1-dd0 ; mm2 = 4.0*dd0-dm1
-  dm4m = minmod4(mm1, mm2, dm1, dd0)
-
-  qmd = 0.5*(q0 + qp1) - 0.5*dm4p
-  qlc = 0.5*(q0+qul) + 0.5*alpha*dm4m
-
-  qmin = max(min(q0,qp1,qmd),min(q0,qul,qlc))
-  qmax = min(max(q0,qp1,qmd),max(q0,qul,qlc))
-  wpl = max( min(qmin,qmax), wpl) ; wpl = min( max(qmin,qmax), wpl)
+  wpl = max( min(q0,qp1), wpl) ; wpl = min( max(q0,qp1), wpl)
 
 end subroutine weno9_reconstruction_interface
 
 pure subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2, qm1, q0, &
                 qp1, qp2, qp3, qp4)
-  real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration
-                                                                 !! for 9-stencil wide
+  real, intent(in) :: qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4 !< tracer concentration [conc]
   real, intent(out) :: P0, P1, P2, P3, P4    !< recontructed polynomials
   real, intent(out) :: b0, b1, b2, b3, b4    !< smoothness indicator
 
@@ -500,12 +380,12 @@ pure subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2
 end subroutine weno9_poly
 
 !> ppm reconstruction flux
-subroutine PPM_reconstruction(wq_ppm, q, u, mu, qext)
-  real, intent(in) :: q(3) !< tracer concentration for 3-stencil wide
-  real, intent(in) :: u               !< advection velocity
-  real, intent(in) :: mu              !< cfl
-  real, intent(in) :: qext            !< check local extrema
-  real, intent(out) :: wq_ppm         !< reconstructed flux
+subroutine PPM_reconstruction(wq_ppm, q, u, cfl, qext)
+  real, intent(in) :: q(3)     !< tracer concentration for 3-stencil wide [conc]
+  real, intent(in) :: u        !< advective flux [H L2 ~> m3 or kg]
+  real, intent(in) :: cfl      !< absolute value of the advective upwind-cell CFL number [nondim]
+  real, intent(in) :: qext     !< check local extrema
+  real, intent(out) :: wq_ppm  !< PPM tracer concentration at the cell interface i+1/2  [conc]
 
   real :: aL, aR, dA, mA, a6
   real :: qm, q0, qp
@@ -529,9 +409,9 @@ subroutine PPM_reconstruction(wq_ppm, q, u, mu, qext)
   a6 = 6.0*q0 - 3.0 * (aR + aL) ! Curvature
 
   if (u >= 0.0) then
-    wq_ppm = u*(aR - 0.5*mu*((aR-aL) - a6*(1.0 - 2.0/3.0 * mu)))
+    wq_ppm = (aR - 0.5*cfl*((aR-aL) - a6*(1.0 - 2.0/3.0 * cfl)))
   else
-    wq_ppm = u*(aL + 0.5*mu*((aR-aL) + a6*(1.0 - 2.0/3.0 * mu)))
+    wq_ppm = (aL + 0.5*cfl*((aR-aL) + a6*(1.0 - 2.0/3.0 * cfl)))
   endif
 
 end subroutine PPM_reconstruction
@@ -540,35 +420,13 @@ end subroutine PPM_reconstruction
 pure function weight_fac(tau, b) result(factor)
   real, intent(in)  :: tau  !< Difference of the smoothness indicator [A ~> a]
   real, intent(in)  :: b    !< The smoothness indicator [A ~> a]
-  real :: factor               !< The factor for the weight [nondim]
+  real :: factor            !< The factor for the weight [nondim]
 
-  factor = 1.0e40; if (abs(b) > 1.0e-20*tau) factor = (1.0 + tau / b)**2
+  factor = 1.0e40; if (abs(b) > 1.0e-20*tau) factor = (1.0 + tau / b)
 
 end function weight_fac
 
-pure elemental function minmod4(a,b,c,d) result(r)
-  real, intent(in) :: a, b, c, d
-  real :: r
-
-  if ( (a*b <= 0.0) .or. (a*c <= 0.0) .or. (a*d <= 0.0) ) then
-    r = 0.0
-  else
-    r = sign( min( min(abs(a),abs(b)), min(abs(c),abs(d)) ), a )
-  end if
-end function minmod4
-
-pure elemental function minmod2(a,b) result(r)
-  real, intent(in) :: a, b
-  real :: r
-
-  ! 0 if opposite sign or either is zero; otherwise sign(a)*min(|a|,|b|)
-  if (a*b <= 0.0) then
-    r = 0.0
-  else
-    r = sign(min(abs(a),abs(b)), a)
-  end if
-end function minmod2
-
+!> Find the global min and max for each tracer
 subroutine tracer_min_max_init(Reg, G, GV, local_advect_scheme)
   type(tracer_registry_type), pointer    :: Reg  !< pointer to the tracer registry
   type(ocean_grid_type),      intent(in) :: G    !< The ocean's grid structure
@@ -586,17 +444,20 @@ subroutine tracer_min_max_init(Reg, G, GV, local_advect_scheme)
   do m=1,ntr
     if (local_advect_scheme(m) > 2) then
       Tr => Reg%Tr(m)
+      if (allocated(Tr%Tmingg)) deallocate(Tr%Tmingg, Tr%Tmaxgg)
+      allocate(Tr%Tmingg(nz), Tr%Tmaxgg(nz))
       do k=1,nz
         call array_global_min_max(Tr%t(:,:,k), G, 1, Tmin, Tmax)
-        Tr_min(k) = Tmin
-        Tr_max(k) = Tmax
+        !Tr_min(k) = Tmin
+        !Tr_max(k) = Tmax
+        Tr%Tmingg(k) = Tmin
+        Tr%Tmaxgg(k) = Tmax
       enddo
 
-      Tr%Tmingg = minval(Tr_min)
-      Tr%Tmaxgg = maxval(Tr_max)
+      !Tr%Tmingg = minval(Tr_min)
+      !Tr%Tmaxgg = maxval(Tr_max)
 
     endif
-
   enddo
 
 end subroutine tracer_min_max_init
