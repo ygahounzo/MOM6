@@ -481,14 +481,6 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
       enddo ; enddo ; enddo
     endif
 
-    Tr%id_tr_weno = register_diag_field('ocean_model', trim(shortnm)//'_weno', &
-        diag%axesTL, Time, &
-        'Tracer value from weno solver before correction '//trim(lowercase(longname)), &
-        trim(units), conversion=Tr%conc_scale*US%s_to_T)
-    if (Tr%id_tr_weno > 0) then
-      call safe_alloc_ptr(Tr%tweno,isd,ied,jsd,jed,nz)
-    endif
-
     ! Neutral/Horizontal diffusion convergence tendencies
     if (Tr%diag_form == 1) then
       Tr%id_dfxy_cont = register_diag_field("ocean_model", trim(shortnm)//'_dfxy_cont_tendency', &
@@ -731,7 +723,6 @@ subroutine post_tracer_diagnostics_at_sync(Reg, h, diag_prev, diag, G, GV, dt)
   do m=1,Reg%ntr ; if (Reg%Tr(m)%registry_diags) then
     Tr => Reg%Tr(m)
     if (Tr%id_tr > 0) call post_data(Tr%id_tr, Tr%t, diag)
-    if (Tr%id_tr_weno > 0) call post_data(Tr%id_tr_weno, Tr%tweno, diag)
     if (Tr%id_tendency > 0) then
       work3d(:,:,:) = 0.0
       do k=1,nz ; do j=js,je ; do i=is,ie
