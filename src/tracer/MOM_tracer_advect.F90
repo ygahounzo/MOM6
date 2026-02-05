@@ -19,7 +19,10 @@ use MOM_tracer_registry, only : tracer_registry_type, tracer_type
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_tracer_advect_schemes, only : ADVECT_PLM, ADVECT_PPMH3, ADVECT_PPM
+use MOM_tracer_advect_schemes, only : ADVECT_WENO5, ADVECT_WENO7, ADVECT_WENO9
 use MOM_tracer_advect_schemes, only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
+use MOM_tracer_advect_weno, only : weno5_reconstruction, PPM_reconstruction
+use MOM_tracer_advect_weno, only : weno7_reconstruction, weno9_reconstruction
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -147,6 +150,12 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
        else
          stencil_local = 3
        endif
+     elseif (local_advect_scheme(m) == ADVECT_WENO5) then
+       stencil_local = 3
+     elseif (local_advect_scheme(m) == ADVECT_WENO7) then
+       stencil_local = 4
+     elseif (local_advect_scheme(m) == ADVECT_WENO9) then
+       stencil_local = 5
      endif
      stencil = max(stencil, stencil_local)
   enddo
@@ -412,6 +421,9 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer :: i, j, m, n, i_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
+  real :: order3, order5, order7, order9
+  real :: T3(3), T5(5), T7(7), T9(9)
+  real :: wq, qext, dx(5)
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -583,6 +595,44 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             flux_x(I,j,m) = uhh(I)*( aL + 0.5 * CFL(I) * ( &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
+        enddo
+      elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
+              (advect_schemes(m) == ADVECT_WENO9)) then
+        order7 = 0.0 ; order9 = 0.0
+
+        do I=is-1,ie
+
+          ! centre cell depending on upstream direction
+          if (uhh(I) >= 0.0) then
+            i_up = i
+          else
+            i_up = i+1
+          endif
+
+          T3(:) = T_tmp(i_up-1:i_up+1,m) ; T5(:) = T_tmp(i_up-2:i_up+2,m)
+
+          order3 = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*G%mask2dCu(I_up+1,j)
+          order5 = order3*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
+
+          if ( (advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
+            order7 = order5*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
+            T7(:) = T_tmp(i_up-3:i_up+3,m)
+          elseif (advect_schemes(m) == ADVECT_WENO9) then
+            order9 = order7*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
+            T9 = T_tmp(i_up-4:i_up+4,m)
+          endif
+
+          if (order9 == 1.0) then
+            call weno9_reconstruction(wq, T9, uhh(I), CFL(I-1:I+1))
+          elseif (order7 == 1.0) then
+            call weno7_reconstruction(wq, T7, uhh(I), CFL(I-1:I+1))
+          elseif (order5 == 1.0) then
+            call weno5_reconstruction(wq, T5, uhh(I), CFL(I-1:I+1))
+          else
+            qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+            call PPM_reconstruction(wq, T3, uhh(I), CFL(I), qext)
+          endif
+          flux_x(I,j,m) = uhh(I)*wq
         enddo
       else ! PLM
         do I=is-1,ie
@@ -804,14 +854,21 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer :: i, j, j2, m, n, j_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
+  real :: order3, order5, order7, order9
+  real :: T3(3), T5(5), T7(7), T9(9)
+  real :: wq, qext, dy(5), vv
+  real, dimension(SZIB_(G), SZJB_(G)) :: CFL_iJ
+  logical :: isWENO
 
   usePLMslope = .false.
+  isWENO = .false.
   ! stencil for calculating slope values
   stencil = 1
   do m = 1,ntr
     if ((advect_schemes(m) == ADVECT_PLM) .or. (advect_schemes(m) == ADVECT_PPM)) &
             usePLMslope = .true.
     if (advect_schemes(m) == ADVECT_PPM) stencil = 2
+    if (advect_schemes(m) > 2) isWENO = .true.
   enddo
 
   min_h = 0.1*GV%Angstrom_H
@@ -911,6 +968,39 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   ! the minimum of the remaining mass flux (vhr) and the half the mass
   ! in the cell plus whatever part of its half of the mass flux that
   ! the flux through the other side does not require.
+  if (isWENO) then
+    do J=js-1,je ; if (domore_v(J,k)) then
+
+      do i=is,ie
+        if ((vhr(i,J,k) == 0.0) .or. &
+            ((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= tiny_h)) .or. &
+            ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
+          CFL_iJ(i,J) = 0.0
+        elseif (vhr(i,J,k) < 0.0) then
+          hup = hprev(i,j+1,k) - G%areaT(i,j+1)*min_h
+          hlos = MAX(0.0, vhr(i,J+1,k))
+          if ((((hup - hlos) + vhr(i,J,k)) < 0.0) .and. &
+              ((0.5*hup + vhr(i,J,k)) < 0.0)) then
+            vv = MIN(-0.5*hup, -hup+hlos, 0.0)
+          else
+            vv = vhr(i,J,k)
+          endif
+          CFL_iJ(i,J) = - vv / hprev(i,j+1,k)  ! CFL is positive
+        else
+          hup = hprev(i,j,k) - G%areaT(i,j)*min_h
+          hlos = MAX(0.0, -vhr(i,J-1,k))
+          if ((((hup - hlos) - vhr(i,J,k)) < 0.0) .and. &
+              ((0.5*hup - vhr(i,J,k)) < 0.0)) then
+            vv = MAX(0.5*hup, hup-hlos, 0.0)
+          else
+            vv = vhr(i,J,k)
+          endif
+          CFL_iJ(i,J) = vv / hprev(i,j,k)  ! CFL is positive
+        endif
+      enddo
+    endif ; enddo
+  endif
+
   do J=js-1,je ; if (domore_v(J,k)) then
     domore_v(J,k) = .false.
 
@@ -987,6 +1077,44 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * CFL(i) * ( &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
+        enddo
+      elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
+            (advect_schemes(m) == ADVECT_WENO9)) then
+        order7 = 0.0 ; order9 = 0.0
+
+        do i=is,ie
+
+          ! centre cell depending on upstream direction
+          if (vhh(i,J) >= 0.0) then
+            j_up = j
+          else
+            j_up = j + 1
+          endif
+
+          T3 = T_tmp(i,m,j_up-1:j_up+1) ; T5 = T_tmp(i,m,j_up-2:j_up+2)
+
+          order3 = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up+1)
+          order5 = order3*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
+
+          if ((advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
+            order7 = order5*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
+            T7 = T_tmp(i,m,j_up-3:j_up+3)
+          elseif (advect_schemes(m) == ADVECT_WENO9) then
+            order9 = order7*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
+            T9 = T_tmp(i,m,j_up-4:j_up+4)
+          endif
+
+          if (order9 == 1.0) then
+            call weno9_reconstruction(wq, T9, vhh(i,J), CFL_iJ(i,J-1:J+1))
+          elseif (order7 == 1.0) then
+            call weno7_reconstruction(wq, T7, vhh(i,J), CFL_iJ(i,J-1:J+1))
+          elseif (order5 == 1.0) then
+            call weno5_reconstruction(wq, T5, vhh(i,J), CFL_iJ(i,J-1:J+1))
+          else
+            qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+            call PPM_reconstruction(wq, T3, vhh(i,J), CFL(i), qext)
+          endif
+          flux_y(i,m,J) = vhh(i,J)*wq
         enddo
       else ! PLM
         do i=is,ie

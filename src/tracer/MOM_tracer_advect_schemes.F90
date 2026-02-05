@@ -11,12 +11,18 @@ implicit none ; public
 integer, parameter :: ADVECT_PLM        = 0 !< PLM advection scheme
 integer, parameter :: ADVECT_PPMH3      = 1 !< PPM:H3 advection scheme
 integer, parameter :: ADVECT_PPM        = 2 !< PPM advection scheme
+integer, parameter :: ADVECT_WENO5      = 3 !< WENO5 advection scheme
+integer, parameter :: ADVECT_WENO7      = 4 !< WENO7 advection scheme
+integer, parameter :: ADVECT_WENO9      = 5 !< WENO9 advection scheme
 
 !> Documentation for tracer advection schemes
 character(len=*), parameter :: TracerAdvectionSchemeDoc = &
                  "  PLM    - Piecewise Linear Method\n"//&
                  "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
-                 "  PPM    - Piecewise Parabolic Method (Colella-Woodward)"
+                 "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n"//&
+                 "  WENO5  - Weighted Essentially Non-Oscillatory, 5th order\n"//&
+                 "  WENO7  - Weighted Essentially Non-Oscillatory, 7th order\n"//&
+                 "  WENO9  - Weighted Essentially Non-Oscillatory, 9th order"
 
 contains
 
@@ -34,6 +40,12 @@ subroutine set_tracer_advect_scheme(scheme_value, advect_scheme_name)
       scheme_value = ADVECT_PPMH3
     case ("PPM")
       scheme_value = ADVECT_PPM
+    case ("WENO5")
+      scheme_value = ADVECT_WENO5
+    case ("WENO7")
+      scheme_value = ADVECT_WENO7
+    case ("WENO9")
+      scheme_value = ADVECT_WENO9
     case default
       call MOM_error(FATAL, "set_tracer_advect_scheme: "//&
            "Unknown TRACER_ADVECTION_SCHEME = "//trim(advect_scheme_name))
