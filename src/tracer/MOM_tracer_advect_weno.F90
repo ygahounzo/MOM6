@@ -107,89 +107,63 @@ pure subroutine weno5z_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, cfl, 
   real :: aL, aR, a6, mA, dA, Tm, Tp, wpm, sg
   real :: q0_min, q0_max
 
-  theta = 1.0
-  if (maxval(cfl) > 0.3) theta = 0.0
+  ! linear weights
+  d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
 
-  Tm = qm ; Tp = qp
-  if (u < 0.0) then ; Tm = qp ; Tp = qm ; endif
-  aL = ( 5.*q0 + ( 2.*Tm - Tp ) )/6.
-  aL = max( min(q0,Tm), aL) ; aL = min( max(q0,Tm), aL)
-  aR = ( 5.*q0 + ( 2.*Tp - Tm ) )/6.
-  aR = max( min(q0,Tp), aR) ; aR = min( max(q0,Tp), aR)
+  ! Compute flux at left side of i+1/2
+  ! First stencil
+  P0 = ((2.0*qmm - 7.0*qm) + 11.0*q0)*C1_6
+  b0 = (qmm*((4.0*qmm - 19.0*qm) + 11.0*q0)) + (qm*(25.0*qm - 31.0*q0) + 10.0*(q0*q0))
 
-  dA = aR - aL ; mA = 0.5*( aR + aL )
-  if ((Tp-q0)*(q0-Tm) <= 0.) then
-    aL = q0 ; aR = q0 ! PCM for local extrema
-  elseif ( dA*(q0-mA) > (dA*dA)/6. ) then
-    aL = (3.*q0) - 2.*aR
-  elseif ( dA*(q0-mA) < - (dA*dA)/6. ) then
-    aR = (3.*q0) - 2.*aL
+  ! Second stencil
+  P1 = ((-qm + 5.0*q0) + 2.0*qp)*C1_6
+  b1 = (qm*((4.0*qm - 13.0*q0) + 5.0*qp)) + (q0*(13.0*q0 - 13.0*qp) + 4.0*(qp*qp))
+
+  ! Third stencil
+  P2 = ((2.0*q0 + 5.0*qp) - qpp)*C1_6
+  b2 = (q0*((10.0*q0 - 31.0*qp) + 11.0*qpp)) + (qp*(25.0*qp - 19.0*qpp) + 4.0*(qpp*qpp))
+
+  ! Alpha values
+  tau = abs(b2-b0)
+  w0 = d0*weight_fac(tau, b0)
+  w1 = d1*weight_fac(tau, b1)
+  w2 = d2*weight_fac(tau, b2)
+
+  wnorm = 1.0/((w0 + w1) + w2)
+  w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
+  wpl = w0*P0 + w1*P1 + w2*P2
+
+  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
+  alpha   = (1.0 - cfl(2))/cfl(2)
+  !alpha = 4.0
+  qul = q0 + alpha*(q0-qm)
+  qmp = q0 + minmod2((qp-q0),(qul-q0))
+
+  dm1 = qmm - 2.0*qm + q0
+  dd0 = qp  - 2.0*q0 + qm
+  dd1 = qpp - 2.0*qp + q0
+
+  dm4p = minmod4( 4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1 )
+  dm4m = minmod4( 4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0 )
+
+  eps = 1.0e-20
+  Gmd = 0.5*(1.0 - dm4p/((qp-q0)+eps))
+  Glc = 0.5*(1.0 + dm4m/((q0-qm)+eps))
+  qmd = q0 + Gmd*(qp - q0)
+  qlc = q0 + Glc*(qul - q0)
+
+  qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+  qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+  q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
+  sg = sign(1.0,((wpl-qmin)*(wpl-qmax)))
+  !wpl = max( min(qmin,qmax), wpl) ; wpl = min( max(qmin,qmax), wpl)
+
+  if (((maxval(cfl) > 0.4) .or. (abs(maxval(cfl)-minval(cfl)) > 0.1)) .or. (sg > 0.0) &
+          .or. ((qmax-qmin) > (q0_max-q0_min))) then
+    Tm = qm ; Tp = qp
+    if (u < 0.0) then ; Tm = qp ; Tp = qm ; endif
+    call PPM_reconstruction(wpl, Tm, q0, Tp, u, cfl(2), 1.0)
   endif
-
-  a6 = 6.0*q0 - 3.0 * (aR + aL) ! Curvature
-  if (u >= 0.0) then
-    wpm = (aR - 0.5*cfl(2)*((aR-aL) - a6*(1.0 - 2.0/3.0 * cfl(2))))
-  else
-    wpm = (aL + 0.5*cfl(2)*((aR-aL) + a6*(1.0 - 2.0/3.0 * cfl(2))))
-  endif
-
-  wpl = 0.0
-  if (theta > 0.0) then
-    ! linear weights
-    d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
-
-    ! Compute flux at left side of i+1/2
-    ! First stencil
-    P0 = ((2.0*qmm - 7.0*qm) + 11.0*q0)*C1_6
-    b0 = (qmm*((4.0*qmm - 19.0*qm) + 11.0*q0)) + (qm*(25.0*qm - 31.0*q0) + 10.0*(q0*q0))
-
-    ! Second stencil
-    P1 = ((-qm + 5.0*q0) + 2.0*qp)*C1_6
-    b1 = (qm*((4.0*qm - 13.0*q0) + 5.0*qp)) + (q0*(13.0*q0 - 13.0*qp) + 4.0*(qp*qp))
-
-    ! Third stencil
-    P2 = ((2.0*q0 + 5.0*qp) - qpp)*C1_6
-    b2 = (q0*((10.0*q0 - 31.0*qp) + 11.0*qpp)) + (qp*(25.0*qp - 19.0*qpp) + 4.0*(qpp*qpp))
-
-    ! Alpha values
-    tau = abs(b2-b0)
-    w0 = d0*weight_fac(tau, b0)
-    w1 = d1*weight_fac(tau, b1)
-    w2 = d2*weight_fac(tau, b2)
-
-    wnorm = 1.0/((w0 + w1) + w2)
-    w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
-    wpl = w0*P0 + w1*P1 + w2*P2
-
-    ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
-    alpha = (1.0 - cfl(2))/cfl(2)
-    qul = q0 + alpha*(q0-qm)
-    qmp = q0 + minmod2((qp-q0),(qul-q0))
-
-    dm1 = qmm - 2.0*qm + q0
-    dd0 = qp  - 2.0*q0 + qm
-    dd1 = qpp - 2.0*qp + q0
-
-    dm4p = minmod4( 4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1 )
-    dm4m = minmod4( 4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0 )
-
-    eps = 1.0e-20
-    Gmd = 0.5*(1.0 - dm4p/((qp-q0)+eps))
-    Glc = 0.5*(1.0 + dm4m/((q0-qm)+eps))
-    qmd = q0 + Gmd*(qp - q0)
-    qlc = q0 + Glc*(qul - q0)
-
-    qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-    qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-    q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
-    if ((abs(maxval(cfl)-minval(cfl)) > 1.0e-8) .and. &
-       ((qmax-qmin) > (q0_max-q0_min))) theta = 0.0
-    sg = sign(1.0,((wpl-qmin)*(wpl-qmax)))
-    wpl = 0.5*(wpl + wpm) - 0.5*sg*(wpl - wpm)
-
-  endif
-
-  wpl = wpm + theta*(wpl - wpm)
 
 end subroutine weno5z_reconstruction_interface
 
@@ -227,102 +201,74 @@ pure subroutine weno5NM_reconstruction_interface(wpl, qmm, qm, q0, qp, qpp, dx, 
   real :: dm1, dd0, dd1, dm4p, dm4m
   real :: qul, qmd, qlc, qmin, qmax, alpha
   real :: Gmd, Glc, theta
-  real :: aL, aR, a6, mA, dA, Tm, Tp, wpm, sg
+  real :: aL, aR, a6, mA, dA, Tm, Tp, sg
   real :: q0_min, q0_max, qmp
 
-  theta = 1.0
-  if (maxval(cfl) > 0.3) theta = 0.0
+  ! Gamma values in Weno reconstruction
+  d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
 
-  Tm = qm ; Tp = qp
-  if (u < 0.0) then ; Tm = qp ; Tp = qm ; endif
-  aL = ( 5.*q0 + ( 2.*Tm - Tp ) )/6.
-  aL = max( min(q0,Tm), aL) ; aL = min( max(q0,Tm), aL)
-  aR = ( 5.*q0 + ( 2.*Tp - Tm ) )/6.
-  aR = max( min(q0,Tp), aR) ; aR = min( max(q0,Tp), aR)
+  ! First stencil
+  a0 = dx(1)/(dx(1)+dx(2)) ; a1 = dx(2)/(dx(2)+dx(3))
 
-  dA = aR - aL ; mA = 0.5*( aR + aL )
-  if ((Tp-q0)*(q0-Tm) <= 0.) then
-    aL = q0 ; aR = q0 ! PCM for local extrema
-  elseif ( dA*(q0-mA) > (dA*dA)/6. ) then
-    aL = (3.*q0) - 2.*aR
-  elseif ( dA*(q0-mA) < - (dA*dA)/6. ) then
-    aR = (3.*q0) - 2.*aL
+  qh = (1.0-a1)*qm + a1*q0
+  qhh = (2.0-a0)*qm - (1.0-a0)*qmm
+
+  b0 = (13.0/12.0)*(2.0*qh - 2.0*qhh)**2 + 0.25*(4.0*q0 - 2.0*qh - 2.0*qhh)**2
+  P0 = (6.0*q0 - qh - 2.0*qhh)/3.0
+
+  ! Second stencil
+  a2 = dx(3)/(dx(3)+dx(4))
+  qhp = (1.0-a2)*q0 + a2*qp
+
+  b1 = (13.0/12.0)*(2.0*qh - 4.0*q0 + 2.0*qhp)**2 + 0.25*(-2.0*qh + 2.0*qhp)**2
+  P1 = (-qh + 2*q0 + 2.0*qhp)/3.0
+
+  ! Third stencil
+  a3 = dx(4)/(dx(4)+dx(5))
+  qhpp = (1.0-a3)*qp + a3*qpp
+
+  b2 = (13.0/12.0)*(2.0*qhp - 4.0*qp + 2.0*qhpp)**2 + 0.25*(-6.0*qhp + 8.0*qp - 2.0*qhpp)**2
+  P2 = (2.0*qhp + 2.0*qp - qhpp)/3.0
+
+  ! Alpha values
+  tau = abs(b2-b0)
+  w0 = d0*weight_fac(tau, b0)
+  w1 = d1*weight_fac(tau, b1)
+  w2 = d2*weight_fac(tau, b2)
+
+  wnorm = 1.0/((w0 + w1) + w2)
+  w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
+  wpl = w0*P0 + w1*P1 + w2*P2
+
+  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
+  alpha   = (1.0 - cfl(2))/cfl(2)
+  qul = q0 + alpha*(q0-qm)
+  qmp = q0 + minmod2((qp-q0),(qul-q0))
+
+  dm1 = qmm - 2.0*qm + q0
+  dd0 = qp  - 2.0*q0 + qm
+  dd1 = qpp - 2.0*qp + q0
+
+  dm4p = minmod4( 4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1 )
+  dm4m = minmod4( 4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0 )
+
+  eps = 1.0e-20
+  Gmd = 0.5*(1.0 - dm4p/((qp-q0)+eps))
+  Glc = 0.5*(1.0 + dm4m/((q0-qm)+eps))
+  qmd = q0 + Gmd*(qp - q0)
+  qlc = q0 + Glc*(qul - q0)
+
+  qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
+  qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
+  q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
+  sg = sign(1.0,((wpl-qmin)*(wpl-qmax)))
+
+  if (((maxval(cfl) > 0.4) .or. (abs(maxval(cfl)-minval(cfl)) > 0.1)) .or. (sg > 0.0) &
+        .or. ((qmax-qmin) > (q0_max-q0_min))) then
+    Tm = qm ; Tp = qp
+    if (u < 0.0) then ; Tm = qp ; Tp = qm ; endif
+    call PPM_reconstruction(wpl, Tm, q0, Tp, u, cfl(2), 1.0)
   endif
-
-  a6 = 6.0*q0 - 3.0 * (aR + aL) ! Curvature
-  if (u >= 0.0) then
-    wpm = (aR - 0.5*cfl(2)*((aR-aL) - a6*(1.0 - 2.0/3.0 * cfl(2))))
-  else
-    wpm = (aL + 0.5*cfl(2)*((aR-aL) + a6*(1.0 - 2.0/3.0 * cfl(2))))
-  endif
-
-  wpl = 0.0
-  if (theta > 0.0) then
-    ! Gamma values in Weno reconstruction
-    d0 = 1.0/10.0 ; d1 = 6.0/10.0 ; d2 = 3.0/10.0
-
-    ! First stencil
-    a0 = dx(1)/(dx(1)+dx(2)) ; a1 = dx(2)/(dx(2)+dx(3))
-
-    qh = (1.0-a1)*qm + a1*q0
-    qhh = (2.0-a0)*qm - (1.0-a0)*qmm
-
-    b0 = (13.0/12.0)*(2.0*qh - 2.0*qhh)**2 + 0.25*(4.0*q0 - 2.0*qh - 2.0*qhh)**2
-    P0 = (6.0*q0 - qh - 2.0*qhh)/3.0
-
-    ! Second stencil
-    a2 = dx(3)/(dx(3)+dx(4))
-    qhp = (1.0-a2)*q0 + a2*qp
-
-    b1 = (13.0/12.0)*(2.0*qh - 4.0*q0 + 2.0*qhp)**2 + 0.25*(-2.0*qh + 2.0*qhp)**2
-    P1 = (-qh + 2*q0 + 2.0*qhp)/3.0
-
-    ! Third stencil
-    a3 = dx(4)/(dx(4)+dx(5))
-    qhpp = (1.0-a3)*qp + a3*qpp
-
-    b2 = (13.0/12.0)*(2.0*qhp - 4.0*qp + 2.0*qhpp)**2 + 0.25*(-6.0*qhp + 8.0*qp - 2.0*qhpp)**2
-    P2 = (2.0*qhp + 2.0*qp - qhpp)/3.0
-
-    ! Alpha values
-    tau = abs(b2-b0)
-    w0 = d0*weight_fac(tau, b0)
-    w1 = d1*weight_fac(tau, b1)
-    w2 = d2*weight_fac(tau, b2)
-
-    wnorm = 1.0/((w0 + w1) + w2)
-    w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
-    wpl = w0*P0 + w1*P1 + w2*P2
-
-    ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
-    alpha   = (1.0 - cfl(2))/cfl(2)
-    qul = q0 + alpha*(q0-qm)
-    qmp = q0 + minmod2((qp-q0),(qul-q0))
-
-    dm1 = qmm - 2.0*qm + q0
-    dd0 = qp  - 2.0*q0 + qm
-    dd1 = qpp - 2.0*qp + q0
-
-    dm4p = minmod4( 4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1 )
-    dm4m = minmod4( 4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0 )
-
-    eps = 1.0e-20
-    Gmd = 0.5*(1.0 - dm4p/((qp-q0)+eps))
-    Glc = 0.5*(1.0 + dm4m/((q0-qm)+eps))
-    qmd = q0 + Gmd*(qp - q0)
-    qlc = q0 + Glc*(qul - q0)
-
-    qmin = max(min(q0,qp,qmd),min(q0,qul,qlc))
-    qmax = min(max(q0,qp,qmd),max(q0,qul,qlc))
-    q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
-    if ((abs(maxval(cfl)-minval(cfl)) > 1.0e-8) .and. &
-       ((qmax-qmin) > (q0_max-q0_min))) theta = 0.0
-    sg = sign(1.0,((wpl-qmin)*(wpl-qmax)))
-    wpl = 0.5*(wpl + wpm) - 0.5*sg*(wpl - wpm)
-
-  endif
-
-  wpl = wpm + theta*(wpl - wpm)
 
 end subroutine weno5NM_reconstruction_interface
 
@@ -346,7 +292,7 @@ pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2
   real, intent(in) :: qm3, qm2, qm1, q0, qp1, qp2, qp3 !< tracer concentration [conc]
   real, intent(in) :: cfl(3)  !< absolute value of the advective upwind-cell CFL number [nondim]
   real, intent(in) :: u     !< advective flux [H L2 ~> m3 or kg]
-  real, intent(out) :: wpl         !< weno tracer concentrations at the cell interface +1/2 [conc]
+  real, intent(out) :: wpl      !< weno tracer concentrations at the cell interface +1/2 [conc]
 
   real :: P0, P1, P2, P3     ! reconstructed polynomials
   real :: b0, b1, b2, b3     ! smoothness indicator
@@ -356,106 +302,77 @@ pure subroutine weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2
   real, parameter :: C1_12 = 1.0/12.0  ! [nondim]
   real :: dm1, dd0, dd1, dm4p, dm4m
   real :: qul, qmd, qlc, qmin, qmax, alpha
-  real :: Gmd, Glc, theta
-  real :: aL, aR, a6, mA, dA, Tm, Tp, wpm, sg
+  real :: Gmd, Glc, theta, sg
   real :: q0_min, q0_max, qmp
 
-  theta = 1.0
-  if (maxval(cfl) > 0.3) theta = 0.0
+  d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
 
-  Tm = qm1 ; Tp = qp1
-  if (u < 0.0) then ; Tm = qp1 ; Tp = qm1 ; endif
-  aL = ( 5.*q0 + ( 2.*Tm - Tp ) )/6.
-  aL = max( min(q0,Tm), aL) ; aL = min( max(q0,Tm), aL)
-  aR = ( 5.*q0 + ( 2.*Tp - Tm ) )/6.
-  aR = max( min(q0,Tp), aR) ; aR = min( max(q0,Tp), aR)
+  ! 1st stencil
+  P0 = (((-3.0*qm3 + 13.0*qm2) - 23.0*qm1) + 25.0*q0)*C1_12
+  b0 = ((qm3*((547.0*qm3 - 3882.0*qm2) + (4642.0*qm1 - 1854.0*q0))) + &
+      (qm2*((7043.0*qm2 - 17246.0*qm1) + 7042.0*q0))) + &
+      ((qm1*(11003.0*qm1 - 9402.0*q0)) + 2107.0*(q0*q0))
 
-  dA = aR - aL ; mA = 0.5*( aR + aL )
-  if ((Tp-q0)*(q0-Tm) <= 0.) then
-    aL = q0 ; aR = q0 ! PCM for local extrema
-  elseif ( dA*(q0-mA) > (dA*dA)/6. ) then
-    aL = (3.*q0) - 2.*aR
-  elseif ( dA*(q0-mA) < - (dA*dA)/6. ) then
-    aR = (3.*q0) - 2.*aL
+  ! 2nd stencil
+  P1 = (((qm2 - 5.0*qm1) + 13.0*q0) + 3.0*qp1)*C1_12
+  b1 = ((qm2*((267.0*qm2 - 1642.0*qm1) + (1602.0*q0 - 494.0*qp1))) + &
+         (qm1*((2843.0*qm1 - 5966.0*q0) + 1922.0*qp1))) + &
+         ((q0*(3443.0*q0 - 2522.0*qp1)) + 547.0*(qp1*qp1))
+
+  ! 3rd stencil
+  P2 = (((-qm1 + 7.0*q0) + 7.0*qp1) - qp2)*C1_12
+  b2 = ((qm1*((547.0*qm1 - 2522.0*q0) + (1922.0*qp1 - 494.0*qp2))) + &
+         (q0*((3443.0*q0 - 5966.0*qp1) + 1602.0*qp2))) + &
+         ((qp1*(2843.0*qp1 - 1642.0*qp2)) + 267.0*(qp2*qp2))
+
+  ! 4rd stencil
+  P3 = (((3.0*q0 + 13.0*qp1) - 5.0*qp2) + qp3)*C1_12
+  b3 = ((q0*((2107.0*q0 - 9402.0*qp1) + (7042.0*qp2 - 1854.0*qp3))) + &
+         (qp1*((11003.0*qp1 - 17246.0*qp2) + 4642.0*qp3))) + &
+         ((qp2*(7043.0*qp2 - 3882.0*qp3)) + 547.0*(qp3*qp3))
+
+  ! Alpha values
+  eps = 1.0e-20
+  !tau = abs(b3-b0)
+  tau = abs((b0-b3) + 3.0*(b1-b2))
+  w0 = d0*weight_fac(tau, b0)
+  w1 = d1*weight_fac(tau, b1)
+  w2 = d2*weight_fac(tau, b2)
+  w3 = d3*weight_fac(tau, b3)
+
+  ! Normalization
+  wnorm = 1.0/((w0 + w1) + (w2 + w3))
+  w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm ; w3 = w3*wnorm
+  wpl = w0*P0 + w1*P1 + w2*P2 + w3*P3
+
+  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
+  alpha   = (1.0 - cfl(2))/cfl(2)
+  !alpha = 4.0
+  qul = q0 + alpha*(q0-qm1)
+  qmp = q0 + minmod2((qp1-q0),(qul-q0))
+
+  dm1 = qm2 - 2.0*qm1 + q0
+  dd0 = qp1 - 2.0*q0  + qm1
+  dd1 = qp2 - 2.0*qp1 + q0
+
+  dm4p = minmod4( 4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1 )
+  dm4m = minmod4( 4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0 )
+
+  Gmd = 0.5*(1.0 - dm4p/((qp1-q0)+eps))
+  Glc = 0.5*(1.0 + dm4m/((q0-qm1)+eps))
+  qmd = q0 + Gmd*(qp1 - q0)
+  qlc = q0 + Glc*(qul - q0)
+
+  qmin = max(min(q0,qp1,qmd),min(q0,qul,qlc))
+  qmax = min(max(q0,qp1,qmd),max(q0,qul,qlc))
+  q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
+  sg = sign(1.0,((wpl-qmin)*(wpl-qmax)))
+  !wpl = max( min(qmin,qmax), wpl) ; wpl = min( max(qmin,qmax), wpl)
+
+  if (((maxval(cfl) > 0.4) .or. (abs(maxval(cfl)-minval(cfl)) > 0.1)) .or. (sg > 0.0) &
+          .or. ((qmax-qmin) > (q0_max-q0_min))) then
+    call weno5z_reconstruction_interface(wpl, qm2, qm1, q0, qp1, qp2, cfl, u)
   endif
-
-  a6 = 6.0*q0 - 3.0 * (aR + aL) ! Curvature
-  if (u >= 0.0) then
-    wpm = (aR - 0.5*cfl(2)*((aR-aL) - a6*(1.0 - 2.0/3.0 * cfl(2))))
-  else
-    wpm = (aL + 0.5*cfl(2)*((aR-aL) + a6*(1.0 - 2.0/3.0 * cfl(2))))
-  endif
-
-  wpl = 0.0
-  if (theta > 0.0) then
-    d0 = 1.0/35.0 ;  d1 = 12.0/35.0 ; d2 = 18.0/35.0 ; d3 = 4.0/35.0
-
-    ! 1st stencil
-    P0 = (((-3.0*qm3 + 13.0*qm2) - 23.0*qm1) + 25.0*q0)*C1_12
-    b0 = ((qm3*((547.0*qm3 - 3882.0*qm2) + (4642.0*qm1 - 1854.0*q0))) + &
-        (qm2*((7043.0*qm2 - 17246.0*qm1) + 7042.0*q0))) + &
-        ((qm1*(11003.0*qm1 - 9402.0*q0)) + 2107.0*(q0*q0))
-
-    ! 2nd stencil
-    P1 = (((qm2 - 5.0*qm1) + 13.0*q0) + 3.0*qp1)*C1_12
-    b1 = ((qm2*((267.0*qm2 - 1642.0*qm1) + (1602.0*q0 - 494.0*qp1))) + &
-           (qm1*((2843.0*qm1 - 5966.0*q0) + 1922.0*qp1))) + &
-           ((q0*(3443.0*q0 - 2522.0*qp1)) + 547.0*(qp1*qp1))
-
-    ! 3rd stencil
-    P2 = (((-qm1 + 7.0*q0) + 7.0*qp1) - qp2)*C1_12
-    b2 = ((qm1*((547.0*qm1 - 2522.0*q0) + (1922.0*qp1 - 494.0*qp2))) + &
-           (q0*((3443.0*q0 - 5966.0*qp1) + 1602.0*qp2))) + &
-           ((qp1*(2843.0*qp1 - 1642.0*qp2)) + 267.0*(qp2*qp2))
-
-    ! 4rd stencil
-    P3 = (((3.0*q0 + 13.0*qp1) - 5.0*qp2) + qp3)*C1_12
-    b3 = ((q0*((2107.0*q0 - 9402.0*qp1) + (7042.0*qp2 - 1854.0*qp3))) + &
-           (qp1*((11003.0*qp1 - 17246.0*qp2) + 4642.0*qp3))) + &
-           ((qp2*(7043.0*qp2 - 3882.0*qp3)) + 547.0*(qp3*qp3))
-
-    ! Alpha values
-    !tau = abs(b3 - 3.0*b2 + 3.0*b1 - b0)
-    tau = abs(b3-b0)
-    w0 = d0*weight_fac(tau, b0)
-    w1 = d1*weight_fac(tau, b1)
-    w2 = d2*weight_fac(tau, b2)
-    w3 = d3*weight_fac(tau, b3)
-
-    ! Normalization
-    wnorm = 1.0/((w0 + w1) + (w2 + w3))
-    w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm ; w3 = w3*wnorm
-    wpl = w0*P0 + w1*P1 + w2*P2 + w3*P3
-
-    ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
-    alpha   = (1.0 - cfl(2))/cfl(2)
-    qul = q0 + alpha*(q0-qm1)
-    qmp = q0 + minmod2((qp1-q0),(qul-q0))
-
-    dm1 = qm2 - 2.0*qm1 + q0
-    dd0 = qp1 - 2.0*q0  + qm1
-    dd1 = qp2 - 2.0*qp1 + q0
-
-    dm4p = minmod4( 4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1 )
-    dm4m = minmod4( 4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0 )
-
-    eps = 1.0e-20
-    Gmd = 0.5*(1.0 - dm4p/((qp1-q0)+eps))
-    Glc = 0.5*(1.0 + dm4m/((q0-qm1)+eps))
-    qmd = q0 + Gmd*(qp1 - q0)
-    qlc = q0 + Glc*(qul - q0)
-
-    qmin = max(min(q0,qp1,qmd),min(q0,qul,qlc))
-    qmax = min(max(q0,qp1,qmd),max(q0,qul,qlc))
-    q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
-    if ((abs(maxval(cfl)-minval(cfl)) > 1.0e-8) .and. &
-       ((qmax-qmin) > (q0_max-q0_min))) theta = 0.0
-    sg = sign(1.0,((wpl-qmin)*(wpl-qmax)))
-    wpl = 0.5*(wpl + wpm) - 0.5*sg*(wpl - wpm)
-
-  endif
-
-  wpl = wpm + theta*(wpl - wpm)
 
 end subroutine weno7z_reconstruction_interface
 
@@ -491,86 +408,55 @@ pure subroutine weno9_reconstruction_interface(wpl, qm4, qm3, qm2, qm1, &
   real :: eps,wnorm, tau
   real :: dm1, dd0, dd1, dm4p, dm4m
   real :: qul, qmd, qlc, qmin, qmax, alpha
-  real :: Gmd, Glc, theta
-  real :: aL, aR, a6, mA, dA, Tm, Tp, wpm, sg
+  real :: Gmd, Glc, theta, sg
   real :: q0_min, q0_max, qmp
 
-  theta = 1.0
-  if (maxval(cfl) > 0.3) theta = 0.0
+  d0 = 1.0/126.0 ; d1 = 10.0/63.0 ; d2 = 10.0/21.0 ; d3 = 20.0/63.0 ; d4 = 5.0/126.0
 
-  Tm = qm1 ; Tp = qp1
-  if (u < 0.0) then ; Tm = qp1 ; Tp = qm1 ; endif
-  aL = ( 5.*q0 + ( 2.*Tm - Tp ) )/6.
-  aL = max( min(q0,Tm), aL) ; aL = min( max(q0,Tm), aL)
-  aR = ( 5.*q0 + ( 2.*Tp - Tm ) )/6.
-  aR = max( min(q0,Tp), aR) ; aR = min( max(q0,Tp), aR)
+  ! Compute flux at the right side of i+1/2
+  call weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, &
+          qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
 
-  dA = aR - aL ; mA = 0.5*( aR + aL )
-  if ((Tp-q0)*(q0-Tm) <= 0.) then
-    aL = q0 ; aR = q0 ! PCM for local extrema
-  elseif ( dA*(q0-mA) > (dA*dA)/6. ) then
-    aL = (3.*q0) - 2.*aR
-  elseif ( dA*(q0-mA) < - (dA*dA)/6. ) then
-    aR = (3.*q0) - 2.*aL
+  ! Alpha values
+  tau = abs(b0 - b4)
+  w0 = d0*weight_fac(tau, b0)
+  w1 = d1*weight_fac(tau, b1)
+  w2 = d2*weight_fac(tau, b2)
+  w3 = d3*weight_fac(tau, b3)
+  w4 = d4*weight_fac(tau, b4)
+
+  ! Normalization
+  wnorm = 1.0/(((w0 + w1) + (w2 + w3)) + w4)
+  w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
+  w3 = w3*wnorm ; w4 = w4*wnorm
+  wpl = w0*P0 + w1*P1 + w2*P2 + w3*P3 + w4*P4
+
+  ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
+  alpha = (1.0-cfl(2))/cfl(2)
+  qul = q0 + alpha*(q0-qm1)
+  qmp = q0 + minmod2((qp1-q0),(qul-q0))
+
+  dm1 = qm2 - 2.0*qm1 + q0
+  dd0 = qp1 - 2.0*q0  + qm1
+  dd1 = qp2 - 2.0*qp1 + q0
+  dm4p = minmod4( 4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1 )
+  dm4m = minmod4( 4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0 )
+
+  eps = 1.0e-20
+  Gmd = 0.5*(1.0 - dm4p/((qp1-q0)+eps))
+  Glc = 0.5*(1.0 + dm4m/((q0-qm1)+eps))
+  qmd = q0 + Gmd*(qp1 - q0)
+  qlc = q0 + Glc*(qul - q0)
+
+  qmin = max(min(q0,qp1,qmd),min(q0,qul,qlc))
+  qmax = min(max(q0,qp1,qmd),max(q0,qul,qlc))
+  q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
+  sg = sign(1.0,((wpl-qmin)*(wpl-qmax)))
+
+  if (((maxval(cfl) > 0.4) .or. (abs(maxval(cfl)-minval(cfl)) > 0.1)) .or. (sg > 0.0) &
+        .or. ((qmax-qmin) > (q0_max-q0_min))) then
+    call weno7z_reconstruction_interface(wpl, qm3, qm2, qm1, q0, qp1, qp2, qp3, cfl, u)
   endif
-
-  a6 = 6.0*q0 - 3.0 * (aR + aL) ! Curvature
-  if (u >= 0.0) then
-    wpm = (aR - 0.5*cfl(2)*((aR-aL) - a6*(1.0 - 2.0/3.0 * cfl(2))))
-  else
-    wpm = (aL + 0.5*cfl(2)*((aR-aL) + a6*(1.0 - 2.0/3.0 * cfl(2))))
-  endif
-
-  wpl = 0.0
-  if (theta > 0.0) then
-    d0 = 1.0/126.0 ; d1 = 10.0/63.0 ; d2 = 10.0/21.0 ; d3 = 20.0/63.0 ; d4 = 5.0/126.0
-
-    ! Compute flux at the right side of i+1/2
-    call weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, &
-            qm4, qm3, qm2, qm1, q0, qp1, qp2, qp3, qp4)
-
-    ! Alpha values
-    tau = abs(b0 - b4)
-    w0 = d0*weight_fac(tau, b0)
-    w1 = d1*weight_fac(tau, b1)
-    w2 = d2*weight_fac(tau, b2)
-    w3 = d3*weight_fac(tau, b3)
-    w4 = d4*weight_fac(tau, b4)
-
-    ! Normalization
-    wnorm = 1.0/(((w0 + w1) + (w2 + w3)) + w4)
-    w0 = w0*wnorm ; w1 = w1*wnorm ; w2 = w2*wnorm
-    w3 = w3*wnorm ; w4 = w4*wnorm
-    wpl = w0*P0 + w1*P1 + w2*P2 + w3*P3 + w4*P4
-
-    ! Apply monotonicity preserving limiter based on Suresh & Huynh (1997)
-    alpha = (1.0-cfl(2))/cfl(2)
-    qul = q0 + alpha*(q0-qm1)
-    qmp = q0 + minmod2((qp1-q0),(qul-q0))
-
-    dm1 = qm2 - 2.0*qm1 + q0
-    dd0 = qp1 - 2.0*q0  + qm1
-    dd1 = qp2 - 2.0*qp1 + q0
-    dm4p = minmod4( 4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1 )
-    dm4m = minmod4( 4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0 )
-
-    eps = 1.0e-20
-    Gmd = 0.5*(1.0 - dm4p/((qp1-q0)+eps))
-    Glc = 0.5*(1.0 + dm4m/((q0-qm1)+eps))
-    qmd = q0 + Gmd*(qp1 - q0)
-    qlc = q0 + Glc*(qul - q0)
-
-    qmin = max(min(q0,qp1,qmd),min(q0,qul,qlc))
-    qmax = min(max(q0,qp1,qmd),max(q0,qul,qlc))
-    q0_min = min(q0,qmp) ; q0_max = max(q0,qmp)
-    if ((abs(maxval(cfl)-minval(cfl)) > 1.0e-8) .and. &
-       ((qmax-qmin) > (q0_max-q0_min))) theta = 0.0
-    sg = sign(1.0,((wpl-qmin)*(wpl-qmax)))
-    wpl = 0.5*(wpl + wpm) - 0.5*sg*(wpl - wpm)
-
-  endif
-
-  wpl = wpm + theta*(wpl - wpm)
 
 end subroutine weno9_reconstruction_interface
 
@@ -580,7 +466,8 @@ pure subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2
   real, intent(out) :: P0, P1, P2, P3, P4    !< recontructed polynomials
   real, intent(out) :: b0, b1, b2, b3, b4    !< smoothness indicator
 
-  real :: qx, qx2, qx3, qx4, L1, L2, L3, L4
+  real :: qx, qx2, qx3, qx4 ! Coefficients for polynomial reconstruction on each stencil
+  real :: L1, L2, L3, L4 ! Legendre polynomials at x=1/2
 
   L1 = 0.5 ; L2 = 1.0/6.0 ; L3 = 1.0/20.0 ; L4 = 1.0/70.0
 
@@ -637,17 +524,14 @@ pure subroutine weno9_poly(P0, P1, P2, P3, P4, b0, b1, b2, b3, b4, qm4, qm3, qm2
 end subroutine weno9_poly
 
 !> ppm reconstruction flux
-subroutine PPM_reconstruction(wq_ppm, q, u, cfl, qext)
-  real, intent(in) :: q(3)     !< tracer concentration for 3-stencil wide [conc]
+pure subroutine PPM_reconstruction(wq_ppm, qm, q0, qp, u, cfl, qext)
+  real, intent(in) :: qm, q0, qp !< tracer concentration for 3-stencil wide [conc]
   real, intent(in) :: u        !< advective flux [H L2 ~> m3 or kg]
   real, intent(in) :: cfl      !< absolute value of the advective upwind-cell CFL number [nondim]
   real, intent(in) :: qext     !< check local extrema
   real, intent(out) :: wq_ppm  !< PPM tracer concentration at the cell interface i+1/2  [conc]
 
-  real :: aL, aR, dA, mA, a6
-  real :: qm, q0, qp
-
-  qm = q(1) ; q0 = q(2) ; qp = q(3)
+  real :: aL, aR, dA, mA, a6 ! local variables
 
   aL = ( 5.*q0 + ( 2.*qm - qp ) )/6. ! H3 estimate
   aL = max( min(q0,qm), aL) ; aL = min( max(q0,qm), aL) ! Bound
@@ -674,8 +558,8 @@ subroutine PPM_reconstruction(wq_ppm, q, u, cfl, qext)
 end subroutine PPM_reconstruction
 
 pure elemental function minmod2(a,b) result(r)
-  real, intent(in) :: a, b
-  real :: r
+  real, intent(in) :: a, b !< values to find the minmod for
+  real :: r   ! minmod value
 
   ! 0 if opposite sign or either is zero; otherwise sign(a)*min(|a|,|b|)
   if (a*b <= 0.0) then
@@ -686,8 +570,8 @@ pure elemental function minmod2(a,b) result(r)
 end function minmod2
 
 pure elemental function minmod4(a,b,c,d) result(r)
-  real, intent(in) :: a, b, c, d
-  real :: r
+  real, intent(in) :: a, b, c, d !< values to find the minmod for
+  real :: r ! minmod values
 
   if ( (a*b <= 0.0) .or. (a*c <= 0.0) .or. (a*d <= 0.0) ) then
     r = 0.0
@@ -702,8 +586,8 @@ pure function weight_fac(tau, b) result(factor)
   real, intent(in)  :: b    !< The smoothness indicator [A ~> a]
   real :: factor            !< The factor for the weight [nondim]
 
-  !factor = 1.0e40; if (abs(b) > 1.0e-20*tau) factor = (1.0 + tau / b)**2
-  factor = (1.0 + tau / (b+1.0e-20))**2
+  !factor = 1.0e40; if (abs(b) > 1.0e-20*tau) factor = (1.0 + (tau / b)**2)
+  factor = (1.0 + (tau / (b+1.0e-20))**2)
 
 end function weight_fac
 

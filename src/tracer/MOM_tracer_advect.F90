@@ -422,8 +422,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
   real :: order3, order5, order7, order9
-  real :: T3(3), T5(5), T7(7), T9(9)
-  real :: wq, qext, dx(5)
+  real :: T3(3), T5(5), T7(7), T9(9), wq, qext, dx(5)
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -613,12 +612,14 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
           order3 = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*G%mask2dCu(I_up+1,j)
           order5 = order3*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
+          if (minval(hprev(i_up-2:i_up+2,j,k)) <= G%areaT(i,j)*GV%Angstrom_H) order5 = 0.0
 
           if ( (advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
-            order7 = order5*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
+            order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
+            if (minval(hprev(i_up-3:i_up+3,j,k)) <= G%areaT(i,j)*GV%Angstrom_H) order5 = 0.0
             T7(:) = T_tmp(i_up-3:i_up+3,m)
           elseif (advect_schemes(m) == ADVECT_WENO9) then
-            order9 = order7*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
+            order9 = order7*G%mask2dCu(I_up-5,j)*G%mask2dCu(I_up+4,j)
             T9 = T_tmp(i_up-4:i_up+4,m)
           endif
 
@@ -630,7 +631,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             call weno5_reconstruction(wq, T5, uhh(I), CFL(I-1:I+1))
           else
             qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
-            call PPM_reconstruction(wq, T3, uhh(I), CFL(I), qext)
+            call PPM_reconstruction(wq, T3(1), T3(2), T3(3), uhh(I), CFL(I), qext)
           endif
           flux_x(I,j,m) = uhh(I)*wq
         enddo
@@ -855,8 +856,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
   real :: order3, order5, order7, order9
-  real :: T3(3), T5(5), T7(7), T9(9)
-  real :: wq, qext, dy(5), vv
+  real :: T3(3), T5(5), T7(7), T9(9), wq, qext, dy(5), vv
   real, dimension(SZIB_(G), SZJB_(G)) :: CFL_iJ
   logical :: isWENO
 
@@ -1095,12 +1095,14 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
           order3 = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up+1)
           order5 = order3*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
+          if (minval(hprev(i,j_up-2:j_up+2,k)) <= G%areaT(i,j)*GV%Angstrom_H) order5 = 0.0
 
           if ((advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
-            order7 = order5*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
+            order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
+            if (minval(hprev(i,j_up-3:j_up+3,k)) <= G%areaT(i,j)*GV%Angstrom_H) order5 = 0.0
             T7 = T_tmp(i,m,j_up-3:j_up+3)
           elseif (advect_schemes(m) == ADVECT_WENO9) then
-            order9 = order7*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
+            order9 = order7*G%mask2dCv(i,J_up-5)*G%mask2dCv(i,J_up+4)
             T9 = T_tmp(i,m,j_up-4:j_up+4)
           endif
 
@@ -1112,7 +1114,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             call weno5_reconstruction(wq, T5, vhh(i,J), CFL_iJ(i,J-1:J+1))
           else
             qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
-            call PPM_reconstruction(wq, T3, vhh(i,J), CFL(i), qext)
+            call PPM_reconstruction(wq, T3(1), T3(2), T3(3), vhh(i,J), CFL(i), qext)
           endif
           flux_y(i,m,J) = vhh(i,J)*wq
         enddo
