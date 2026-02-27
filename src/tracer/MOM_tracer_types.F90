@@ -58,6 +58,8 @@ type, public :: tracer_type
   real, dimension(:,:,:), pointer :: Trxh_prev      => NULL() !< layer integrated tracer concentration array
                                                               !! at a previous timestep used for diagnostics
                                                               !! [CU H ~> conc m or conc kg m-2]
+  real, dimension(:,:,:), pointer :: cfl_x         => NULL()  !< diagnostic x-advective cfl
+  real, dimension(:,:,:), pointer :: cfl_y         => NULL()  !< diagnostic y-advective cfl
 
   character(len=32)               :: name                     !< tracer name used for diagnostics and error messages
   character(len=64)               :: units                    !< Physical dimensions of the tracer concentration
@@ -116,6 +118,7 @@ type, public :: tracer_type
   integer :: id_tr_vardec = -1
   integer :: id_zint = -1, id_zint_100m = -1, id_surf = -1
   integer :: id_net_surfflux = -1, id_NLT_tendency = -1, id_NLT_budget = -1
+  integer :: id_cflx = -1, id_cfly = -1
   !>@}
 end type tracer_type
 

@@ -13,6 +13,7 @@ use MOM_grid,               only : ocean_grid_type
 use MOM_hor_index,          only : hor_index_type
 use MOM_interface_heights,  only : thickness_to_dz
 use MOM_io,                 only : vardesc, var_desc, query_vardesc
+use MOM_io,                 only : file_exists, MOM_read_data, slasher
 use MOM_open_boundary,      only : ocean_OBC_type
 use MOM_restart,            only : query_initialized, MOM_restart_CS
 use MOM_spatial_means,      only : global_mass_int_EFP
@@ -66,7 +67,9 @@ type, public :: dye_tracer_CS ; private
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< A pointer to the restart control structure
 
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
-  logical :: tracers_may_reinit = .true. !< If true the tracers may be initialized if not found in a restart file
+  !logical :: tracers_may_reinit = .true. !< If true the tracers may be initialized if not found in a restart file
+  logical :: tracers_may_reinit   !< If true the tracers may be initialized if not found in a restart file
+  character(len=200) :: tracer_IC_file !< The full path to the IC file, or " " to initialize internally.
 end type dye_tracer_CS
 
 contains
@@ -96,6 +99,7 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   integer :: isd, ied, jsd, jed, nz, m
   integer :: advect_scheme   ! Advection scheme value for this tracer
   character(len=256) :: mesg ! Advection scheme name for this tracer
+  character(len=200) :: inputdir
 
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
@@ -121,51 +125,71 @@ function register_dye_tracer(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   allocate(CS%id_tr_dia_diff(CS%ntr))
   CS%id_tr_dia_diff(:) = -1
 
-  CS%dye_source_minlon(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MINLON", CS%dye_source_minlon, &
-                 "This is the starting longitude at which we start injecting dyes.", &
-                 units="degrees_E", fail_if_missing=.true.)
-               ! units=G%x_ax_unit_short, fail_if_missing=.true.)
-  if (minval(CS%dye_source_minlon(:)) < -1.e29) &
-    call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MINLON ")
+  call get_param(param_file, mdl, "REGIONAL_DYES_IC_FILE", CS%tracer_IC_file, &
+                 "The name of a file from which to read the initial "//&
+                 "conditions for the regional dyes tracers, or blank to initialize "//&
+                 "them internally.", default=" ")
+  if (len_trim(CS%tracer_IC_file) >= 1) then
+    call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
+    inputdir = slasher(inputdir)
+    CS%tracer_IC_file = trim(inputdir)//trim(CS%tracer_IC_file)
+    call log_param(param_file, mdl, "INPUTDIR/REGIONAL_DYES_IC_FILE", &
+                   CS%tracer_IC_file)
+  endif
 
-  CS%dye_source_maxlon(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MAXLON", CS%dye_source_maxlon, &
-                 "This is the ending longitude at which we finish injecting dyes.", &
-                 units="degrees_E", fail_if_missing=.true.)
-               ! units=G%x_ax_unit_short, fail_if_missing=.true.)
-  if (minval(CS%dye_source_maxlon(:)) < -1.e29) &
-    call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXLON ")
+  call get_param(param_file, mdl, "TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
+                 "If true, tracers may go through the initialization code "//&
+                 "if they are not found in the restart files.  Otherwise "//&
+                 "it is a fatal error if the tracers are not found in the "//&
+                 "restart files of a restarted run.", default=.true.)
 
-  CS%dye_source_minlat(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MINLAT", CS%dye_source_minlat, &
-                 "This is the starting latitude at which we start injecting dyes.", &
-                 units="degrees_N", fail_if_missing=.true.)
-               ! units=G%y_ax_unit_short, fail_if_missing=.true.)
-  if (minval(CS%dye_source_minlat(:)) < -1.e29) &
-    call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MINLAT ")
+  if (len_trim(CS%tracer_IC_file) < 1) then
+    CS%dye_source_minlon(:) = -1.e30
+    call get_param(param_file, mdl, "DYE_SOURCE_MINLON", CS%dye_source_minlon, &
+                   "This is the starting longitude at which we start injecting dyes.", &
+                   units="degrees_E", fail_if_missing=.true.)
+                 ! units=G%x_ax_unit_short, fail_if_missing=.true.)
+    if (minval(CS%dye_source_minlon(:)) < -1.e29) &
+      call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MINLON ")
 
-  CS%dye_source_maxlat(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MAXLAT", CS%dye_source_maxlat, &
-                 "This is the ending latitude at which we finish injecting dyes.", &
-                 units="degrees_N", fail_if_missing=.true.)
-               ! units=G%y_ax_unit_short, fail_if_missing=.true.)
-  if (minval(CS%dye_source_maxlat(:)) < -1.e29) &
-    call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXLAT ")
+    CS%dye_source_maxlon(:) = -1.e30
+    call get_param(param_file, mdl, "DYE_SOURCE_MAXLON", CS%dye_source_maxlon, &
+                   "This is the ending longitude at which we finish injecting dyes.", &
+                   units="degrees_E", fail_if_missing=.true.)
+                 ! units=G%x_ax_unit_short, fail_if_missing=.true.)
+    if (minval(CS%dye_source_maxlon(:)) < -1.e29) &
+      call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXLON ")
 
-  CS%dye_source_mindepth(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MINDEPTH", CS%dye_source_mindepth, &
-                 "This is the minimum depth at which we inject dyes.", &
-                 units="m", scale=US%m_to_Z, fail_if_missing=.true.)
-  if (minval(CS%dye_source_mindepth(:)) < -1.e29*US%m_to_Z) &
-    call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MINDEPTH")
+    CS%dye_source_minlat(:) = -1.e30
+    call get_param(param_file, mdl, "DYE_SOURCE_MINLAT", CS%dye_source_minlat, &
+                   "This is the starting latitude at which we start injecting dyes.", &
+                   units="degrees_N", fail_if_missing=.true.)
+                 ! units=G%y_ax_unit_short, fail_if_missing=.true.)
+    if (minval(CS%dye_source_minlat(:)) < -1.e29) &
+      call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MINLAT ")
 
-  CS%dye_source_maxdepth(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MAXDEPTH", CS%dye_source_maxdepth, &
-                 "This is the maximum depth at which we inject dyes.", &
-                 units="m", scale=US%m_to_Z, fail_if_missing=.true.)
-  if (minval(CS%dye_source_maxdepth(:)) < -1.e29*US%m_to_Z) &
-    call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXDEPTH")
+    CS%dye_source_maxlat(:) = -1.e30
+    call get_param(param_file, mdl, "DYE_SOURCE_MAXLAT", CS%dye_source_maxlat, &
+                   "This is the ending latitude at which we finish injecting dyes.", &
+                   units="degrees_N", fail_if_missing=.true.)
+                 ! units=G%y_ax_unit_short, fail_if_missing=.true.)
+    if (minval(CS%dye_source_maxlat(:)) < -1.e29) &
+      call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXLAT ")
+
+    CS%dye_source_mindepth(:) = -1.e30
+    call get_param(param_file, mdl, "DYE_SOURCE_MINDEPTH", CS%dye_source_mindepth, &
+                   "This is the minimum depth at which we inject dyes.", &
+                   units="m", scale=US%m_to_Z, fail_if_missing=.true.)
+    if (minval(CS%dye_source_mindepth(:)) < -1.e29*US%m_to_Z) &
+      call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MINDEPTH")
+
+    CS%dye_source_maxdepth(:) = -1.e30
+    call get_param(param_file, mdl, "DYE_SOURCE_MAXDEPTH", CS%dye_source_maxdepth, &
+                   "This is the maximum depth at which we inject dyes.", &
+                   units="m", scale=US%m_to_Z, fail_if_missing=.true.)
+    if (minval(CS%dye_source_maxdepth(:)) < -1.e29*US%m_to_Z) &
+      call MOM_error(FATAL, "register_dye_tracer: Not enough values provided for DYE_SOURCE_MAXDEPTH")
+  endif
 
   allocate(CS%tr(isd:ied,jsd:jed,nz,CS%ntr), source=0.0)
 
@@ -246,28 +270,42 @@ subroutine initialize_dye_tracer(restart, day, G, GV, US, h, diag, OBC, CS, spon
         diag%axesTi, day, trim(longname), 'conc H s-1', conversion=GV%H_to_MKS*US%s_to_T)
   enddo
 
-  ! Establish location of source
-  do j=G%jsc,G%jec
-    call thickness_to_dz(h, tv, dz, j, G, GV)
-    do m=1,CS%ntr ; do i=G%isc,G%iec
-      ! A dye is set dependent on the center of the cell being inside the rectangular box.
-      if (CS%dye_source_minlon(m) < G%geoLonT(i,j) .and. &
-          CS%dye_source_maxlon(m) >= G%geoLonT(i,j) .and. &
-          CS%dye_source_minlat(m) < G%geoLatT(i,j) .and. &
-          CS%dye_source_maxlat(m) >= G%geoLatT(i,j) .and. &
-          G%mask2dT(i,j) > 0.0 ) then
-        z_bot = 0.0
-        do k = 1, GV%ke
-          z_bot = z_bot - dz(i,k)
-          z_center = z_bot + 0.5*dz(i,k)
-          if ( z_center > -CS%dye_source_maxdepth(m) .and. &
-               z_center < -CS%dye_source_mindepth(m) ) then
-            CS%tr(i,j,k,m) = 1.0
+  if ((CS%tracers_may_reinit .and. .not. &
+        query_initialized(CS%tr(:,:,:,m), var_name, CS%restart_CSp))) then
+    if (len_trim(CS%tracer_IC_file) >= 1) then
+      !  Read the tracer concentrations from a netcdf file.
+      if (.not.file_exists(CS%tracer_IC_file, G%Domain)) &
+        call MOM_error(FATAL, "initialize_dye_tracer: Unable to open "// &
+                        CS%tracer_IC_file)
+      do m=1,CS%ntr
+        call query_vardesc(CS%tr_desc(m), var_name, caller="initialize_dye_tracer")
+        call MOM_read_data(CS%tracer_IC_file, trim(var_name), CS%tr(:,:,:,m), G%Domain)
+      enddo
+    else
+      ! Establish location of source
+      do j=G%jsc,G%jec
+        call thickness_to_dz(h, tv, dz, j, G, GV)
+        do m=1,CS%ntr ; do i=G%isc,G%iec
+          ! A dye is set dependent on the center of the cell being inside the rectangular box.
+          if (CS%dye_source_minlon(m) < G%geoLonT(i,j) .and. &
+              CS%dye_source_maxlon(m) >= G%geoLonT(i,j) .and. &
+              CS%dye_source_minlat(m) < G%geoLatT(i,j) .and. &
+              CS%dye_source_maxlat(m) >= G%geoLatT(i,j) .and. &
+              G%mask2dT(i,j) > 0.0 ) then
+            z_bot = 0.0
+            do k = 1, GV%ke
+              z_bot = z_bot - dz(i,k)
+              z_center = z_bot + 0.5*dz(i,k)
+              if ( z_center > -CS%dye_source_maxdepth(m) .and. &
+                   z_center < -CS%dye_source_mindepth(m) ) then
+                CS%tr(i,j,k,m) = 1.0
+              endif
+            enddo
           endif
-        enddo
-      endif
-    enddo ; enddo
-  enddo
+        enddo ; enddo
+      enddo
+    endif
+  endif
 
 end subroutine initialize_dye_tracer
 

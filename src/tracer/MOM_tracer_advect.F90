@@ -19,10 +19,10 @@ use MOM_tracer_registry, only : tracer_registry_type, tracer_type
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_tracer_advect_schemes, only : ADVECT_PLM, ADVECT_PPMH3, ADVECT_PPM
-use MOM_tracer_advect_schemes, only : ADVECT_WENO5, ADVECT_WENO7, ADVECT_WENO9
+use MOM_tracer_advect_schemes, only : ADVECT_WENO5, ADVECT_WENO7
 use MOM_tracer_advect_schemes, only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
 use MOM_tracer_advect_weno, only : weno5_reconstruction, PPM_reconstruction
-use MOM_tracer_advect_weno, only : weno7_reconstruction, weno9_reconstruction
+use MOM_tracer_advect_weno, only : weno7_reconstruction
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -100,7 +100,6 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
                                        ! can be simply discarded [H L2 ~> m3 or kg].
 
   real :: landvolfill                   ! An arbitrary? nonzero cell volume [H L2 ~> m3 or kg].
-  logical :: use_PPM_stencil            ! If true, use the correct PPM stencil width.
   real :: Idt                           ! 1/dt [T-1 ~> s-1].
   logical :: domore_u(SZJ_(G),SZK_(GV))  ! domore_u and domore_v indicate whether there is more
   logical :: domore_v(SZJB_(G),SZK_(GV)) ! advection to be done in the corresponding row or column.
@@ -114,6 +113,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   integer :: IsdB, IedB, JsdB, JedB
   integer :: stencil_local          ! Stencil for the local adection scheme
   integer :: local_advect_scheme(Reg%ntr) ! contains the list of the advection for each tracer
+  logical :: dump_cfl
 
   domore_u(:,:) = .false.
   domore_v(:,:) = .false.
@@ -154,8 +154,6 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
        stencil_local = 3
      elseif (local_advect_scheme(m) == ADVECT_WENO7) then
        stencil_local = 4
-     elseif (local_advect_scheme(m) == ADVECT_WENO9) then
-       stencil_local = 5
      endif
      stencil = max(stencil, stencil_local)
   enddo
@@ -228,11 +226,15 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     if (associated(Reg%Tr(m)%advection_xy)) Reg%Tr(m)%advection_xy(:,:,:) = 0.0
     if (associated(Reg%Tr(m)%ad2d_x)) Reg%Tr(m)%ad2d_x(:,:) = 0.0
     if (associated(Reg%Tr(m)%ad2d_y)) Reg%Tr(m)%ad2d_y(:,:) = 0.0
+    if (associated(Reg%Tr(m)%cfl_x)) Reg%Tr(m)%cfl_x(:,:,:) = 0.0
+    if (associated(Reg%Tr(m)%cfl_y)) Reg%Tr(m)%cfl_y(:,:,:) = 0.0
   enddo
   !$OMP end parallel
 
   isv = is ; iev = ie ; jsv = js ; jev = je
   nsten_halo = min(is - isd, ied - ie, js - jsd, jed - je) / stencil
+
+  dump_cfl = .true.
 
   do itt=1,max_iter
 
@@ -267,6 +269,9 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       endif
     endif
 
+    ! Only dump the cfl for the first iteration
+    if (itt > 1) dump_cfl = .false.
+
     ! Set the range of valid points after this iteration.
     isv = isv + stencil ; iev = iev - stencil
     jsv = jsv + stencil ; jev = jev - stencil
@@ -286,14 +291,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
         ! First, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                       isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, &
-                      local_advect_scheme)
+                      local_advect_scheme, dump_cfl)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         !  Next, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme, dump_cfl)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -309,14 +314,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
         ! First, advect meridionally.
         call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                       isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, &
-                      local_advect_scheme)
+                      local_advect_scheme, dump_cfl)
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! Next, advect zonally.
         call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme, dump_cfl)
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -362,7 +367,7 @@ end subroutine advect_tracer
 !> This subroutine does 1-d flux-form advection in the zonal direction using
 !! a monotonic piecewise linear scheme.
 subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advect_schemes)
+                    is, ie, js, je, k, G, GV, US, advect_schemes, dump_cfl)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr  !< The number of tracers
@@ -384,6 +389,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
+  logical,                                   intent(in)    :: dump_cfl !< flag for dumping the cfl
 
   real, dimension(SZI_(G),ntr) :: &
     slope_x             ! The concentration slope per grid point [conc].
@@ -421,20 +427,23 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer :: i, j, m, n, i_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
-  real :: order3, order5, order7, order9
-  real :: T3(3), T5(5), T7(7), T9(9), wq, qext, dx(5)
+  real :: order3, order5, order7
+  real :: T3(3), T5(5), T7(7), wq, qext
+  logical :: isWENO
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
   domore_u_initial = domore_u
 
   usePLMslope = .false.
+  isWENO = .false.
   ! stencil for calculating slope values
   stencil = 1
   do m = 1,ntr
     if ((advect_schemes(m) == ADVECT_PLM) .or. (advect_schemes(m) == ADVECT_PPM)) &
             usePLMslope = .true.
     if (advect_schemes(m) == ADVECT_PPM) stencil = 2
+    if (advect_schemes(m) > 2) isWENO = .true.
   enddo
 
   min_h = 0.1*GV%Angstrom_H
@@ -527,6 +536,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           ((uhr(I,j,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
         uhh(I) = 0.0
         CFL(I) = 0.0
+        if ((Tr(1)%id_cflx > 0) .and. dump_cfl) Tr(1)%cfl_x(I,j,k) = CFL(I)
       elseif (uhr(I,j,k) < 0.0) then
         hup = hprev(i+1,j,k) - G%areaT(i+1,j)*min_h
         hlos = MAX(0.0, uhr(I+1,j,k))
@@ -538,6 +548,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           uhh(I) = uhr(I,j,k)
         endif
         CFL(I) = - uhh(I) / (hprev(i+1,j,k))  ! CFL is positive
+        if ((Tr(1)%id_cflx > 0) .and. dump_cfl) Tr(1)%cfl_x(I,j,k) = CFL(I)
+        if (isWENO .and. CFL(I) > 0.4) then
+          CFL(I) = 0.4
+          uhh(I) = -CFL(I)*hprev(i+1,j,k)
+          domore_u(j,k) = .true.
+        endif
       else
         hup = hprev(i,j,k) - G%areaT(i,j)*min_h
         hlos = MAX(0.0, -uhr(I-1,j,k))
@@ -549,6 +565,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           uhh(I) = uhr(I,j,k)
         endif
         CFL(I) = uhh(I) / (hprev(i,j,k))  ! CFL is positive
+        if ((Tr(1)%id_cflx > 0) .and. dump_cfl) Tr(1)%cfl_x(I,j,k) = CFL(I)
+        if (isWENO .and. CFL(I) > 0.4) then
+          CFL(I) = 0.4
+          uhh(I) = CFL(I)*hprev(i,j,k)
+          domore_u(j,k) = .true.
+        endif
       endif
     enddo
 
@@ -595,9 +617,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
-      elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
-              (advect_schemes(m) == ADVECT_WENO9)) then
-        order7 = 0.0 ; order9 = 0.0
+      elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7)) then
+        order7 = 0.0
 
         do I=is-1,ie
 
@@ -612,20 +633,13 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
           order3 = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*G%mask2dCu(I_up+1,j)
           order5 = order3*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
-          if (minval(hprev(i_up-2:i_up+2,j,k)) <= G%areaT(i,j)*GV%Angstrom_H) order5 = 0.0
 
-          if ( (advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
+          if (advect_schemes(m) == ADVECT_WENO7) then
             order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
-            if (minval(hprev(i_up-3:i_up+3,j,k)) <= G%areaT(i,j)*GV%Angstrom_H) order5 = 0.0
             T7(:) = T_tmp(i_up-3:i_up+3,m)
-          elseif (advect_schemes(m) == ADVECT_WENO9) then
-            order9 = order7*G%mask2dCu(I_up-5,j)*G%mask2dCu(I_up+4,j)
-            T9 = T_tmp(i_up-4:i_up+4,m)
           endif
 
-          if (order9 == 1.0) then
-            call weno9_reconstruction(wq, T9, uhh(I), CFL(I-1:I+1))
-          elseif (order7 == 1.0) then
+          if (order7 == 1.0) then
             call weno7_reconstruction(wq, T7, uhh(I), CFL(I-1:I+1))
           elseif (order5 == 1.0) then
             call weno5_reconstruction(wq, T5, uhh(I), CFL(I-1:I+1))
@@ -796,7 +810,7 @@ end subroutine advect_x
 !> This subroutine does 1-d flux-form advection using a monotonic piecewise
 !! linear scheme.
 subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advect_schemes)
+                    is, ie, js, je, k, G, GV, US, advect_schemes, dump_cfl)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr !< The number of tracers
@@ -818,6 +832,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
+  logical,                                   intent(in)    :: dump_cfl !< flag for dumping the cfl
 
   real, dimension(SZI_(G),ntr,SZJ_(G)) :: &
     slope_y                     ! The concentration slope per grid point [conc].
@@ -855,13 +870,16 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer :: i, j, j2, m, n, j_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
-  real :: order3, order5, order7, order9
-  real :: T3(3), T5(5), T7(7), T9(9), wq, qext, dy(5), vv
+  real :: order3, order5, order7
+  real :: T3(3), T5(5), T7(7), wq, qext, vv
   real, dimension(SZIB_(G), SZJB_(G)) :: CFL_iJ
   logical :: isWENO
+  logical, dimension(SZJB_(G),SZK_(GV)) :: domore_tmp 
+                                                                  !! done in this v-row
 
   usePLMslope = .false.
   isWENO = .false.
+  domore_tmp = domore_v
   ! stencil for calculating slope values
   stencil = 1
   do m = 1,ntr
@@ -970,70 +988,89 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   ! the flux through the other side does not require.
   if (isWENO) then
     do J=js-1,je ; if (domore_v(J,k)) then
+      domore_tmp(J,k) = .false.
 
       do i=is,ie
         if ((vhr(i,J,k) == 0.0) .or. &
             ((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= tiny_h)) .or. &
             ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
+          vhh(i,J) = 0.0
           CFL_iJ(i,J) = 0.0
+          if ((Tr(1)%id_cfly > 0) .and. dump_cfl) Tr(1)%cfl_y(i,J,k) = CFL_iJ(i,J)
         elseif (vhr(i,J,k) < 0.0) then
           hup = hprev(i,j+1,k) - G%areaT(i,j+1)*min_h
           hlos = MAX(0.0, vhr(i,J+1,k))
           if ((((hup - hlos) + vhr(i,J,k)) < 0.0) .and. &
               ((0.5*hup + vhr(i,J,k)) < 0.0)) then
-            vv = MIN(-0.5*hup, -hup+hlos, 0.0)
+            vhh(i,J) = MIN(-0.5*hup, -hup+hlos, 0.0)
+            domore_tmp(J,k) = .true.
           else
-            vv = vhr(i,J,k)
+            vhh(i,J) = vhr(i,J,k)
           endif
-          CFL_iJ(i,J) = - vv / hprev(i,j+1,k)  ! CFL is positive
+          CFL_iJ(i,J) = - vhh(i,J) / hprev(i,j+1,k)  ! CFL is positive
+          if ((Tr(1)%id_cfly > 0) .and. dump_cfl) Tr(1)%cfl_y(i,J,k) = CFL_iJ(i,J)
+          if (CFL_iJ(i,J) > 0.4) then
+            CFL_iJ(i,J) = 0.4
+            vhh(i,J) = -CFL_iJ(i,J)*hprev(i,j+1,k)
+            domore_tmp(J,k) = .true.
+          endif
         else
           hup = hprev(i,j,k) - G%areaT(i,j)*min_h
           hlos = MAX(0.0, -vhr(i,J-1,k))
           if ((((hup - hlos) - vhr(i,J,k)) < 0.0) .and. &
               ((0.5*hup - vhr(i,J,k)) < 0.0)) then
-            vv = MAX(0.5*hup, hup-hlos, 0.0)
+            vhh(i,J) = MAX(0.5*hup, hup-hlos, 0.0)
+            domore_tmp(J,k) = .true.
           else
-            vv = vhr(i,J,k)
+            vhh(i,J) = vhr(i,J,k)
           endif
-          CFL_iJ(i,J) = vv / hprev(i,j,k)  ! CFL is positive
+          CFL_iJ(i,J) = vhh(i,J) / hprev(i,j,k)  ! CFL is positive
+          if ((Tr(1)%id_cfly > 0) .and. dump_cfl) Tr(1)%cfl_y(i,J,k) = CFL_iJ(i,J)
+          if (CFL_iJ(i,J) > 0.4) then
+            CFL_iJ(i,J) = 0.4
+            vhh(i,J) = CFL_iJ(i,J)*hprev(i,j,k)
+            domore_tmp(J,k) = .true.
+          endif
         endif
       enddo
     endif ; enddo
   endif
 
   do J=js-1,je ; if (domore_v(J,k)) then
-    domore_v(J,k) = .false.
+    if (.not. isWENO) then
+      domore_v(J,k) = .false.
 
-    do i=is,ie
-      if ((vhr(i,J,k) == 0.0) .or. &
-          ((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= tiny_h)) .or. &
-          ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
-        vhh(i,J) = 0.0
-        CFL(i) = 0.0
-      elseif (vhr(i,J,k) < 0.0) then
-        hup = hprev(i,j+1,k) - G%areaT(i,j+1)*min_h
-        hlos = MAX(0.0, vhr(i,J+1,k))
-        if ((((hup - hlos) + vhr(i,J,k)) < 0.0) .and. &
-            ((0.5*hup + vhr(i,J,k)) < 0.0)) then
-          vhh(i,J) = MIN(-0.5*hup, -hup+hlos, 0.0)
-          domore_v(J,k) = .true.
+      do i=is,ie
+        if ((vhr(i,J,k) == 0.0) .or. &
+            ((vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k) <= tiny_h)) .or. &
+            ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
+          vhh(i,J) = 0.0
+          CFL(i) = 0.0
+        elseif (vhr(i,J,k) < 0.0) then
+          hup = hprev(i,j+1,k) - G%areaT(i,j+1)*min_h
+          hlos = MAX(0.0, vhr(i,J+1,k))
+          if ((((hup - hlos) + vhr(i,J,k)) < 0.0) .and. &
+              ((0.5*hup + vhr(i,J,k)) < 0.0)) then
+            vhh(i,J) = MIN(-0.5*hup, -hup+hlos, 0.0)
+            domore_v(J,k) = .true.
+          else
+            vhh(i,J) = vhr(i,J,k)
+          endif
+          CFL(i) = - vhh(i,J) / hprev(i,j+1,k)  ! CFL is positive
         else
-          vhh(i,J) = vhr(i,J,k)
+          hup = hprev(i,j,k) - G%areaT(i,j)*min_h
+          hlos = MAX(0.0, -vhr(i,J-1,k))
+          if ((((hup - hlos) - vhr(i,J,k)) < 0.0) .and. &
+              ((0.5*hup - vhr(i,J,k)) < 0.0)) then
+            vhh(i,J) = MAX(0.5*hup, hup-hlos, 0.0)
+            domore_v(J,k) = .true.
+          else
+            vhh(i,J) = vhr(i,J,k)
+          endif
+          CFL(i) = vhh(i,J) / hprev(i,j,k)  ! CFL is positive
         endif
-        CFL(i) = - vhh(i,J) / hprev(i,j+1,k)  ! CFL is positive
-      else
-        hup = hprev(i,j,k) - G%areaT(i,j)*min_h
-        hlos = MAX(0.0, -vhr(i,J-1,k))
-        if ((((hup - hlos) - vhr(i,J,k)) < 0.0) .and. &
-            ((0.5*hup - vhr(i,J,k)) < 0.0)) then
-          vhh(i,J) = MAX(0.5*hup, hup-hlos, 0.0)
-          domore_v(J,k) = .true.
-        else
-          vhh(i,J) = vhr(i,J,k)
-        endif
-        CFL(i) = vhh(i,J) / hprev(i,j,k)  ! CFL is positive
-      endif
-    enddo
+      enddo
+    endif
 
     do m=1,ntr
 
@@ -1078,9 +1115,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
-      elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7) .or. &
-            (advect_schemes(m) == ADVECT_WENO9)) then
-        order7 = 0.0 ; order9 = 0.0
+      elseif ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7)) then
+        order7 = 0.0
 
         do i=is,ie
 
@@ -1091,30 +1127,23 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             j_up = j + 1
           endif
 
-          T3 = T_tmp(i,m,j_up-1:j_up+1) ; T5 = T_tmp(i,m,j_up-2:j_up+2)
+          T3(:) = T_tmp(i,m,j_up-1:j_up+1) ; T5(:) = T_tmp(i,m,j_up-2:j_up+2)
 
           order3 = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up+1)
           order5 = order3*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
-          if (minval(hprev(i,j_up-2:j_up+2,k)) <= G%areaT(i,j)*GV%Angstrom_H) order5 = 0.0
 
-          if ((advect_schemes(m) == ADVECT_WENO7) .or. (advect_schemes(m) == ADVECT_WENO9)) then
+          if (advect_schemes(m) == ADVECT_WENO7) then
             order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
-            if (minval(hprev(i,j_up-3:j_up+3,k)) <= G%areaT(i,j)*GV%Angstrom_H) order5 = 0.0
-            T7 = T_tmp(i,m,j_up-3:j_up+3)
-          elseif (advect_schemes(m) == ADVECT_WENO9) then
-            order9 = order7*G%mask2dCv(i,J_up-5)*G%mask2dCv(i,J_up+4)
-            T9 = T_tmp(i,m,j_up-4:j_up+4)
+            T7(:) = T_tmp(i,m,j_up-3:j_up+3)
           endif
 
-          if (order9 == 1.0) then
-            call weno9_reconstruction(wq, T9, vhh(i,J), CFL_iJ(i,J-1:J+1))
-          elseif (order7 == 1.0) then
+          if (order7 == 1.0) then
             call weno7_reconstruction(wq, T7, vhh(i,J), CFL_iJ(i,J-1:J+1))
           elseif (order5 == 1.0) then
             call weno5_reconstruction(wq, T5, vhh(i,J), CFL_iJ(i,J-1:J+1))
           else
             qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
-            call PPM_reconstruction(wq, T3(1), T3(2), T3(3), vhh(i,J), CFL(i), qext)
+            call PPM_reconstruction(wq, T3(1), T3(2), T3(3), vhh(i,J), CFL_iJ(i,J), qext)
           endif
           flux_y(i,m,J) = vhh(i,J)*wq
         enddo
@@ -1251,6 +1280,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
     enddo
   endif ; enddo ! End of j-loop.
 
+  domore_v = domore_tmp
+
   ! Do user controlled underflow of the tracer concentrations.
   do m=1,ntr ; if (Tr(m)%conc_underflow > 0.0) then
     do j=js,je ; do i=is,ie
@@ -1348,7 +1379,8 @@ end subroutine tracer_advect_end
 !!  * advect_tracer advects tracer concentrations using a combination
 !!  of the modified flux advection scheme from Easter (Mon. Wea. Rev.,
 !!  1993) with tracer distributions given by the monotonic piecewise
-!!  parabolic method, as described in Carpenter et al. (MWR, 1990).
+!!  parabolic method, as described in Carpenter et al. (MWR, 1990),
+!!  or by high-order WENO schemes (Balsara et al., 2016).
 !!  This scheme conserves the total amount of tracer while avoiding
 !!  spurious maxima and minima of the tracer concentration.
 !!
