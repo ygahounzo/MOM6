@@ -481,13 +481,23 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
       enddo ; enddo ; enddo
     endif
 
-    Tr%id_cflx = register_diag_field("ocean_model", "CFL_scalar_x", &
-          diag%axesCuL, Time, "i-component of CFL of tracer advection", 'nodim')
-    Tr%id_cfly = register_diag_field("ocean_model", "CFL_scalar_y", &
-          diag%axesCvL, Time, "j-component of CFL of tracer advection", 'nodim')
+    if (m == 1) then
+      Tr%id_cflx = register_diag_field("ocean_model", "CFL_scalar_x", &
+            diag%axesCuL, Time, "i-component of CFL of tracer advection", 'nodim')
+      Tr%id_cfly = register_diag_field("ocean_model", "CFL_scalar_y", &
+            diag%axesCvL, Time, "j-component of CFL of tracer advection", 'nodim')
 
-    if (Tr%id_cflx > 0) call safe_alloc_ptr(Tr%cfl_x,IsdB,IedB,jsd,jed,nz)
-    if (Tr%id_cfly > 0) call safe_alloc_ptr(Tr%cfl_y,isd,ied,JsdB,JedB,nz)
+      if (Tr%id_cflx > 0) call safe_alloc_ptr(Tr%cfl_x,IsdB,IedB,jsd,jed,nz)
+      if (Tr%id_cfly > 0) call safe_alloc_ptr(Tr%cfl_y,isd,ied,JsdB,JedB,nz)
+
+      Tr%id_domore_u = register_diag_field("ocean_model", "do_more_u", &
+            diag%axesCuL, Time, "do more count in i-component", 'nodim')
+      Tr%id_domore_v = register_diag_field("ocean_model", "do_more_v", &
+            diag%axesCvL, Time, "do more count in j-component", 'nodim')
+
+      if (Tr%id_domore_u > 0) call safe_alloc_ptr(Tr%do_more_u,IsdB,IedB,jsd,jed,nz)
+      if (Tr%id_domore_v > 0) call safe_alloc_ptr(Tr%do_more_v,isd,ied,JsdB,JedB,nz)
+    endif
 
     ! Neutral/Horizontal diffusion convergence tendencies
     if (Tr%diag_form == 1) then
@@ -733,6 +743,8 @@ subroutine post_tracer_diagnostics_at_sync(Reg, h, diag_prev, diag, G, GV, dt)
     if (Tr%id_tr > 0) call post_data(Tr%id_tr, Tr%t, diag)
     if (Tr%id_cflx > 0) call post_data(Tr%id_cflx, Tr%cfl_x, diag)
     if (Tr%id_cfly > 0) call post_data(Tr%id_cfly, Tr%cfl_y, diag)
+    if (Tr%id_domore_u > 0) call post_data(Tr%id_domore_u, Tr%do_more_u, diag)
+    if (Tr%id_domore_v > 0) call post_data(Tr%id_domore_v, Tr%do_more_v, diag)
     if (Tr%id_tendency > 0) then
       work3d(:,:,:) = 0.0
       do k=1,nz ; do j=js,je ; do i=is,ie
