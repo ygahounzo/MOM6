@@ -1,14 +1,17 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> The subroutines here provide convenient wrappers to the fms diag_manager
 !! interfaces with additional diagnostic capabilies.
 module MOM_diag_mediator
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_checksums,        only : chksum0, zchksum
 use MOM_checksums,        only : hchksum, uchksum, vchksum, Bchksum
 use MOM_coms,             only : PE_here
 use MOM_cpu_clock,        only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,        only : CLOCK_MODULE, CLOCK_ROUTINE
+use MOM_diag_buffers,     only : diag_buffer_2d, diag_buffer_3d
 use MOM_diag_manager_infra, only : MOM_diag_manager_init, MOM_diag_manager_end
 use MOM_diag_manager_infra, only : diag_axis_init=>MOM_diag_axis_init, get_MOM_diag_axis_name
 use MOM_diag_manager_infra, only : send_data_infra, MOM_diag_field_add_attribute, EAST, NORTH
@@ -43,6 +46,7 @@ implicit none ; private
 #define MAX_DSAMP_LEV 2
 
 public set_axes_info, post_data, register_diag_field, time_type
+public post_data_3d_by_column, post_data_3d_final
 public post_product_u, post_product_sum_u, post_product_v, post_product_sum_v
 public set_masks_for_axes
 ! post_data_1d_k is a deprecated interface that can be replaced by a call to post_data, but
@@ -56,6 +60,7 @@ public diag_mediator_close_registration, get_diag_time_end
 public diag_axis_init, ocean_register_diag, register_static_field
 public register_scalar_field
 public define_axes_group, diag_masks_set
+public set_piecemeal_extents
 public diag_register_area_ids
 public register_cell_measure, diag_associate_volume_cell_measure
 public diag_get_volume_cell_measure_dm_id
@@ -134,6 +139,10 @@ type, public :: axes_grp
   real, pointer, dimension(:,:)   :: mask2d => null() !< Mask for 2d (x-y) axes [nondim]
   real, pointer, dimension(:,:,:) :: mask3d => null() !< Mask for 3d axes [nondim]
   type(diag_dsamp), dimension(2:MAX_DSAMP_LEV) :: dsamp !< Downsample container
+
+  ! For diagnostics posted piecemeal
+  type(diag_buffer_2d) :: piecemeal_2d !< A dynamically reallocated buffer for 2d piecemeal diagnostics
+  type(diag_buffer_3d) :: piecemeal_3d !< A dynamically reallocated buffer for 3d piecemeal diagnostics
 end type axes_grp
 
 !> Contains an array to store a diagnostic target grid
@@ -338,6 +347,8 @@ type, public :: diag_ctrl
 
   real, dimension(:,:,:), allocatable :: h_begin !< Layer thicknesses at the beginning of the timestep used
                                                  !! for remapping of extensive variables [H ~> m or kg m-2]
+  real, dimension(:,:,:), allocatable :: dz_begin !< Layer vertical extents at the beginning of the timestep used
+                                                 !! for remapping of extensive variables [Z ~> m]
 
 end type diag_ctrl
 
@@ -485,6 +496,9 @@ subroutine set_axes_info(G, GV, US, param_file, diag_cs, set_vertical)
        x_cell_method='point', y_cell_method='mean', is_u_point=.true.)
   call define_axes_group(diag_cs, (/ id_xh, id_yq /), diag_cs%axesCv1, &
        x_cell_method='mean', y_cell_method='point', is_v_point=.true.)
+
+  ! Define array extents for all piecemeal buffers
+  call set_piecemeal_extents(diag_cs)
 
   ! Axis group for special null axis from diag manager.
   id_null = diag_axis_init('scalar_axis', (/0./), 'none', 'N', 'none', null_axis=.true.)
@@ -1120,6 +1134,7 @@ subroutine define_axes_group(diag_cs, handles, axes, nz, vertical_coordinate_num
     endif
   endif
 
+
 end subroutine define_axes_group
 
 !> Defines a group of downsampled "axes" from list of handles
@@ -1581,8 +1596,7 @@ subroutine post_data_3d(diag_field_id, field, diag_cs, is_static, mask, alt_h)
                                                 !! remapping this diagnostic [H ~> m or kg m-2].
 
   real, dimension(diag_cs%G%isd:diag_cS%G%ied, diag_cs%G%jsd:diag_cS%G%jed, diag_cs%GV%ke) :: &
-    dz_diag, &  ! Layer vertical extents for remapping [Z ~> m]
-    dz_begin    ! Layer vertical extents for remapping extensive quantities [Z ~> m]
+    dz_diag     ! Layer vertical extents for remapping [Z ~> m]
 
   if (id_clock_diag_mediator>0) call cpu_clock_begin(id_clock_diag_mediator)
 
@@ -1603,12 +1617,9 @@ subroutine post_data_3d(diag_field_id, field, diag_cs, is_static, mask, alt_h)
 
   ! Find out whether there are any z-based diagnostics
   diag => diag_cs%diags(diag_field_id)
-  dz_diag_needed = .false. ; dz_begin_needed = .false.
+  dz_diag_needed = .false.
   do while (associated(diag))
-    if (diag%v_extensive .and. .not.diag%axes%is_native) then
-      if (diag_cs%diag_remap_cs(diag%axes%vertical_coordinate_number)%Z_based_coord) &
-        dz_begin_needed = .true.
-    elseif (diag%axes%needs_remapping .or. diag%axes%needs_interpolating) then
+    if (diag%axes%needs_remapping .or. diag%axes%needs_interpolating) then
       if (diag_cs%diag_remap_cs(diag%axes%vertical_coordinate_number)%Z_based_coord) &
         dz_diag_needed = .true.
     endif
@@ -1618,9 +1629,6 @@ subroutine post_data_3d(diag_field_id, field, diag_cs, is_static, mask, alt_h)
   ! Determine the diagnostic grid spacing in height units, if it is needed.
   if (dz_diag_needed) then
     call thickness_to_dz(h_diag, diag_cs%tv, dz_diag, diag_cs%G, diag_cs%GV, diag_cs%US, halo_size=1)
-  endif
-  if (dz_begin_needed) then
-    call thickness_to_dz(diag_cs%h_begin, diag_cs%tv, dz_begin, diag_cs%G, diag_cs%GV, diag_cs%US, halo_size=1)
   endif
 
   diag => diag_cs%diags(diag_field_id)
@@ -1641,7 +1649,7 @@ subroutine post_data_3d(diag_field_id, field, diag_cs, is_static, mask, alt_h)
       if (diag_cs%diag_remap_cs(diag%axes%vertical_coordinate_number)%Z_based_coord) then
         call vertically_reintegrate_diag_field(                                    &
                 diag_cs%diag_remap_cs(diag%axes%vertical_coordinate_number), diag_cs%G, &
-                dz_begin, diag_cs%diag_remap_cs(diag%axes%vertical_coordinate_number)%h_extensive, &
+                diag_cs%dz_begin, diag_cs%diag_remap_cs(diag%axes%vertical_coordinate_number)%h_extensive, &
                 staggered_in_x, staggered_in_y, diag%axes%mask3d, field, remapped_field)
       else
         call vertically_reintegrate_diag_field(                                    &
@@ -1908,6 +1916,61 @@ subroutine post_data_3d_low(diag, field, diag_cs, is_static, mask)
     deallocate( locfield )
 
 end subroutine post_data_3d_low
+
+!> Put data into the buffer for a diagnostic one column at a time
+subroutine post_data_3d_by_column(diag_field_id, field, diag_cs, i, j)
+  integer,            intent(in) :: diag_field_id !< The id for an output variable returned by a
+                                                  !! previous call to register_diag_field.
+  real, dimension(:), intent(in) :: field         !< 3-d array being offered for output or averaging
+                                                  !! in internally scaled arbitrary units [A ~> a]
+  type(diag_ctrl), target, intent(in) :: diag_CS  !< Structure used to regulate diagnostic output
+  integer,            intent(in) :: i             !< The i-index to post the data in the buffer
+  integer,            intent(in) :: j             !< The j-index to post the data in the buffer
+
+  type(diag_type), pointer :: diag => null()
+  integer :: buffer_slot
+
+  diag => diag_cs%diags(diag_field_id)
+  buffer_slot = diag%axes%piecemeal_3d%check_capacity_by_id(diag_field_id)
+  diag%axes%piecemeal_3d%buffer(buffer_slot)%field(i,j,:) = field(:)
+end subroutine post_data_3d_by_column
+
+!> Put data into the buffer for a diagnostic one point at a time
+subroutine post_data_3d_by_point(diag_field_id, field, diag_cs, i, j, k)
+  integer,           intent(in) :: diag_field_id !< The id for an output variable returned by a
+                                                 !! previous call to register_diag_field.
+  real,              intent(in) :: field         !< 3-d array being offered for output or averaging
+                                                 !! in internally scaled arbitrary units [A ~> a]
+  type(diag_ctrl), target, intent(in) :: diag_CS !< Structure used to regulate diagnostic output
+  integer,           intent(in) :: i             !< The i-index to post the data in the buffer
+  integer,           intent(in) :: j             !< The j-index to post the data in the buffer
+  integer,           intent(in) :: k             !< The k-index to post the data in the buffer
+
+  type(diag_type), pointer :: diag => null()
+  integer :: buffer_slot
+
+  diag => diag_cs%diags(diag_field_id)
+  buffer_slot = diag%axes%piecemeal_3d%check_capacity_by_id(diag_field_id)
+  diag%axes%piecemeal_3d%buffer(buffer_slot)%field(i,j,k) = field
+end subroutine post_data_3d_by_point
+
+!> Post the final buffer using the standard post_data interface
+subroutine post_data_3d_final(diag_field_id, diag_cs)
+  integer,           intent(in) :: diag_field_id !< The id for an output variable returned by a
+                                                 !! previous call to register_diag_field.
+  type(diag_ctrl), target, intent(in) :: diag_CS !< Structure used to regulate diagnostic output
+
+  type(diag_type), pointer :: diag => null()
+  integer :: buffer_slot
+
+  diag => diag_cs%diags(diag_field_id)
+  buffer_slot = diag%axes%piecemeal_3d%find_buffer_slot(diag_field_id)
+  ! Only perform an action if the buffer slot was actually used
+  if (buffer_slot>0) then
+    call post_data(diag_field_id, diag%axes%piecemeal_3d%buffer(buffer_slot)%field(:,:,:), diag_CS)
+    call diag%axes%piecemeal_3d%mark_available(diag_field_id)
+  endif
+end subroutine post_data_3d_final
 
 !> Calculate and write out diagnostics that are the product of two 3-d arrays at u-points
 subroutine post_product_u(id, u_a, u_b, G, nz, diag, mask, alt_h)
@@ -2903,6 +2966,7 @@ subroutine attach_cell_methods(id, axes, ostring, cell_methods, &
   ostring = adjustl(ostring)
 end subroutine attach_cell_methods
 
+!> Registers a scalar diagnostic, returning an integer handle
 function register_scalar_field(module_name, field_name, init_time, diag_cs, &
             long_name, units, missing_value, range, standard_name, &
             do_not_log, err_msg, interp_method, cmor_field_name, &
@@ -3308,6 +3372,7 @@ subroutine diag_mediator_init(G, GV, US, nz, param_file, diag_cs, doc_file_dir)
                                   ! forms of the same remapping expressions.
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
   logical :: om4_remap_via_sub_cells ! Use the OM4-era ramap_via_sub_cells for diagnostics
+  logical :: dz_diag_needed       ! Logical set True if we need to store dz_begin for reintegrating
   character(len=8)   :: this_pe
   character(len=240) :: doc_file, doc_file_dflt, doc_path
   character(len=240), allocatable :: diag_coords(:)
@@ -3356,6 +3421,7 @@ subroutine diag_mediator_init(G, GV, US, nz, param_file, diag_cs, doc_file_dir)
                  'If true, use a grid index coordinate convention for diagnostic axes. ',&
                  default=.false.)
 
+  dz_diag_needed = .false.
   if (diag_cs%num_diag_coords>0) then
     allocate(diag_coords(diag_cs%num_diag_coords))
     if (diag_cs%num_diag_coords==1) then ! The default is to provide just one instance of Z*
@@ -3375,6 +3441,7 @@ subroutine diag_mediator_init(G, GV, US, nz, param_file, diag_cs, doc_file_dir)
     ! Initialize each diagnostic vertical coordinate
     do i=1, diag_cs%num_diag_coords
       call diag_remap_init(diag_cs%diag_remap_cs(i), diag_coords(i), om4_remap_via_sub_cells, remap_answer_date, GV)
+      if (diag_cs%diag_remap_cs(i)%Z_based_coord) dz_diag_needed = .true.
     enddo
     deallocate(diag_coords)
   endif
@@ -3401,6 +3468,7 @@ subroutine diag_mediator_init(G, GV, US, nz, param_file, diag_cs, doc_file_dir)
   diag_cs%tv => null()
 
   allocate(diag_cs%h_begin(G%isd:G%ied,G%jsd:G%jed,nz))
+  if (dz_diag_needed) allocate(diag_cs%dz_begin(G%isd:G%ied,G%jsd:G%jed,nz))
 #if defined(DEBUG) || defined(__DO_SAFETY_CHECKS__)
   allocate(diag_cs%h_old(G%isd:G%ied,G%jsd:G%jed,nz))
   diag_cs%h_old(:,:,:) = 0.0
@@ -3611,6 +3679,7 @@ subroutine diag_update_remap_grids(diag_cs, alt_h, alt_T, alt_S, update_intensiv
   endif
   if (update_extensive_local) then
     diag_cs%h_begin(:,:,:) = diag_cs%h(:,:,:)
+    if (dz_diag_needed) diag_cs%dz_begin(:,:,:) = dz_diag(:,:,:)
     do m=1, diag_cs%num_diag_coords
       if (diag_cs%diag_remap_cs(m)%Z_based_coord) then
         call diag_remap_update(diag_cs%diag_remap_cs(m), diag_cs%G, diag_cs%GV, diag_cs%US, dz_diag, T_diag, S_diag, &
@@ -3676,6 +3745,29 @@ subroutine diag_masks_set(G, nz, diag_cs)
   call downsample_diag_masks_set(G, nz, diag_cs)
 
 end subroutine diag_masks_set
+
+!> Set the extents and fill values for the piecemeal buffers for all axes
+subroutine set_piecemeal_extents(diag_cs)
+  type(diag_ctrl), intent(inout) :: diag_cs !< A pointer to a type with many variables
+                                                       !! used for diagnostics
+
+  ! Piecemeal buffers for 2d axes
+  call diag_cs%axesT1%piecemeal_2d%set_extents_from_array(diag_cs%mask2dT, diag_cs%missing_value)
+  call diag_cs%axesB1%piecemeal_2d%set_extents_from_array(diag_cs%mask2dBu, diag_cs%missing_value)
+  call diag_cs%axesCu1%piecemeal_2d%set_extents_from_array(diag_cs%mask2dCu, diag_cs%missing_value)
+  call diag_cs%axesCv1%piecemeal_2d%set_extents_from_array(diag_cs%mask2dCv, diag_cs%missing_value)
+
+  ! Piecemeal buffers for 3d axes
+  call diag_cs%axesTL%piecemeal_3d%set_extents_from_array(diag_cs%mask3dTL, diag_cs%missing_value)
+  call diag_cs%axesBL%piecemeal_3d%set_extents_from_array(diag_cs%mask3dBL, diag_cs%missing_value)
+  call diag_cs%axesCuL%piecemeal_3d%set_extents_from_array(diag_cs%mask3dCuL, diag_cs%missing_value)
+  call diag_cs%axesCvL%piecemeal_3d%set_extents_from_array(diag_cs%mask3dCvL, diag_cs%missing_value)
+  call diag_cs%axesTi%piecemeal_3d%set_extents_from_array(diag_cs%mask3dTi, diag_cs%missing_value)
+  call diag_cs%axesBi%piecemeal_3d%set_extents_from_array(diag_cs%mask3dBi, diag_cs%missing_value)
+  call diag_cs%axesCui%piecemeal_3d%set_extents_from_array(diag_cs%mask3dCui, diag_cs%missing_value)
+  call diag_cs%axesCvi%piecemeal_3d%set_extents_from_array(diag_cs%mask3dCvi, diag_cs%missing_value)
+
+end subroutine set_piecemeal_extents
 
 subroutine diag_mediator_close_registration(diag_CS)
   type(diag_ctrl), intent(inout) :: diag_CS !< Structure used to regulate diagnostic output

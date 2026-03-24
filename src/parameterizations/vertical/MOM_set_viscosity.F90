@@ -1,8 +1,10 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Calculates various values related to the bottom boundary layer, such as the viscosity and
 !! thickness of the BBL (set_viscous_BBL).
 module MOM_set_visc
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_ALE,           only : ALE_CS, ALE_remap_velocities, ALE_remap_interface_vals, ALE_remap_vertex_vals
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end, CLOCK_ROUTINE
@@ -2969,7 +2971,7 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                              ! continental shelf break profile.
   real, allocatable, dimension(:,:) :: cdrag_h !< The spatially varying quadratic drag coefficient [nondim]
 
-  integer :: i, j, k, is, ie, js, je
+  integer :: i, j, is, ie, js, je
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, nz
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
   logical :: adiabatic, use_omega, MLE_use_PBL_MLD

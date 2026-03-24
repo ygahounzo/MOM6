@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Initialization functions for state variables, u, v, h, T and S.
 module MOM_state_initialization
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_debugging, only : hchksum, qchksum, uvchksum
 use MOM_density_integrals, only : int_specific_vol_dp
@@ -24,7 +26,6 @@ use MOM_open_boundary, only : ocean_OBC_type, open_boundary_test_extern_h
 use MOM_open_boundary, only : fill_temp_salt_segments, setup_OBC_tracer_reservoirs
 use MOM_open_boundary, only : fill_thickness_segments
 use MOM_open_boundary, only : set_initialized_OBC_tracer_reservoirs
-use MOM_grid_initialize, only : initialize_masks, set_grid_metrics
 use MOM_restart, only : restore_state, is_new_run, copy_restart_var, copy_restart_vector
 use MOM_restart, only : restart_registry_lock, MOM_restart_CS
 use MOM_sponge, only : set_up_sponge_field, set_up_sponge_ML_density
@@ -159,8 +160,6 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
   real :: dz(SZI_(G),SZJ_(G),SZK_(GV)) ! The layer thicknesses in geopotential (z) units [Z ~> m]
   character(len=200) :: inputdir   ! The directory where NetCDF input files are.
   character(len=200) :: config, h_config
-  real :: H_rescale   ! A rescaling factor for thicknesses from the representation in
-                      ! a restart file to the internal representation in this run [various units ~> 1]
   real :: dt          ! The baroclinic dynamics timestep for this run [T ~> s].
 
   logical :: from_Z_file, useALE
@@ -2043,7 +2042,6 @@ subroutine initialize_sponges_file(G, GV, US, use_temperature, tv, u, v, depth_t
   ! Local variables
   real, allocatable, dimension(:,:,:) :: eta ! The target interface heights [Z ~> m].
   real, allocatable, dimension(:,:,:) :: dz  ! The target interface thicknesses in height units [Z ~> m]
-  real, allocatable, dimension(:,:,:) :: h   ! The target interface thicknesses [H ~> m or kg m-2].
 
   real, dimension (SZI_(G),SZJ_(G),SZK_(GV)) :: &
     tmp, &    ! A temporary array for temperatures [C ~> degC] or other tracers.
@@ -2646,11 +2644,9 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
                                    ! from data when finding the initial interface locations in
                                    ! layered mode from a dataset of T and S.
   character(len=64) :: remappingScheme
-  real :: tempAvg  ! Spatially averaged temperatures on a layer [C ~> degC]
-  real :: saltAvg  ! Spatially averaged salinities on a layer [S ~> ppt]
   logical :: om4_remap_via_sub_cells ! If true, use the OM4 remapping algorithm (only used if useALEremapping)
   logical :: do_conv_adj, ignore
-  integer :: nPoints
+  logical :: use_depth_based_time_fitler, use_adjust_interface_motion
   integer :: id_clock_routine, id_clock_ALE
 
   id_clock_routine = cpu_clock_id('(Initialize from Z)', grain=CLOCK_ROUTINE)
@@ -2805,6 +2801,10 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
                  "from an input dataset using horiz_interp_and_extrap_tracer.  This routine "//&
                  "converges slowly, so an overly small tolerance can get expensive.", &
                  units="ppt", default=1.0e-3, scale=US%ppt_to_S, do_not_log=just_read)
+  call get_param(PF, mdl, "REGRID_USE_DEPTH_BASED_TIME_FILTER", use_depth_based_time_fitler, &
+                 default=.true., do_not_log=.true.)
+  call get_param(PF, mdl, "USE_ADJUST_INTERFACE_MOTION", use_adjust_interface_motion, &
+                 default=.true., do_not_log=.true.)
 
   if (just_read) then
     if ((.not.useALEremapping) .and. adjust_temperature) &
@@ -2915,7 +2915,9 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
 
     ! Now remap from source grid to target grid, first setting reconstruction parameters
     if (remap_general) then
-      call set_regrid_params( regridCS, min_thickness=0. )
+      call set_regrid_params( regridCS, min_thickness=0., &
+                              use_adjust_interface_motion=use_adjust_interface_motion, &
+                              use_depth_based_time_filter=use_depth_based_time_fitler)
       allocate( dz_interface(isd:ied,jsd:jed,nkd+1) ) ! Need for argument to regridding_main() but is not used
 
       call regridding_preadjust_reqs(regridCS, do_conv_adj, ignore)

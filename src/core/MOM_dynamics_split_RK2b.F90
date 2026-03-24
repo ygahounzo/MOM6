@@ -1,9 +1,11 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Time step the adiabatic dynamic core of MOM using RK2 method with greater use of the
 !! time-filtered velocities and less inheritance of tedencies from the previous step in the
 !! predictor step than in the original MOM_dyanmics_split_RK2.
 module MOM_dynamics_split_RK2b
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_variables,    only : vertvisc_type, thermo_var_ptrs, porous_barrier_type
 use MOM_variables,    only : BT_cont_type, alloc_bt_cont_type, dealloc_bt_cont_type
@@ -35,7 +37,7 @@ use MOM_restart,           only : register_restart_field, register_restart_pair
 use MOM_restart,           only : query_initialized, set_initialized, save_restart
 use MOM_restart,           only : only_read_from_restarts
 use MOM_restart,           only : restart_init, is_new_run, MOM_restart_CS
-use MOM_time_manager,      only : time_type, time_type_to_real, operator(+)
+use MOM_time_manager,      only : time_type, operator(+)
 use MOM_time_manager,      only : operator(-), operator(>), operator(*), operator(/)
 
 use MOM_ALE,                   only : ALE_CS, ALE_remap_velocities
@@ -369,10 +371,10 @@ subroutine step_MOM_dyn_split_RK2b(u_av, v_av, h, tv, visc, Time_local, dt, forc
                                 ! saved for use in the Flather open boundary condition code [L T-1 ~> m s-1]
 
   ! GMM, TODO: make these allocatable?
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: uold ! u-velocity before vert_visc is applied, for fpmix
-                                                     !                                      [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vold ! v-velocity before vert_visc is applied, for fpmix
-                                                     !                                      [L T-1 ~> m s-1]
+  ! real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: uold ! u-velocity before vert_visc is applied, for fpmix
+  !                                                    !                                      [L T-1 ~> m s-1]
+  ! real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vold ! v-velocity before vert_visc is applied, for fpmix
+  !                                                    !                                      [L T-1 ~> m s-1]
   real :: pres_to_eta ! A factor that converts pressures to the units of eta
                       ! [H T2 R-1 L-2 ~> m Pa-1 or kg m-2 Pa-1]
   real, pointer, dimension(:,:) :: &
@@ -392,7 +394,7 @@ subroutine step_MOM_dyn_split_RK2b(u_av, v_av, h, tv, visc, Time_local, dt, forc
     uh_ptr => NULL(), &  ! A pointer to a zonal volume or mass transport [H L2 T-1 ~> m3 s-1 or kg s-1]
     vh_ptr => NULL()     ! A pointer to a meridional volume or mass transport [H L2 T-1 ~> m3 s-1 or kg s-1]
 
-  real, dimension(SZI_(G),SZJ_(G)) :: hbl       ! Boundary layer depth from Cvmix [H ~> m or kg m-2]
+  ! real, dimension(SZI_(G),SZJ_(G)) :: hbl       ! Boundary layer depth from Cvmix [H ~> m or kg m-2]
   real :: dt_pred   ! The time step for the predictor part of the baroclinic time stepping [T ~> s].
   real :: Idt_bc    ! Inverse of the baroclinic timestep [T-1 ~> s-1]
   logical :: dyn_p_surf
@@ -1186,7 +1188,6 @@ subroutine register_restarts_dyn_split_RK2b(HI, GV, US, param_file, CS, restart_
   real, dimension(SZI_(HI),SZJB_(HI),SZK_(GV)), &
                          target, intent(inout) :: vh !< merid volume or mass transport [H L2 T-1 ~> m3 s-1 or kg s-1]
 
-  character(len=40) :: mdl = "MOM_dynamics_split_RK2b" ! This module's name.
   type(vardesc)     :: vd(2)
   character(len=48) :: thickness_units, flux_units
 
@@ -1320,13 +1321,11 @@ subroutine initialize_dyn_split_RK2b(u, v, h, tv, uh, vh, eta, Time, G, GV, US, 
                                                                 !! solver and Coriolis scheme.
 
   ! local variables
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: h_tmp ! A temporary copy of the layer thicknesses [H ~> m or kg m-2]
   character(len=40) :: mdl = "MOM_dynamics_split_RK2b" ! This module's name.
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=48) :: thickness_units, flux_units, eta_rest_name
   logical :: debug_truncations
-  logical :: read_uv, read_h2
   logical :: enable_bugs  ! If true, the defaults for recently added bug-fix flags are set to
                           ! recreate the bugs, or if false bugs are only used if actively selected.
   logical :: visc_rem_bug ! Stores the value of runtime paramter VISC_REM_BUG.
@@ -1362,7 +1361,7 @@ subroutine initialize_dyn_split_RK2b(u, v, h, tv, uh, vh, eta, Time, G, GV, US, 
   if (nc<=0) CS%use_HA = .false.
   call get_param(param_file, mdl, "BE", CS%be, &
                  "If SPLIT is true, BE determines the relative weighting "//&
-                 "of a  2nd-order Runga-Kutta baroclinic time stepping "//&
+                 "of a 2nd-order Runga-Kutta baroclinic time stepping "//&
                  "scheme (0.5) and a backward Euler scheme (1) that is "//&
                  "used for the Coriolis and inertial terms.  BE may be "//&
                  "from 0.5 to 1, but instability may occur near 0.5. "//&

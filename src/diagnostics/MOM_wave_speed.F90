@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Routines for calculating baroclinic wave speeds
 module MOM_wave_speed
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_diag_mediator, only : post_data, query_averaging_enabled, diag_ctrl
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
@@ -884,9 +886,6 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
   real :: mode_struct_sq(SZK_(GV)+1) ! The square of mode structure [nondim]
   real :: mode_struct_fder_sq(SZK_(GV)) ! The square of mode structure 1st derivative [Z-2 ~> m-2]
 
-
-  real :: ms_min, ms_max ! The minimum and maximum mode structure values returned from tdma6 [L2 T-2 ~> m2 s-2]
-  real :: ms_sq          ! The sum of the square of the values returned from tdma6 [L4 T-4 ~> m4 s-4]
   real :: w2avg          ! A total for renormalization [H L4 T-4 ~> m5 s-4 or kg m2 s-4]
   real, parameter :: a_int = 0.5 ! Integral total for normalization [nondim]
   real :: renorm         ! Normalization factor [T2 L-2 ~> s2 m-2]
@@ -1373,7 +1372,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
             ! Find other eigen values if c1 is of significant magnitude, > cn_thresh
             nrootsfound = 0    ! number of extra roots found (not including 1st root)
             if ((nmodes > 1) .and. (kc >= nmodes+1) .and. (cn(i,j,1) > CS%c1_thresh)) then
-              ! Set the the range to look for the other desired eigen values
+              ! Set the range to look for the other desired eigen values
               ! set min value just greater than the 1st root (found above)
               lamMin = lam_1*(1.0 + tol_solve)
               ! set max value based on a low guess at wavespeed for highest mode
@@ -1403,9 +1402,9 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                     !   function changes sign but has a local max/min in interval,
                     ! try subdividing interval as many times as necessary (or sub_it_max).
                     ! loop that increases number of subintervals:
-                    !call MOM_error(WARNING, "determinant changes sign"// &
-                    !            "but has a local max/min in interval;"//&
-                    !            " reduce increment in lam.")
+                    !call MOM_error(WARNING, "determinant changes sign "// &
+                    !            "but has a local max/min in interval; "//&
+                    !            "reduce increment in lam.")
                     ! begin subdivision loop -------------------------------------------
                     sub_rootfound = .false. ! initialize
                     do sub_it=1,sub_it_max
@@ -1430,8 +1429,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                       ! sub intervals, try subdividing again unless sub_it_max has been reached.
                       if (sub_it == sub_it_max) then
                         call MOM_error(WARNING, "wave_speed: root not found "// &
-                                       " after sub_it_max subdivisions of original"// &
-                                       " interval.")
+                                       "after sub_it_max subdivisions of original "// &
+                                       "interval.")
                       endif ! sub_it == sub_it_max
                     enddo ! sub_it-loop-------------------------------------------------
                   endif ! det_l*ddet_l < 0.0

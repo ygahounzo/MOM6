@@ -1,9 +1,11 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Subroutines that use the ray-tracing equations to propagate the internal tide energy density.
 !!
 !! \author Benjamin Mater & Robert Hallberg, 2015
 module MOM_internal_tides
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_checksums,     only : hchksum
 use MOM_debugging,     only : is_NaN
@@ -338,15 +340,12 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
   real :: U_mag    ! rescaled magnitude of horizontal profile [L Z T-1 ~> m2 s-1]
   real :: W0       ! rescaled magnitude of vertical profile [Z T-1 ~> m s-1]
   real :: c_phase  ! The phase speed [L T-1 ~> m s-1]
-  real :: loss_rate  ! An energy loss rate [T-1 ~> s-1]
+  ! real :: loss_rate  ! An energy loss rate [T-1 ~> s-1]
   real :: Fr2_max    ! The column maximum internal wave Froude number squared [nondim]
   real :: cn_subRO        ! A tiny wave speed to prevent division by zero [L T-1 ~> m s-1]
   real :: en_subRO        ! A tiny energy to prevent division by zero [H Z2 T-2 ~> m3 s-2 or J m-2]
   real :: En_a, En_b                                 ! Energies for time stepping [H Z2 T-2 ~> m3 s-2 or J m-2]
-  real :: En_new, En_check                           ! Energies for debugging [H Z2 T-2 ~> m3 s-2 or J m-2]
   real :: En_sumtmp                                  ! Energies for debugging [H Z2 L2 T-2 ~> m5 s-2 or J]
-  real :: En_initial, Delta_E_check                  ! Energies for debugging [H Z2 T-2 ~> m3 s-2 or J m-2]
-  real :: TKE_Froude_loss_check, TKE_Froude_loss_tot ! Energy losses for debugging [H Z2 T-3 ~> m3 s-3 or W m-2]
   real :: HZ2_T2_to_J_m2                             ! unit conversion factor for Energy from internal units
                                                      ! to mks [T2 kg H-1 Z-2 s-2 ~> kg m-3 or 1]
   real :: J_m2_to_HZ2_T2                             ! unit conversion factor for Energy from mks to internal
@@ -1541,7 +1540,7 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, US, h_bot, k_bot, j, N2_lay, N2
 
   do i=is,ie
 
-    ! create vertical profiles for diffusivites in layers
+    ! create vertical profiles for diffusivities in layers
     renorm_N = 0.0
     renorm_N2 = 0.0
     renorm_StLau = 0.0
@@ -1681,7 +1680,7 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, US, h_bot, k_bot, j, N2_lay, N2
     ! note on units: TKE_to_Kd = 1 / ((g/rho0) * drho) Z-1 T2
     ! mult by dz gives -1/N2 in T2
 
-    ! get TKE loss value and compute diffusivites in layers
+    ! get TKE loss value and compute diffusivities in layers
     if (CS%apply_background_drag) then
       call get_lowmode_loss(i, j, G, CS, "LeakDrag", TKE_loss)
       ! insert logic to switch between profiles here
@@ -2105,8 +2104,6 @@ subroutine propagate(En, cn, freq, dt, G, GV, US, CS, NAngle, test, halo_size, r
                          intent(inout) :: residual_loss !< internal tide energy loss due
                                                         !! to the residual at slopes [H Z2 T-3 ~> m3 s-3 or W m-2].
   ! Local variables
-  real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB) :: &
-    speed  ! The magnitude of the group velocity at the q points for corner adv [L T-1 ~> m s-1].
   integer, parameter :: stencil = 2
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     speed_x  ! The magnitude of the group velocity at the Cu points [L T-1 ~> m s-1].
@@ -2648,7 +2645,6 @@ subroutine turning_latitude(En, NAngle, freq2, CS, G, LB)
   real, dimension(1:Nangle) :: En_reflected ! Energy reflected [H Z2 T-2 ~> m3 s-2 or J m-2].
 
   real    :: TwoPi                         ! 2*pi = 6.2831853... [nondim]
-  real    :: Pi_2                          ! pi/2 [nondim]
   real    :: Angle_size                    ! size of beam wedge [rad]
   real    :: I_Angle_size                  ! inverse of size of beam wedge [rad-1]
   real    :: f2
@@ -3256,10 +3252,9 @@ subroutine register_int_tide_restarts(G, GV, US, param_file, CS, restart_CS)
   logical :: non_Bous          ! If true, this run is fully non-Boussinesq
   logical :: Boussinesq        ! If true, this run is fully Boussinesq
   logical :: semi_Boussinesq   ! If true, this run is partially non-Boussinesq
-  logical :: use_int_tides
-  integer :: num_freq, num_angle , num_mode, period_1
-  integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, i, j, a, fr, m
-  character(64) :: var_name, cfr, units
+  integer :: num_freq, num_angle, num_mode
+  integer :: isd, ied, jsd, jed, i, j, a, fr, m
+  character(64) :: units
 
   type(axis_info) :: axes_inttides(2)
   real, dimension(:), allocatable :: angles, freqs ! Lables for angles and frequencies [nondim]
@@ -3411,7 +3406,6 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   real    :: kappa_h2_factor    ! A roughness scaling factor [nondim]
   real    :: RMS_roughness_frac ! The maximum RMS topographic roughness as a fraction of the
                                 ! nominal ocean depth, or a negative value for no limit [nondim]
-  real    :: period_1           ! The period of the gravest modeled mode [T ~> s]
   real    :: period             ! A tidal period read from namelist [T ~> s]
   real    :: HZ2_T2_to_J_m2     ! unit conversion factor for Energy from internal units
                                 ! to mks [T2 kg H-1 Z-2 s-2 ~> kg m-3 or 1]
@@ -3513,8 +3507,8 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
                  "The number of angular resolution bands for the internal "//&
                  "tide calculations.", default=24)
   call get_param(param_file, mdl, "DT_ITIDES", CS%dt_itides, &
-                 "The timestep for internal tides ray-tracing scheme"//&
-                 "If set to -1 (default), it uses the same value as DT_THERM", &
+                 "The timestep for internal tides ray-tracing scheme.  "//&
+                 "If set to -1 (default), it uses the same value as DT_THERM.", &
                  units="s", default=-1., scale=US%s_to_T)
 
   if (use_int_tides) then
@@ -4068,9 +4062,9 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
 
   do m=1,CS%nMode
 
-    ! Register 3-D internal tide horizonal velocity profile for each mode
+    ! Register 3-D internal tide horizontal velocity profile for each mode
     write(var_name, '("Itide_Ustruct","_mode",i1)') m
-    write(var_descript, '("horizonal velocity profile for mode ",i1)') m
+    write(var_descript, '("horizontal velocity profile for mode ",i1)') m
     CS%id_Ustruct_mode(m) = register_diag_field('ocean_model', var_name, &
                  diag%axesTl, Time, var_descript, 'm-1', conversion=US%m_to_L)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)

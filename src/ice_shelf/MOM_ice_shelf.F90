@@ -1,9 +1,12 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Implements the thermodynamic aspects of ocean / ice-shelf interactions,
 !!  along with a crude placeholder for a later implementation of full
 !!  ice shelf dynamics, all using the MOM framework and coding style.
 module MOM_ice_shelf
 
-! This file is part of MOM6. See LICENSE.md for the license.
 use MOM_array_transform,      only : rotate_array
 use MOM_constants, only : hlf
 use MOM_cpu_clock, only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
@@ -28,7 +31,7 @@ use MOM_error_handler, only : callTree_showQuery
 use MOM_error_handler, only : callTree_enter, callTree_leave, callTree_waypoint
 use MOM_file_parser, only : read_param, get_param, log_param, log_version, param_file_type
 use MOM_grid, only : MOM_grid_init, ocean_grid_type
-use MOM_grid_initialize, only : set_grid_metrics
+use MOM_grid_initialize, only : initialize_masks, set_grid_metrics
 use MOM_hor_index,             only : hor_index_type, hor_index_init
 use MOM_hor_index,             only : rotate_hor_index
 use MOM_fixed_initialization, only : MOM_initialize_topography
@@ -39,7 +42,7 @@ use MOM_io, only : slasher, fieldtype, vardesc, var_desc
 use MOM_io, only : close_file, SINGLE_FILE, MULTIPLE
 use MOM_restart, only : register_restart_field, save_restart
 use MOM_restart, only : restart_init, restore_state, MOM_restart_CS, register_restart_pair
-use MOM_time_manager, only : time_type, time_type_to_real, real_to_time, operator(>), operator(-)
+use MOM_time_manager, only : time_type, time_to_real, real_to_time, operator(>), operator(-)
 use MOM_transcribe_grid, only : copy_dyngrid_to_MOM_grid, copy_MOM_grid_to_dyngrid
 use MOM_transcribe_grid, only : rotate_dyngrid
 use MOM_unit_scaling, only : unit_scale_type, unit_scaling_init, fix_restart_unit_scaling
@@ -79,6 +82,7 @@ public shelf_calc_flux, initialize_ice_shelf, ice_shelf_end, ice_shelf_query
 public ice_shelf_save_restart, solo_step_ice_shelf, add_shelf_forces
 public initialize_ice_shelf_fluxes, initialize_ice_shelf_forces
 public ice_sheet_calving_to_ocean_sfc
+public adjust_ice_sheet_frazil
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -207,7 +211,7 @@ type, public :: ice_shelf_CS ; private
              id_tfreeze = -1, id_tfl_shelf = -1, &
              id_thermal_driving = -1, id_haline_driving = -1, &
              id_u_ml = -1, id_v_ml = -1, id_sbdry = -1, &
-             id_h_shelf = -1, id_dhdt_shelf, id_h_mask = -1, &
+             id_h_shelf = -1, id_dhdt_shelf = -1, id_h_mask = -1, id_frazil = -1, &
              id_surf_elev = -1, id_bathym = -1, &
              id_area_shelf_h = -1, &
              id_ustar_shelf = -1, id_shelf_mass = -1, id_mass_flux = -1, &
@@ -878,7 +882,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
 
     !Add frazil formation
     if (add_frazil .and. (ISS%hmask(i,j) == 1 .or. ISS%hmask(i,j) == 2)) &
-      ISS%water_flux(i,j) = ISS%water_flux(i,j) - sfc_state%frazil(i,j) * I_dt_LHF
+      ISS%water_flux(i,j) = ISS%water_flux(i,j) - ISS%frazil(i,j) * I_dt_LHF
     fluxes%iceshelf_melt(i,j) = ISS%water_flux(i,j)
   enddo ; enddo ! i- and j-loops
 
@@ -944,7 +948,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
 
   if (CS%shelf_mass_is_dynamic) &
     call write_ice_shelf_energy(CS%dCS, G, US, ISS%mass_shelf, ISS%area_shelf_h, Time, &
-                                time_step=real_to_time(US%T_to_s*time_step) )
+                                time_step=real_to_time(time_step, unscale=US%T_to_s) )
 
   if (CS%debug) call MOM_forcing_chksum("Before add shelf flux", fluxes, G, CS%US, haloshift=0)
 
@@ -971,9 +975,13 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   if (CS%id_h_shelf > 0) call post_data(CS%id_h_shelf, ISS%h_shelf, CS%diag)
   if (CS%id_dhdt_shelf > 0) call post_data(CS%id_dhdt_shelf, ISS%dhdt_shelf, CS%diag)
   if (CS%id_h_mask > 0) call post_data(CS%id_h_mask,ISS%hmask,CS%diag)
+  if (CS%id_frazil > 0) call post_data(CS%id_frazil,ISS%frazil,CS%diag)
   if (CS%active_shelf_dynamics) &
       call process_and_post_scalar_data(CS, vaf0, vaf0_A, vaf0_G, Itime_step, dh_adott, dh_bdott)
   call disable_averaging(CS%diag)
+
+  !reset used frazil
+  if (add_frazil) ISS%frazil(:,:) = 0.0
 
   call cpu_clock_end(id_clock_shelf)
 
@@ -989,6 +997,59 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   endif
 
 end subroutine shelf_calc_flux
+
+!> Copies frazil from the ocean surface state to the ice sheet state. Removes frazil that will
+!! be used by the ice sheet from the ocean surface state
+subroutine adjust_ice_sheet_frazil(sfc_state_in, fluxes_in, CS)
+  type(surface), target,  intent(inout) :: sfc_state_in !< A structure containing fields that
+                                                 !! describe the surface state of the ocean.  The
+                                                 !! intent is only inout to allow for halo updates.
+  type(forcing),  target, intent(in)    :: fluxes_in !< structure containing pointers to any
+                                                 !! possible thermodynamic or mass-flux forcing fields.
+  type(ice_shelf_CS),     pointer       :: CS    !< A pointer to the control structure returned
+                                                 !! by a previous call to initialize_ice_shelf.
+  ! Local variables
+  type(ocean_grid_type), pointer :: G => NULL()  !< The grid structure used by the ice shelf.
+  type(ice_shelf_state), pointer :: ISS => NULL() !< A structure with elements that describe
+                                                 !! the ice-shelf state
+  type(surface), pointer :: sfc_state => NULL()
+  type(forcing), pointer :: fluxes => NULL()
+  integer :: i,j,is,ie,js,je
+
+  G => CS%grid ; ISS => CS%ISS
+
+  if (CS%rotate_index) then
+    allocate(sfc_state)
+    call rotate_surface_state(sfc_state_in, sfc_state, G, CS%turns)
+    allocate(fluxes)
+    call allocate_forcing_type(fluxes_in, G, fluxes, turns=CS%turns)
+    call rotate_forcing(fluxes_in, fluxes, CS%turns)
+  else
+    sfc_state => sfc_state_in
+    fluxes => fluxes_in
+  endif
+
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
+
+  do j=js,je ; do i=is,ie
+    !Copy frazil to the ice sheet module where ice sheet is present.
+    !No scaling to account for partial ice-sheet cells is necessary here, as
+    !this is taken care of when applied to the ice sheet.
+    if (fluxes%frac_shelf_h(i,j)>0.0) ISS%frazil(i,j) = sfc_state%frazil(i,j)
+    !Remove the frazil that is used by the ice sheet from sfc_state%frazil
+    !The sfc_state%frazil is sent to the sea-ice module
+    sfc_state%frazil(i,j) = sfc_state%frazil(i,j) * (1.0-fluxes%frac_shelf_h(i,j))
+  enddo; enddo
+
+  if (CS%rotate_index) then
+    call rotate_surface_state(sfc_state, sfc_state_in, G, -CS%turns)
+    ! call rotate_forcing(fluxes, fluxes_in, -CS%turns)
+    call deallocate_surface_state(sfc_state)
+    deallocate(sfc_state)
+    call deallocate_forcing_type(fluxes)
+    deallocate(fluxes)
+  endif
+end subroutine adjust_ice_sheet_frazil
 
 function integrate_over_ice_sheet_area(G, ISS, var, unscale, hemisphere) result(var_out)
   type(ocean_grid_type), intent(in) :: G  !< The grid structure used by the ice shelf.
@@ -1362,7 +1423,7 @@ subroutine add_shelf_flux(G, US, CS, sfc_state, fluxes, time_step)
 
     ! take into account changes in mass (or thickness) when imposing ice shelf mass
     if (CS%override_shelf_movement .and. CS%mass_from_file) then
-      dTime = real_to_time(US%T_to_s*CS%time_step)
+      dTime = real_to_time(CS%time_step, unscale=US%T_to_s)
 
       ! Compute changes in mass after at least one full time step
       if (CS%Time > dTime) then
@@ -1514,6 +1575,7 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, Time_init,
   real    :: col_thick_melt_thresh ! An ocean column thickness below which iceshelf melting
                                    ! does not occur [Z ~> m]
   real, allocatable, dimension(:,:) :: tmp2d ! Temporary array for ice shelf input data [L T-1 ~> m s-1]
+  real, allocatable, dimension(:,:) :: maskT ! Temporary array for the tracer points masks [nondim]
 
   type(surface), pointer :: sfc_state => NULL()
   type(vardesc) :: u_desc, v_desc
@@ -1573,6 +1635,12 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, Time_init,
     call set_grid_metrics(dG_in, param_file, CS%US)
     ! Set up the bottom depth, dG_in%bathyT, either analytically or from file
     call MOM_initialize_topography(dG_in%bathyT, CS%Grid_in%max_depth, dG_in, param_file, CS%US)
+
+    ! The use of maskT here sets all ice shelf points to be unmasked.
+    allocate(maskT(dG_in%isd:dG_in%ied,dG_in%jsd:dG_in%jed), source=1.0)
+    call initialize_masks(dG_in, param_file, CS%US, maskT=maskT)
+    deallocate(maskT)
+
     call copy_dyngrid_to_MOM_grid(dG_in, CS%Grid_in, CS%US)
 
     ! Now set up the rotated ice-shelf grid.
@@ -1594,6 +1662,12 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, Time_init,
     call set_grid_metrics(dG, param_file, CS%US)
     ! Set up the bottom depth, dG%bathyT, either analytically or from file
     call MOM_initialize_topography(dG%bathyT, CS%Grid%max_depth, dG, param_file, CS%US)
+
+    ! The use of maskT here sets all ice shelf points to be unmasked.
+    allocate(maskT(dG%isd:dG%ied,dG%jsd:dG%jed), source=1.0)
+    call initialize_masks(dG, param_file, CS%US, maskT=maskT)
+    deallocate(maskT)
+
     call copy_dyngrid_to_MOM_grid(dG, CS%Grid, CS%US)
     call destroy_dyn_horgrid(dG)
   endif
@@ -1749,7 +1823,7 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, Time_init,
   call get_param(param_file, mdl, "RHO_0", CS%Rho_ocn, &
                  "The mean ocean density used with BOUSSINESQ true to "//&
                  "calculate accelerations and the mass for conservation "//&
-                 "properties, or with BOUSSINSEQ false to convert some "//&
+                 "properties, or with BOUSSINESQ false to convert some "//&
                  "parameters from vertical units of m to kg m-2.", &
                  units="kg m-3", default=1035.0, scale=US%kg_m3_to_R)
   call get_param(param_file, mdl, "C_P_ICE", CS%Cp_ice, &
@@ -1961,7 +2035,6 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, Time_init,
                               "ice sheet/shelf thickness", "m", conversion=US%Z_to_m)
   call register_restart_field(ISS%melt_mask, "melt_mask", .false., CS%restart_CSp, &
                               "Mask that is >0 where ice-shelf melting is allowed", "none")
-
   if (CS%calve_ice_shelf_bergs) then
     call register_restart_field(ISS%calving, "shelf_calving", .true., CS%restart_CSp, &
                                 "Calving flux from ice shelf into icebergs", "kg m-2", conversion=US%RZ_to_kg_m2)
@@ -2123,6 +2196,8 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, Time_init,
       'Heat conduction into ice shelf', 'W m-2', conversion=-US%QRZ_T_to_W_m2)
   CS%id_ustar_shelf = register_diag_field('ice_shelf_model', 'ustar_shelf', CS%diag%axesT1, CS%Time, &
       'Fric vel under shelf', 'm/s', conversion=US%Z_to_m*US%s_to_T)
+  CS%id_frazil = register_diag_field('ice_shelf_model', 'frazil', CS%diag%axesT1, CS%Time, &
+     'Frazil heat rejected by the ocean', 'J m-2', conversion=US%Q_to_J_kg*US%RZ_to_kg_m2)
   if (CS%active_shelf_dynamics) then
     CS%id_h_mask = register_diag_field('ice_shelf_model', 'h_mask', CS%diag%axesT1, CS%Time, &
        'ice shelf thickness mask', 'none', conversion=1.0)
@@ -2685,7 +2760,7 @@ subroutine solo_step_ice_shelf(CS, time_interval, nsteps, Time, min_time_step_in
   ISS => CS%ISS
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
-  remaining_time = US%s_to_T*time_type_to_real(time_interval)
+  remaining_time = time_to_real(time_interval, scale=US%s_to_T)
   full_time_step = remaining_time
   Ifull_time_step = 1./full_time_step
 
@@ -2695,7 +2770,7 @@ subroutine solo_step_ice_shelf(CS, time_interval, nsteps, Time, min_time_step_in
     min_time_step = 1000.0*US%s_to_T ! At 1 km resolution this would imply ice is moving at ~1 meter per second
   endif
 
-  write (mesg,*) "TIME in ice shelf call, yrs: ", time_type_to_real(Time)/(365. * 86400.)
+  write (mesg,*) "TIME in ice shelf call, yrs: ", time_to_real(Time)/(365. * 86400.)
   call MOM_mesg("solo_step_ice_shelf: "//mesg, 5)
 
   ISS%dhdt_shelf(:,:) = ISS%h_shelf(:,:)

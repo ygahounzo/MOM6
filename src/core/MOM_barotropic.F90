@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Barotropic solver
 module MOM_barotropic
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_checksums, only : chksum0
 use MOM_coms,      only : any_across_PEs
@@ -600,13 +602,8 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
     uhbt0, &      ! The difference between the sum of the layer zonal thickness
                   ! fluxes and the barotropic thickness flux using the same
                   ! velocity [H L2 T-1 ~> m3 s-1 or kg s-1].
-    ubt_prev, &   ! The starting value of ubt in a barotropic step [L T-1 ~> m s-1].
-    ubt_first, &  ! The starting value of ubt in a series of barotropic steps [L T-1 ~> m s-1].
-    ubt_trans, &  ! The latest value of ubt used for a transport [L T-1 ~> m s-1].
-    Cor_u, &      ! The zonal Coriolis acceleration [L T-2 ~> m s-2].
     Cor_ref_u, &  ! The zonal barotropic Coriolis acceleration due
                   ! to the reference velocities [L T-2 ~> m s-2].
-    PFu, &        ! The zonal pressure force acceleration [L T-2 ~> m s-2].
     Rayleigh_u, & ! A Rayleigh drag timescale operating at u-points for drag parameterizations
                   ! that introduced directly into the barotropic solver rather than coming in via
                   ! the visc_rem_u arrays from the layered equations [T-1 ~> s-1].
@@ -627,13 +624,8 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
     vhbt0, &      ! The difference between the sum of the layer meridional
                   ! thickness fluxes and the barotropic thickness flux using
                   ! the same velocities [H L2 T-1 ~> m3 s-1 or kg s-1].
-    vbt_prev, &   ! The starting value of vbt in a barotropic step [L T-1 ~> m s-1].
-    vbt_first, &  ! The starting value of vbt in a series of barotropic steps [L T-1 ~> m s-1].
-    vbt_trans, &  ! The latest value of vbt used for a transport [L T-1 ~> m s-1].
-    Cor_v, &      ! The meridional Coriolis acceleration [L T-2 ~> m s-2].
     Cor_ref_v, &  ! The meridional barotropic Coriolis acceleration due
                   ! to the reference velocities [L T-2 ~> m s-2].
-    PFv, &        ! The meridional pressure force acceleration [L T-2 ~> m s-2].
     Rayleigh_v, & ! A Rayleigh drag timescale operating at v-points for drag parameterizations
                   ! that introduced directly into the barotropic solver rather than coming
                   ! in via the visc_rem_v arrays from the layered equations [T-1 ~> s-1].
@@ -662,9 +654,8 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
   real, dimension(SZI_(G),SZJB_(G)) :: Drag_v
                   ! The meridional acceleration due to frequency-dependent drag [L T-2 ~> m s-2]
   real, target, dimension(SZIW_(CS),SZJW_(CS)) :: &
-    eta, &        ! The barotropic free surface height anomaly or column mass
+    eta           ! The barotropic free surface height anomaly or column mass
                   ! anomaly [H ~> m or kg m-2]
-    eta_pred      ! A predictor value of eta [H ~> m or kg m-2] like eta.
   real, dimension(SZIW_(CS),SZJW_(CS)) :: &
     eta_sum, &    ! eta summed across the timesteps [H ~> m or kg m-2].
     eta_wtd, &    ! A weighted estimate used to calculate eta_out [H ~> m or kg m-2].
@@ -694,7 +685,6 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
   ! End of wide-sized variables.
 
   real :: visc_rem    ! A work variable that may equal visc_rem_[uv] [nondim]
-  real :: vel_prev    ! The previous velocity [L T-1 ~> m s-1].
   real :: dtbt        ! The barotropic time step [T ~> s].
   real :: Idt         ! The inverse of dt [T-1 ~> s-1].
   real :: det_de      ! The partial derivative due to self-attraction and loading
@@ -755,13 +745,11 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
   logical :: apply_OBCs, apply_OBC_flather
   type(memory_size_type) :: MS
   character(len=200) :: mesg
-  integer :: isv, iev, jsv, jev ! The valid array size at the end of a step.
   integer :: stencil  ! The stencil size of the algorithm, often 1 or 2.
   integer :: isvf, ievf, jsvf, jevf, num_cycles
   integer :: i, j, k, n
   integer :: is, ie, js, je, nz, Isq, Ieq, Jsq, Jeq
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
-  integer :: l_seg
 
   if (.not.CS%module_is_initialized) call MOM_error(FATAL, &
       "btstep: Module MOM_barotropic must be initialized before it is used.")
@@ -1328,8 +1316,11 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
   uhbt(:,:) = 0.0 ; vhbt(:,:) = 0.0
   u_accel_bt(:,:) = 0.0 ; v_accel_bt(:,:) = 0.0
 
-  if (apply_OBCs) then
-    ubt_first(:,:) = ubt(:,:) ; vbt_first(:,:) = vbt(:,:)
+  if (apply_OBCs .or. (CS%id_ubtdt > 0)) then
+    do j=js,je ; do I=is-1,ie ; ubt_st(I,j) = ubt(I,j) ; enddo ; enddo
+  endif
+  if (apply_OBCs .or. (CS%id_vbtdt > 0)) then
+    do J=js-1,je ; do i=is,ie ; vbt_st(i,J) = vbt(i,J) ; enddo ; enddo
   endif
 
 !   Here the vertical average accelerations due to the Coriolis, advective,
@@ -1800,17 +1791,6 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
     endif
   endif
 
-  if (CS%id_ubtdt > 0) then
-    do j=js-1,je+1 ; do I=is-1,ie
-      ubt_st(I,j) = ubt(I,j)
-    enddo ; enddo
-  endif
-  if (CS%id_vbtdt > 0) then
-    do J=js-1,je ; do i=is-1,ie+1
-      vbt_st(i,J) = vbt(i,J)
-    enddo ; enddo
-  endif
-
   if (query_averaging_enabled(CS%diag)) then
     if (CS%id_eta_st > 0) call post_data(CS%id_eta_st, eta(isd:ied,jsd:jed), CS%diag)
     if (CS%id_ubt_st > 0) call post_data(CS%id_ubt_st, ubt(IsdB:IedB,jsd:jed), CS%diag)
@@ -2026,13 +2006,13 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
     ! symmetric-memory computational domain, not in the wide halo regions.
     if (CS%BT_OBC%u_OBCs_on_PE) then ; do j=js,je ; do I=is-1,ie
       if (CS%BT_OBC%u_OBC_type(I,j) /= 0) then
-        u_accel_bt(I,j) = (ubt_wtd(I,j) - ubt_first(I,j)) / dt
+        u_accel_bt(I,j) = (ubt_wtd(I,j) - ubt_st(I,j)) / dt
         do k=1,nz ; accel_layer_u(I,j,k) = u_accel_bt(I,j) ; enddo
       endif
     enddo ; enddo ; endif
     if (CS%BT_OBC%v_OBCs_on_PE) then ; do J=js-1,je ; do i=is,ie
       if (CS%BT_OBC%v_OBC_type(i,J) /= 0) then
-        v_accel_bt(i,J) = (vbt_wtd(i,J) - vbt_first(i,J)) / dt
+        v_accel_bt(i,J) = (vbt_wtd(i,J) - vbt_st(i,J)) / dt
         do k=1,nz ; accel_layer_v(i,J,k) = v_accel_bt(i,J) ; enddo
       endif
     enddo ; enddo ; endif
@@ -2566,7 +2546,7 @@ subroutine btstep_timeloop(eta, ubt, vbt, uhbt0, Datu, BTCL_u, vhbt0, Datv, BTCL
       (CS%id_uhbt_hifreq > 0) .or. (CS%id_vhbt_hifreq > 0)) &
     do_hifreq_output = query_averaging_enabled(CS%diag, time_int_in, time_end_in)
   if (do_hifreq_output) then
-    time_bt_start = time_end_in - real_to_time(US%T_to_s*dt)
+    time_bt_start = time_end_in - real_to_time(dt, unscale=US%T_to_s)
     dtbt_diag = dt/(nstep+nfilter) ! Note that this is not dtbt.
   endif
 
@@ -2995,7 +2975,7 @@ subroutine btstep_timeloop(eta, ubt, vbt, uhbt0, Datu, BTCL_u, vhbt0, Datv, BTCL
     if (do_hifreq_output) then
       ! Note that this compresses the time so that all of the timesteps, including those in the
       ! extra timesteps for filtering, fit within dt.
-      time_step_end = time_bt_start + real_to_time(n*US%T_to_s*dtbt_diag)
+      time_step_end = time_bt_start + real_to_time(n*dtbt_diag, unscale=US%T_to_s)
       call enable_averages(dtbt, time_step_end, CS%diag)
       if (CS%id_ubt_hifreq > 0) call post_data(CS%id_ubt_hifreq, ubt(IsdB:IedB,jsd:jed), CS%diag)
       if (CS%id_vbt_hifreq > 0) call post_data(CS%id_vbt_hifreq, vbt(isd:ied,JsdB:JedB), CS%diag)
@@ -3057,7 +3037,7 @@ subroutine btstep_find_Cor(q, DCor_u, DCor_v, f_4_u, f_4_v, isvf, ievf, jsvf, je
   integer, intent(in) :: jsvf  !< The starting j-index of the largest valid range for tracer points
   integer, intent(in) :: jevf  !< The ending j-index of the largest valid range for tracer points
 
-  real :: C1_3 ! One third [nondim]
+  ! real :: C1_3 ! One third [nondim]
   integer :: i, j
 
   if (CS%Sadourny) then
@@ -3548,7 +3528,6 @@ subroutine btloop_update_u(dtbt, ubt, vbt, u_accel_bt, &
   type(unit_scale_type),   intent(in)  :: US      !< A dimensional unit scaling type
 
   ! Local variables
-  real :: vel_prev    ! The previous velocity [L T-1 ~> m s-1].
   integer :: i, j
 
   !$OMP do schedule(static)
@@ -4605,7 +4584,6 @@ subroutine btcalc(h, G, GV, CS, h_u, h_v, may_use_default, OBC)
 
   logical :: use_default, test_dflt
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, i, j, k
-  integer :: is_v, ie_v, Js_v, Je_v
 
   if (.not.CS%module_is_initialized) call MOM_error(FATAL, &
       "btcalc: Module MOM_barotropic must be initialized before it is used.")
@@ -6329,7 +6307,7 @@ subroutine barotropic_init(u, v, h, Time, G, GV, US, param_file, diag, CS, &
   CS%id_vbtav = register_diag_field('ocean_model', 'vbtav', diag%axesCv1, Time, &
       'Barotropic time-average meridional velocity', 'm s-1', conversion=US%L_T_to_m_s)
   CS%id_eta_cor = register_diag_field('ocean_model', 'eta_cor', diag%axesT1, Time, &
-      'Corrective mass flux within a timestep', 'm', conversion=GV%H_to_m)
+      'Corrective mass or volume flux within a timestep', thickness_units, conversion=GV%H_to_MKS)
   CS%id_visc_rem_u = register_diag_field('ocean_model', 'visc_rem_u', diag%axesCuL, Time, &
       'Viscous remnant at u', 'nondim')
   CS%id_visc_rem_v = register_diag_field('ocean_model', 'visc_rem_v', diag%axesCvL, Time, &

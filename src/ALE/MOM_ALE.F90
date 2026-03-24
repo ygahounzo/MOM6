@@ -1,3 +1,7 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> This module contains the main regridding routines.
 !!
 !! Regridding comprises two steps:
@@ -7,8 +11,6 @@
 !!
 !! Original module written by Laurent White, 2008.06.09
 module MOM_ALE
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_debugging,        only : check_column_integrals
 use MOM_diag_mediator,    only : register_diag_field, post_data, diag_ctrl
@@ -240,7 +242,7 @@ subroutine ALE_init( param_file, G, GV, US, max_depth, CS)
                  "extrapolated instead of piecewise constant", default=.false.)
   call get_param(param_file, mdl, "INIT_BOUNDARY_EXTRAP", init_boundary_extrap, &
                  "If true, values at the interfaces of boundary cells are "//&
-                 "extrapolated instead of piecewise constant during initialization."//&
+                 "extrapolated instead of piecewise constant during initialization.  "//&
                  "Defaults to REMAP_BOUNDARY_EXTRAP.", default=remap_boundary_extrap)
   call get_param(param_file, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
                  "This sets the default value for the various _ANSWER_DATE parameters.", &
@@ -294,6 +296,13 @@ subroutine ALE_init( param_file, G, GV, US, max_depth, CS)
                  "legacy step and should not be needed if the initialization is "//&
                  "consistent with the coordinate mode.", default=.true.)
 
+  call get_param(param_file, mdl, "REGRID_USE_DEPTH_BASED_TIME_FILTER", local_logical, &
+                 "If true, always uses depth-based time filtering code that updates the "//&
+                 "generated grid using REGRID_TIME_SCALE, REGRID_FILTER_SHALLOW_DEPTH, "//&
+                 "REGRID_FILTER_DEEP_DEPTH parameters. Setting to True always uses "//&
+                 "filtering but setting to False bypasses calculations when filter times = 0.", &
+                 default=.true.)
+  call set_regrid_params(CS%regridCS, use_depth_based_time_filter=local_logical)
   call get_param(param_file, mdl, "REGRID_TIME_SCALE", CS%regrid_time_scale, &
                  "The time-scale used in blending between the current (old) grid "//&
                  "and the target (new) grid. A short time-scale favors the target "//&
@@ -307,7 +316,7 @@ subroutine ALE_init( param_file, G, GV, US, max_depth, CS)
   call get_param(param_file, mdl, "REGRID_FILTER_DEEP_DEPTH", filter_deep_depth, &
                  "The depth below which full time-filtering is applied with time-scale "//&
                  "REGRID_TIME_SCALE. Between depths REGRID_FILTER_SHALLOW_DEPTH and "//&
-                 "REGRID_FILTER_SHALLOW_DEPTH the filter weights adopt a cubic profile.", &
+                 "REGRID_FILTER_DEEP_DEPTH the filter weights adopt a cubic profile.", &
                  units="m", default=0., scale=GV%m_to_H)
   call set_regrid_params(CS%regridCS, depth_of_time_filter_shallow=filter_shallow_depth, &
                          depth_of_time_filter_deep=filter_deep_depth)
@@ -415,14 +424,14 @@ subroutine ALE_register_diags(Time, G, GV, US, diag, CS)
       'Layer thicknesses tendency due to ALE regridding and remapping', &
       trim(thickness_units)//" s-1", conversion=GV%H_to_MKS*US%s_to_T, v_extensive=.true.)
   CS%id_remap_delta_integ_u2 = register_diag_field('ocean_model', 'ale_u2', diag%axesCu1, Time, &
-      'Rate of change in half rho0 times depth integral of squared zonal'//&
-      ' velocity by remapping. If REMAP_VEL_CONSERVE_KE is .true. then '//&
-      ' this measures the change before the KE-conserving correction is applied.', &
+      'Rate of change in half rho0 times depth integral of squared zonal '//&
+      'velocity by remapping. If REMAP_VEL_CONSERVE_KE is .true. then '//&
+      'this measures the change before the KE-conserving correction is applied.', &
       'W m-2', conversion=GV%H_to_kg_m2 * US%L_T_to_m_s**2 * US%s_to_T)
   CS%id_remap_delta_integ_v2 = register_diag_field('ocean_model', 'ale_v2', diag%axesCv1, Time, &
-      'Rate of change in half rho0 times depth integral of squared meridional'//&
-      ' velocity by remapping. If REMAP_VEL_CONSERVE_KE is .true. then '//&
-      ' this measures the change before the KE-conserving correction is applied.', &
+      'Rate of change in half rho0 times depth integral of squared meridional '//&
+      'velocity by remapping. If REMAP_VEL_CONSERVE_KE is .true. then '//&
+      'this measures the change before the KE-conserving correction is applied.', &
       'W m-2', conversion=GV%H_to_kg_m2 * US%L_T_to_m_s**2 * US%s_to_T)
 
 end subroutine ALE_register_diags

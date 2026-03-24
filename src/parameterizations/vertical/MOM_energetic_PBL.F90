@@ -1,12 +1,15 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Energetically consistent planetary boundary layer parameterization
 module MOM_energetic_PBL
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_cpu_clock,      only : cpu_clock_id, cpu_clock_begin, cpu_clock_end, CLOCK_ROUTINE
 use MOM_coms,           only : EFP_type, real_to_EFP, EFP_to_real, operator(+), assignment(=), EFP_sum_across_PEs
 use MOM_debugging,      only : hchksum
 use MOM_diag_mediator,  only : post_data, register_diag_field, safe_alloc_alloc
+use MOM_diag_mediator,  only : post_data_3d_by_column, post_data_3d_final
 use MOM_diag_mediator,  only : time_type, diag_ctrl
 use MOM_domains,        only : create_group_pass, do_group_pass, group_pass_type
 use MOM_error_handler,  only : MOM_error, FATAL, WARNING, MOM_mesg
@@ -261,6 +264,7 @@ type, public :: energetic_PBL_CS ; private
   type(EFP_type), dimension(2) :: sum_its_BBL !< The total number of iterations and columns worked on
 
   !>@{ Diagnostic IDs
+  integer :: id_Kd_ePBL_col_by_col = -1
   integer :: id_ML_depth = -1, id_hML_depth = -1, id_TKE_wind = -1, id_TKE_mixing = -1
   integer :: id_ustar_ePBL = -1, id_bflx_ePBL = -1
   integer :: id_TKE_MKE = -1, id_TKE_conv = -1, id_TKE_forcing = -1
@@ -477,8 +481,7 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, visc, dt, Kd_int, G, GV, 
     diag_mstar_LT, &   ! mstar due to Langmuir turbulence [nondim]
     diag_LA, &         ! Langmuir number [nondim]
     diag_LA_mod, &     ! Modified Langmuir number [nondim]
-    diag_ustar, &      ! The surface boundary layer friction velocity [Z T-1 ~> m s-1]
-    diag_bflx          ! The surface boundary layer buoyancy flux  [Z2 T-3 ~> m2 s-3]
+    diag_ustar         ! The surface boundary layer friction velocity [Z T-1 ~> m s-1]
 
   ! The following variables are only used for diagnosing sensitivities to ePBL settings
   real, dimension(SZK_(GV)+1) :: &
@@ -691,6 +694,8 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, visc, dt, Kd_int, G, GV, 
                          u_star, u_star_mean, mech_TKE, dt, MLD_io, Kd, mixvel, mixlen, GV, &
                          US, CS, eCD, Waves, G, i, j)
       endif
+      if (CS%id_Kd_ePBL_col_by_col > 0) &
+        call post_data_3d_by_column(CS%id_Kd_ePBL_col_by_col, Kd, CS%diag, i, j)
 
       ! Add the diffusivity due to bottom boundary layer mixing, if there is energy to drive this mixing.
       if (BBL_mixing) then
@@ -826,6 +831,7 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, visc, dt, Kd_int, G, GV, 
     do K=1,nz+1 ; do i=is,ie ; Kd_int(i,j,K) = Kd_2d(i,K) ; enddo ; enddo
 
   enddo ! j-loop
+  if (CS%id_Kd_ePBL_col_by_col > 0) call post_data_3d_final(CS%id_Kd_ePBL_col_by_col, CS%diag)
 
   if (CS%debug .and. BBL_mixing) then
     call hchksum(visc%BBL_meanKE_loss, "ePBL visc%BBL_meanKE_loss", G%HI, &
@@ -2069,8 +2075,6 @@ subroutine ePBL_BBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, SpV_dt, absf, &
     c1, &           ! c1 is used by the tridiagonal solver [nondim].
     Te, &           ! Estimated final values of T in the column [C ~> degC].
     Se, &           ! Estimated final values of S in the column [S ~> ppt].
-    dTe, &          ! Running (1-way) estimates of temperature change [C ~> degC].
-    dSe, &          ! Running (1-way) estimates of salinity change [S ~> ppt].
     hp_a, &         ! An effective pivot thickness of the layer including the effects
                     ! of coupling with layers above [H ~> m or kg m-2].  This is the first term
                     ! in the denominator of b1 in a downward-oriented tridiagonal solver.
@@ -2157,7 +2161,6 @@ subroutine ePBL_BBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, SpV_dt, absf, &
   real :: min_BBLD, max_BBLD ! Iteration bounds on BBLD [Z ~> m], which are adjusted at each step
   real :: dBBLD_min  ! The change in diagnosed mixed layer depth when the guess is min_BLD [Z ~> m]
   real :: dBBLD_max  ! The change in diagnosed mixed layer depth when the guess is max_BLD [Z ~> m]
-  logical :: BBL_converged ! Flag for convergence of BBLD
   integer :: BBL_it        ! Iteration counter
 
   real :: Surface_Scale ! Surface decay scale for vstar [nondim]
@@ -2778,8 +2781,7 @@ subroutine kappa_eqdisc(shape_func, CS, GV, dz, absf, B_flux, u_star, MLD_guess)
 
   ! variables used for optimizing computations:
   real :: sm_h     ! sigma_max multiplied by boundary layer depth [Z ~> m]
-  real :: sm_h_I   ! inverse of sm_h,[Z-1 ~> m-1]
-  real :: sm_h_I2  ! An inverse variable given by 1.0/(h - sm_h), [Z-1 ~> m-1]
+  real :: sm_h_I   ! inverse of sm_h [Z-1 ~> m-1]
   real :: hz_n     ! z depth to avoid calling hz multiple times [Z ~> m]
   real :: z_minus_sm_h  ! depth z minus \sigma_m * MLD_Guess [Z ~> m]
   real :: z_minus_sm_h2 ! (depth z minus \sigma_m * MLD_Guess)^2 [Z2 ~> m2]
@@ -4335,6 +4337,8 @@ subroutine energetic_PBL_init(Time, G, GV, US, param_file, diag, CS)
 
 
 !/ Checking output flags
+  CS%id_Kd_ePBL_col_by_col = register_diag_field('ocean_model', 'Kd_ePBL_col_by_col', diag%axesTi, Time, &
+      'ePBL diapycnal diffusivity at interfaces posted column by column', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
   CS%id_ML_depth = register_diag_field('ocean_model', 'ePBL_h_ML', diag%axesT1, &
       Time, 'Surface boundary layer depth', units='m', conversion=US%Z_to_m, &
       cmor_long_name='Ocean Mixed Layer Thickness Defined by Mixing Scheme')

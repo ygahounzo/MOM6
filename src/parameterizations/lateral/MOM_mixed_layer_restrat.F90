@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> \brief Parameterization of mixed layer restratification by unresolved mixed-layer eddies.
 module MOM_mixed_layer_restrat
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_debugging,     only : hchksum
 use MOM_diag_mediator, only : post_data, query_averaging_enabled, diag_ctrl
@@ -243,7 +245,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, 
   real :: h_min           ! The minimum layer thickness [H ~> m or kg m-2].  h_min could be 0.
   real :: h_neglect       ! tiny thickness usually lost in roundoff so can be neglected [H ~> m or kg m-2]
   real :: I4dt            ! 1/(4 dt) [T-1 ~> s-1]
-  real :: Ihtot,Ihtot_slow! Inverses of the total mixed layer thickness [H-1 ~> m-1 or m2 kg-1]
+  real :: Ihtot, Ihtot_slow ! Inverses of the total mixed layer thickness [H-1 ~> m-1 or m2 kg-1]
   real :: a(SZK_(GV))     ! A non-dimensional value relating the overall flux
                           ! magnitudes (uDml & vDml) to the realized flux in a
                           ! layer [nondim].  The vertical sum of a() through the pieces of
@@ -291,7 +293,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, 
     call MOM_error(FATAL, "mixedlayer_restrat_OM4: "// &
          "The resolution argument, Rd/dx, was not associated.")
   if (CS%use_Stanley_ML .and. .not.GV%Boussinesq) call MOM_error(FATAL, &
-       "MOM_mixedlayer_restrat: The Stanley parameterization is not"//&
+       "MOM_mixedlayer_restrat: The Stanley parameterization is not "//&
        "available without the Boussinesq approximation.")
 
   ! Extract the friction velocity from the forcing type.
@@ -817,13 +819,12 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   real :: psi_mag         ! Magnitude of stream function [L2 H T-1 ~> m3 s-1 or kg s-1]
   real :: h_neglect       ! tiny thickness usually lost in roundoff so can be neglected [H ~> m or kg m-2]
   real :: I4dt            ! 1/(4 dt) [T-1 ~> s-1]
-  real :: Ihtot,Ihtot_slow! Inverses of the total mixed layer thickness [H-1 ~> m-1 or m2 kg-1]
+  real :: Ihtot           ! Inverses of the total mixed layer thickness [H-1 ~> m-1 or m2 kg-1]
   real :: hAtVel          ! Thickness at the velocity points [H ~> m or kg m-2]
   real :: sigint          ! Fractional position within the mixed layer of the interface above a layer [nondim]
   real :: muzb            ! mu(z) at bottom of the layer [nondim]
   real :: muza            ! mu(z) at top of the layer [nondim]
   real :: dh              ! Portion of the layer thickness that is in the mixed layer [H ~> m or kg m-2]
-  real :: res_scaling_fac ! The resolution-dependent scaling factor [nondim]
   real :: Z3_T3_to_m3_s3  ! Conversion factors to undo scaling and permit terms to be raised to a
                           ! fractional power [T3 m3 Z-3 s-3 ~> 1]
   real :: m2_s2_to_Z2_T2  ! Conversion factors to restore scaling after a term is raised to a
@@ -1639,7 +1640,6 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
   character(len=32)  :: fl_varname ! Name of front-length scale variable in mle_fl_file.
 
 # include "version_variable.h"
-  integer :: i, j
   character(len=200) :: filename, varname
 
   ! Read all relevant parameters and write them to the model log.
@@ -1839,7 +1839,7 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
       endif
       if (CS%fl_from_file .and. CS%front_length>0.0) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
              "MLE_FRONT_LENGTH_FROM_FILE cannot be true when MLE_FRONT_LENGTH > 0.0. "// &
-             "If you want to use MLE_FRONT_LENGTH, set MLE_FRONT_LENGTH_FROM_FILE to false." // &
+             "If you want to use MLE_FRONT_LENGTH, set MLE_FRONT_LENGTH_FROM_FILE to false. " // &
              "If you want to use MLE_FRONT_LENGTH_FROM_FILE, set MLE_FRONT_LENGTH to 0.0.")
       call get_param(param_file, mdl, "MLE_USE_PBL_MLD", CS%MLE_use_PBL_MLD, &
              "If true, the MLE parameterization will use the mixed-layer "//&
@@ -2013,8 +2013,8 @@ end subroutine mixedlayer_restrat_register_restarts
 !! Returns false otherwise.
 logical function mixedlayer_restrat_unit_tests(verbose)
   logical, intent(in) :: verbose !< If true, write results to stdout
+
   ! Local variables
-  type(mixedlayer_restrat_CS) :: CS ! Control structure
   logical :: this_test
 
   print *,'===== mixedlayer_restrat: mixedlayer_restrat_unit_tests =================='
@@ -2066,7 +2066,6 @@ logical function test_answer(verbose, u, u_true, label, tol)
   real, optional,     intent(in) :: tol    !< The tolerance for differences between u and u_true [A]
   ! Local variables
   real :: tolerance ! The tolerance for differences between u and u_true [A]
-  integer :: k
 
   tolerance = 0.0 ; if (present(tol)) tolerance = tol
   test_answer = .false.

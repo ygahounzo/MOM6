@@ -1,8 +1,10 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Code that initializes fixed aspects of the model grid, such as horizontal
 !! grid metrics, topography and Coriolis, and can be shared between components.
 module MOM_shared_initialization
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms, only : max_across_PEs, reproducing_sum
 use MOM_domains, only : pass_var, pass_vector, sum_across_PEs, broadcast
@@ -146,7 +148,6 @@ subroutine set_meanSL_from_file(meanSL, G, param_file, US)
   type(param_file_type),            intent(in)  :: param_file !< Parameter file structure
   type(unit_scale_type),            intent(in)  :: US !< A dimensional unit scaling type
   ! Local variables
-  logical :: read_meanSL_file
   character(len=200) :: filename, file, inputdir ! Strings for file/path
   character(len=200) :: varname                  ! Variable name in file
   character(len=40)  :: mdl = "set_meanSL_from_file" ! This subroutine's name.

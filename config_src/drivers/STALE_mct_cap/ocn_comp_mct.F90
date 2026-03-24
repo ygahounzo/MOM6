@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> This is the main driver for MOM6 in CIME
 module ocn_comp_mct
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 ! mct modules
 use ESMF,                only: ESMF_clock, ESMF_time, ESMF_timeInterval
@@ -29,7 +31,7 @@ use MOM,                  only: extract_surface_state
 use MOM_variables,        only: surface
 use MOM_domains,          only: MOM_infra_init
 use MOM_restart,          only: save_restart
-use MOM_ice_shelf,        only: ice_shelf_save_restart
+use MOM_ice_shelf,        only: ice_shelf_save_restart, adjust_ice_sheet_frazil
 use MOM_domains,          only: num_pes, root_pe, pe_here
 use MOM_grid,             only: ocean_grid_type, get_global_grid_size
 use MOM_error_handler,    only: MOM_error, FATAL, is_root_pe, WARNING
@@ -778,6 +780,9 @@ subroutine ocean_model_init_sfc(OS, Ocean_sfc)
                           (/is,is,ie,ie/), (/js,js,je,je/), as_needed=.true.)
 
   call extract_surface_state(OS%MOM_CSp, OS%sfc_state)
+
+  if (OS%use_ice_shelf .and. allocated(OS%sfc_state%frazil)) &
+    call adjust_ice_sheet_frazil(OS%sfc_state, OS%fluxes, OS%Ice_shelf_CSp)
 
   call convert_state_to_ocean_type(OS%sfc_state, Ocean_sfc, OS%grid, OS%US)
 

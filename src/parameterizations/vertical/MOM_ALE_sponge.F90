@@ -1,3 +1,7 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> This module contains the routines used to apply sponge layers when using
 !! the ALE mode.
 !!
@@ -11,7 +15,6 @@
 module MOM_ALE_sponge
 
 
-! This file is part of MOM6. See LICENSE.md for the license.
 use MOM_array_transform, only: rotate_array
 use MOM_coms,          only : sum_across_PEs
 use MOM_diag_mediator, only : post_data, query_averaging_enabled, register_diag_field
@@ -189,7 +192,6 @@ subroutine initialize_ALE_sponge_fixed(Iresttime, G, GV, param_file, CS, data_h,
 # include "version_variable.h"
   character(len=64)  :: remapScheme
   logical :: use_sponge
-  logical :: data_h_to_Z
   logical :: bndExtrapolation = .true. ! If true, extrapolate boundaries
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
   logical :: om4_remap_via_sub_cells ! If true, use the OM4 remapping algorithm

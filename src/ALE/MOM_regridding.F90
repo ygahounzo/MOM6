@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Generates vertical grids as part of the ALE algorithm
 module MOM_regridding
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, NOTE, assert
 use MOM_file_parser,   only : param_file_type, get_param, log_param
@@ -100,8 +102,15 @@ type, public :: regridding_CS ; private
   !> Minimum thickness allowed when building the new grid through regridding [H ~> m or kg m-2].
   real :: min_thickness
 
+  !> If true, call adjust_interface_motion() after initial grid generation
+  logical :: use_adjust_interface_motion
+
   !> Reference pressure for potential density calculations [R L2 T-2 ~> Pa]
   real :: ref_pressure = 2.e7
+
+  !> If true, always pass through the depth-based time filtering that uses CS%old_grid_weight
+  !! If false, allows bypassing of the call if CS%old_grid_weight==0
+  logical :: use_depth_based_time_filter
 
   !> Weight given to old coordinate when blending between new and old grids [nondim]
   !! Used only below depth_of_time_filter_shallow, with a cubic variation
@@ -989,8 +998,14 @@ subroutine initialize_regridding(CS, G, GV, US, max_depth, param_file, mdl, &
                  "thickness allowed.", units="m", scale=GV%m_to_H, &
                  default=regriddingDefaultMinThickness )
     call set_regrid_params(CS, min_thickness=tmpReal)
+    call get_param(param_file, mdl, "USE_ADJUST_INTERFACE_MOTION", tmpLogical, &
+              "When regridding, after the primary grid generation, call a function that ensures "//&
+              "positive layer thicknesses. Historically, this was required.", default=.true.)
+    call set_regrid_params(CS, use_adjust_interface_motion=tmpLogical)
   else
     call set_regrid_params(CS, min_thickness=0.)
+    call set_regrid_params(CS, use_adjust_interface_motion=.true.)
+    call set_regrid_params(CS, use_depth_based_time_filter=.true.)
   endif
 
   if (main_parameters .and. coordinateMode(coord_mode) == REGRIDDING_HYCOM1) then
@@ -1675,7 +1690,8 @@ subroutine build_zstar_grid( CS, G, GV, h, nom_depth_H, dzInterface, frac_shelf_
       endif
 
       ! Calculate the final change in grid position after blending new and old grids
-      call filtered_grid_motion( CS, nz, zOld, zNew, dzInterface(i,j,:) )
+      if (CS%use_depth_based_time_filter .or. CS%old_grid_weight>0.) &
+        call filtered_grid_motion(CS, nz, zOld, zNew, dzInterface(i,j,:))
 
 #ifdef __DO_SAFETY_CHECKS__
       dh = max(nominalDepth,totalThickness)
@@ -1700,7 +1716,7 @@ subroutine build_zstar_grid( CS, G, GV, h, nom_depth_H, dzInterface, frac_shelf_
       endif
 #endif
 
-      call adjust_interface_motion( CS, nz, h(i,j,:), dzInterface(i,j,:) )
+      if (CS%use_adjust_interface_motion) call adjust_interface_motion( CS, nz, h(i,j,:), dzInterface(i,j,:) )
 
     enddo
   enddo
@@ -1774,7 +1790,8 @@ subroutine build_sigma_grid( CS, G, GV, h, nom_depth_H, dzInterface )
         zOld(k) = zOld(k+1) + h(i,j,k)
       enddo
 
-      call filtered_grid_motion( CS, nz, zOld, zNew, dzInterface(i,j,:) )
+      if (CS%use_depth_based_time_filter .or. CS%old_grid_weight>0.) &
+        call filtered_grid_motion(CS, nz, zOld, zNew, dzInterface(i,j,:))
 
 #ifdef __DO_SAFETY_CHECKS__
       dh = max(nominalDepth,totalThickness)
@@ -1921,7 +1938,8 @@ subroutine build_rho_grid( G, GV, US, h, nom_depth_H, tv, dzInterface, remapCS, 
       endif
 
       ! Calculate the final change in grid position after blending new and old grids
-      call filtered_grid_motion( CS, nz, zOld, zNew, dzInterface(i,j,:) )
+      if (CS%use_depth_based_time_filter .or. CS%old_grid_weight>0.) &
+        call filtered_grid_motion(CS, nz, zOld, zNew, dzInterface(i,j,:))
 
 #ifdef __DO_SAFETY_CHECKS__
       do k=2,CS%nk
@@ -2051,11 +2069,12 @@ subroutine build_grid_HyCOM1( G, GV, US, h, nom_depth_H, tv, h_new, dzInterface,
            h_neglect=h_neglect, h_neglect_edge=h_neglect_edge)
 
       ! Calculate the final change in grid position after blending new and old grids
-      call filtered_grid_motion( CS, GV%ke, z_col, z_col_new, dz_col )
+      if (CS%use_depth_based_time_filter .or. CS%old_grid_weight>0.) &
+        call filtered_grid_motion( CS, GV%ke, z_col, z_col_new, dz_col )
 
       ! This adjusts things robust to round-off errors
       dz_col(:) = -dz_col(:)
-      call adjust_interface_motion( CS, GV%ke, h(i,j,:), dz_col(:) )
+      if (CS%use_adjust_interface_motion) call adjust_interface_motion( CS, GV%ke, h(i,j,:), dz_col(:) )
 
       dzInterface(i,j,1:nki+1) = dz_col(1:nki+1)
       if (nki<CS%nk) dzInterface(i,j,nki+2:CS%nk+1) = 0.
@@ -2130,10 +2149,11 @@ subroutine build_grid_adaptive(G, GV, US, h, nom_depth_H, tv, dzInterface, remap
     call build_adapt_column(CS%adapt_CS, G, GV, US, tv, i, j, zInt, tInt, sInt, h, &
                             nom_depth_H, zNext)
 
-    call filtered_grid_motion(CS, nz, zInt(i,j,:), zNext, dzInterface(i,j,:))
+    if (CS%use_depth_based_time_filter .or. CS%old_grid_weight>0.) &
+      call filtered_grid_motion(CS, nz, zInt(i,j,:), zNext, dzInterface(i,j,:))
     ! convert from depth to z
     do K = 1, nz+1 ; dzInterface(i,j,K) = -dzInterface(i,j,K) ; enddo
-    call adjust_interface_motion(CS, nz, h(i,j,:), dzInterface(i,j,:))
+    if (CS%use_adjust_interface_motion) call adjust_interface_motion(CS, nz, h(i,j,:), dzInterface(i,j,:))
   enddo ; enddo
 end subroutine build_grid_adaptive
 
@@ -2764,8 +2784,8 @@ end function getCoordinateShortName
 
 !> Can be used to set any of the parameters for MOM_regridding.
 subroutine set_regrid_params( CS, boundary_extrapolation, min_thickness, old_grid_weight, &
-             interp_scheme, depth_of_time_filter_shallow, depth_of_time_filter_deep, &
-             compress_fraction, ref_pressure, &
+             use_depth_based_time_filter, depth_of_time_filter_shallow, depth_of_time_filter_deep, &
+             interp_scheme, use_adjust_interface_motion, compress_fraction, ref_pressure, &
              integrate_downward_for_e, remap_answers_2018, remap_answer_date, regrid_answer_date, &
              adaptTimeRatio, adaptZoom, adaptZoomCoeff, adaptBuoyCoeff, &
              adaptAlpha, adaptDoMin, adaptDrho0)
@@ -2774,9 +2794,11 @@ subroutine set_regrid_params( CS, boundary_extrapolation, min_thickness, old_gri
   real,    optional, intent(in) :: min_thickness    !< Minimum thickness allowed when building the
                                                     !! new grid [H ~> m or kg m-2]
   real,    optional, intent(in) :: old_grid_weight  !< Weight given to old coordinate when time-filtering grid [nondim]
-  character(len=*), optional, intent(in) :: interp_scheme !< Interpolation method for state-dependent coordinates
+  logical, optional, intent(in) :: use_depth_based_time_filter !< Allow depth-based time filtering
   real,    optional, intent(in) :: depth_of_time_filter_shallow !< Depth to start cubic [H ~> m or kg m-2]
   real,    optional, intent(in) :: depth_of_time_filter_deep !< Depth to end cubic [H ~> m or kg m-2]
+  character(len=*), optional, intent(in) :: interp_scheme !< Interpolation method for state-dependent coordinates
+  logical, optional, intent(in) :: use_adjust_interface_motion !< Call adjust_interface_motion()
   real,    optional, intent(in) :: compress_fraction !< Fraction of compressibility to add to potential density [nondim]
   real,    optional, intent(in) :: ref_pressure     !< The reference pressure for density-dependent
                                                     !! coordinates [R L2 T-2 ~> Pa]
@@ -2807,6 +2829,8 @@ subroutine set_regrid_params( CS, boundary_extrapolation, min_thickness, old_gri
       call MOM_error(FATAL,'MOM_regridding, set_regrid_params: Weight is out side the range 0..1!')
     CS%old_grid_weight = old_grid_weight
   endif
+  if (present(use_depth_based_time_filter)) CS%use_depth_based_time_filter = &
+                                                 use_depth_based_time_filter
   if (present(depth_of_time_filter_shallow)) CS%depth_of_time_filter_shallow = &
                                                 depth_of_time_filter_shallow
   if (present(depth_of_time_filter_deep)) CS%depth_of_time_filter_deep = &
@@ -2818,6 +2842,7 @@ subroutine set_regrid_params( CS, boundary_extrapolation, min_thickness, old_gri
   endif
 
   if (present(min_thickness)) CS%min_thickness = min_thickness
+  if (present(use_adjust_interface_motion)) CS%use_adjust_interface_motion = use_adjust_interface_motion
   if (present(compress_fraction)) CS%compressibility_fraction = compress_fraction
   if (present(ref_pressure)) CS%ref_pressure = ref_pressure
   if (present(integrate_downward_for_e)) CS%integrate_downward_for_e = integrate_downward_for_e
