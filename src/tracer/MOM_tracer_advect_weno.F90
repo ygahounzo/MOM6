@@ -300,8 +300,10 @@ end function weight_fac
 !!  This program contains the subroutines that advect tracers
 !!  horizontally (i.e. along layers) using high-order WENO schemes (Balsara et al., 2016)
 !!  using the Z-type smoothness indicators (Borges et al., 2008).
-!!  We followed Suresh & Huynh (1997) and Balsara & Shu (2000 for the monotonicity preserving
-!!  used along with the WENO schemes.
+!!  For monotonicity preservation we switch from WENO7 to WENO5 and then
+!!  to PPM:H3 where necessary, i.e. this is a hybrid WENO scheme (He et al., 2016)
+!!  monotonicity constraints are violated or tracer CFL conditions
+!!  exceed MP stability limits.
 !!
 !!  This scheme conserves the total amount of tracer while avoiding
 !!  spurious maxima and minima of the tracer concentration
