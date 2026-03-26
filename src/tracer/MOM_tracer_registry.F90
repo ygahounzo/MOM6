@@ -483,6 +483,17 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
       enddo ; enddo ; enddo
     endif
 
+    if (m == 1) then
+      Tr%id_cflx = register_diag_field("ocean_model", "CFL_scalar_x", &
+            diag%axesCuL, Time, "i-component of CFL of tracer advection", 'nodim')
+      Tr%id_cfly = register_diag_field("ocean_model", "CFL_scalar_y", &
+            diag%axesCvL, Time, "j-component of CFL of tracer advection", 'nodim')
+
+      if (Tr%id_cflx > 0) call safe_alloc_ptr(Tr%cfl_x,IsdB,IedB,jsd,jed,nz)
+      if (Tr%id_cfly > 0) call safe_alloc_ptr(Tr%cfl_y,isd,ied,JsdB,JedB,nz)
+
+    endif
+
     ! Neutral/Horizontal diffusion convergence tendencies
     if (Tr%diag_form == 1) then
       Tr%id_dfxy_cont = register_diag_field("ocean_model", trim(shortnm)//'_dfxy_cont_tendency', &
@@ -725,6 +736,8 @@ subroutine post_tracer_diagnostics_at_sync(Reg, h, diag_prev, diag, G, GV, dt)
   do m=1,Reg%ntr ; if (Reg%Tr(m)%registry_diags) then
     Tr => Reg%Tr(m)
     if (Tr%id_tr > 0) call post_data(Tr%id_tr, Tr%t, diag)
+    if (Tr%id_cflx > 0) call post_data(Tr%id_cflx, Tr%cfl_x, diag)
+    if (Tr%id_cfly > 0) call post_data(Tr%id_cfly, Tr%cfl_y, diag)
     if (Tr%id_tendency > 0) then
       work3d(:,:,:) = 0.0
       do k=1,nz ; do j=js,je ; do i=is,ie
