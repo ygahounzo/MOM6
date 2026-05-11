@@ -284,7 +284,7 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, wind_stagger, gas
   OS%Time = Time_in ; OS%Time_dyn = Time_in
   ! Call initialize MOM with an optional Ice Shelf CS which, if present triggers
   ! initialization of ice shelf parameters and arrays.
-  point_calving=.false.; if (present(calve_ice_shelf_bergs)) point_calving=calve_ice_shelf_bergs
+  point_calving = .false. ; if (present(calve_ice_shelf_bergs)) point_calving = calve_ice_shelf_bergs
   call initialize_MOM(OS%Time, Time_init, param_file, OS%dirs, OS%MOM_CSp, &
                       Time_in, offline_tracer_mode=OS%offline_tracer_mode, &
                       diag_ptr=OS%diag, count_calls=.true., ice_shelf_CSp=OS%ice_shelf_CSp, &
@@ -387,6 +387,7 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, wind_stagger, gas
 
   if (OS%use_ice_shelf)  then
     call initialize_ice_shelf_fluxes(OS%ice_shelf_CSp, OS%grid, OS%US, OS%fluxes)
+    call initialize_ice_shelf_fluxes(OS%ice_shelf_CSp, OS%grid, OS%US, OS%flux_tmp)
     call initialize_ice_shelf_forces(OS%ice_shelf_CSp, OS%grid, OS%US, OS%forces)
   endif
 

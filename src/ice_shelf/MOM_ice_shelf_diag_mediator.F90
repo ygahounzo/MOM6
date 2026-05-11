@@ -20,7 +20,7 @@ use MOM_diag_manager_infra, only : get_MOM_diag_field_id, DIAG_FIELD_NOT_FOUND
 use MOM_diag_manager_infra, only : diag_send_complete_infra
 use MOM_error_handler,      only : MOM_error, FATAL, is_root_pe, assert, callTree_showQuery
 use MOM_error_handler,      only : callTree_enter, callTree_leave, callTree_waypoint
-use MOM_file_parser,        only : get_param, log_param, log_version, param_file_type
+use MOM_file_parser,        only : get_param, log_version, param_file_type
 use MOM_grid,               only : ocean_grid_type
 use MOM_io,                 only : get_filename_appendix
 use MOM_safe_alloc,         only : safe_alloc_ptr, safe_alloc_alloc
@@ -159,9 +159,8 @@ integer :: id_clock_diag_mediator
 contains
 
 !> Set up the grid and axis information for use by the ice shelf model.
-subroutine set_IS_axes_info(G, param_file, diag_cs, axes_set_name)
-  type(ocean_grid_type), intent(inout) :: G   !< The horizontal grid type
-  type(param_file_type), intent(in)    :: param_file !< Parameter file structure
+subroutine set_IS_axes_info(G, diag_cs, axes_set_name)
+  type(ocean_grid_type), intent(in)    :: G   !< The horizontal grid type
   type(diag_ctrl),       intent(inout) :: diag_cs !< A structure that is used to regulate diagnostic output
   character(len=*), optional, intent(in) :: axes_set_name !<  A name to use for this set of axes.
                                                 !! The default is "ice".
@@ -170,84 +169,49 @@ subroutine set_IS_axes_info(G, param_file, diag_cs, axes_set_name)
   ! Local variables
   integer :: id_xq, id_yq, id_xh, id_yh, id_null
   integer :: i, j
-  character(len=80) :: grid_config, units_temp, set_name
-  ! This include declares and sets the variable "version".
-# include "version_variable.h"
-  character(len=40)  :: mdl = "MOM_IS_diag_mediator" ! This module's name.
+  character(len=80) :: set_name
   real, allocatable, dimension(:) :: IaxB, iax ! Index-based integer and half-integer i-axis labels [nondim]
   real, allocatable, dimension(:) :: JaxB, jax ! Index-based integer and half-integer j-axis labels [nondim]
 
   set_name = "ice_shelf" ; if (present(axes_set_name)) set_name = trim(axes_set_name)
 
-  ! This is inconsistent with the labeling of axis units from MOM_diag_manager, and it will be
-  ! corrected in a subsequent commit.
-
-  ! Read all relevant parameters and write them to the model log.
-  call log_version(param_file, mdl, version)
-  call get_param(param_file, mdl, "GRID_CONFIG", grid_config, &
-                 "The method for defining the horizontal grid.  Valid "//&
-                 "entries include:\n"//&
-                 "\t file - read the grid from GRID_FILE \n"//&
-                 "\t mosaic - read the grid from a mosaic grid file \n"//&
-                 "\t cartesian - a Cartesian grid \n"//&
-                 "\t spherical - a spherical grid \n"//&
-                 "\t mercator  - a Mercator grid", fail_if_missing=.true.)
-
-  G%x_axis_units = "degrees_E"
-  G%y_axis_units = "degrees_N"
-  G%x_ax_unit_short = "degrees_E" ; G%y_ax_unit_short = "degrees_N"
-  G%grid_unit_to_L = 0.0
-
-  if (index(lowercase(trim(grid_config)),"cartesian") > 0) then
-    ! This is a Cartesian grid, and may have different axis units.
-    call get_param(param_file, mdl, "AXIS_UNITS", units_temp, &
-                 "The units for the x- and y- axis labels.  AXIS_UNITS "//&
-                 "should be defined as 'k' for km, 'm' for m, or 'd' "//&
-                 "for degrees of latitude and longitude (the default). "//&
-                 "Except on a Cartesian grid, only degrees are currently "//&
-                 "implemented.", default='degrees')
-    if (units_temp(1:1) == 'k') then
-      G%x_axis_units = "kilometers" ; G%y_axis_units = "kilometers"
-      G%x_ax_unit_short = "km" ; G%y_ax_unit_short = "km"
-      G%grid_unit_to_L = 1000.0*diag_cs%US%m_to_L
-    elseif (units_temp(1:1) == 'm') then
-      G%x_axis_units = "meters" ; G%y_axis_units = "meters"
-      G%x_ax_unit_short = "m" ; G%y_ax_unit_short = "m"
-      G%grid_unit_to_L = diag_cs%US%m_to_L
-    endif
-    call log_param(param_file, mdl, "explicit AXIS_UNITS", G%x_axis_units)
-  endif
-
   if (diag_cs%index_space_axes) then
     allocate(IaxB(G%IsgB:G%IegB))
-    do i=G%IsgB, G%IegB
-      Iaxb(i)=real(i)
+    do I=G%IsgB,G%IegB
+      Iaxb(I) = real(I)
     enddo
     allocate(iax(G%isg:G%ieg))
-    do i=G%isg, G%ieg
-      iax(i)=real(i)-0.5
+    do i=G%isg,G%ieg
+      iax(i) = real(i)-0.5
     enddo
     allocate(JaxB(G%JsgB:G%JegB))
-    do j=G%JsgB, G%JegB
-      JaxB(j)=real(j)
+    do J=G%JsgB,G%JegB
+      JaxB(J) = real(J)
     enddo
     allocate(jax(G%jsg:G%jeg))
-    do j=G%jsg, G%jeg
-      jax(j)=real(j)-0.5
+    do j=G%jsg,G%jeg
+      jax(j) = real(j)-0.5
     enddo
   endif
 
   ! Horizontal axes for the native grids.
   if (diag_cs%index_space_axes) then
-    id_xq = MOM_diag_axis_init('xB', IaxB, 'none', 'x', &
-        'Boundary point grid-space longitude', G%Domain, position=EAST, set_name=set_name)
-    id_yq = MOM_diag_axis_init('yB', JaxB, 'none', 'y', &
-        'Boundary point grid-space latitude', G%Domain, position=NORTH, set_name=set_name)
+    if (G%symmetric) then
+      id_xq = MOM_diag_axis_init('Iq', IaxB(G%IsgB:G%IegB), 'none', 'x', &
+          'Boundary (q) point grid-space longitude', G%Domain, position=EAST, set_name=set_name)
+      id_yq = MOM_diag_axis_init('Jq', JaxB(G%JsgB:G%JegB), 'none', 'y', &
+          'Boundary (q) point grid-space latitude', G%Domain, position=NORTH, set_name=set_name)
+    else
+      id_xq = MOM_diag_axis_init('Iq', IaxB(G%isg:G%ieg), 'none', 'x', &
+          'Boundary (q) point grid-space longitude', G%Domain, position=EAST, set_name=set_name)
+      id_yq = MOM_diag_axis_init('Jq', JaxB(G%jsg:G%jeg), 'none', 'y', &
+          'Boundary (q) point grid-space latitude', G%Domain, position=NORTH, set_name=set_name)
+    endif
 
-    id_xh = MOM_diag_axis_init('xT', iax, 'none', 'x', &
-        'T point grid-space longitude', G%Domain, set_name=set_name)
-    id_yh = MOM_diag_axis_init('yT', jax, 'none', 'y', &
-        'T point grid-space latitude', G%Domain, set_name=set_name)
+    id_xh = MOM_diag_axis_init('ih', iax, 'none', 'x', &
+        'Tracer (h) point grid-space longitude', G%Domain, set_name=set_name)
+    id_yh = MOM_diag_axis_init('jh', jax, 'none', 'y', &
+        'Tracer (h) point grid-space latitude', G%Domain, set_name=set_name)
   else
     if (G%symmetric) then
       id_xq = MOM_diag_axis_init('xB', G%gridLonB(G%isgB:G%iegB), G%x_axis_units, 'x', &
@@ -263,9 +227,9 @@ subroutine set_IS_axes_info(G, param_file, diag_cs, axes_set_name)
 
     endif
     id_xh = MOM_diag_axis_init('xT', G%gridLonT(G%isg:G%ieg), G%x_axis_units, 'x', &
-        'T point nominal longitude', G%Domain, set_name=set_name)
+        'Tracer point nominal longitude', G%Domain, set_name=set_name)
     id_yh = MOM_diag_axis_init('yT', G%gridLatT(G%jsg:G%jeg), G%y_axis_units, 'y', &
-        'T point nominal latitude', G%Domain, set_name=set_name)
+        'Tracer point nominal latitude', G%Domain, set_name=set_name)
   endif
 
   ! Axis groupings for 2-D arrays
@@ -715,7 +679,8 @@ function register_MOM_IS_diag_field(module_name, field_name, axes_in, init_time,
   type(diag_ctrl), pointer :: diag_cs => NULL() ! A structure that is used to regulate diagnostic output
   type(axes_grp), pointer :: axes
   integer :: dm_id
-  character(len=256) :: msg, cm_string
+  character(len=256) :: msg
+  character(len=256) :: cm_string ! A string describing the cell methods returned from attach_cell_methods.
   character(len=256) :: new_module_name
   character(len=480) :: module_list, var_list
   character(len=24)  :: dimensions
@@ -775,9 +740,7 @@ function register_MOM_IS_diag_field(module_name, field_name, axes_in, init_time,
   if (is_root_pe() .and. (diag_CS%available_diag_doc_unit > 0)) then
     msg = ''
     if (present(cmor_field_name)) msg = 'CMOR equivalent is "'//trim(cmor_field_name)//'"'
-    cm_string = ''
-    !### Uncoment this to add cell methods:
-    ! call attach_cell_methods(-1, axes, cm_string, cell_methods, x_cell_method, y_cell_method)
+    call attach_cell_methods(-1, axes, cm_string, cell_methods, x_cell_method, y_cell_method)
     module_list = trim(module_list)//"}"
     if (num_modnm <= 1) module_list = module_name
     if (num_varnm <= 1) var_list = ''
@@ -839,7 +802,8 @@ logical function register_diag_field_expand_cmor(dm_id, module_name, field_name,
   type(diag_ctrl), pointer :: diag_cs => null()
   type(diag_type), pointer :: this_diag => null()
   integer :: fms_id
-  character(len=256) :: posted_cmor_units, posted_cmor_standard_name, posted_cmor_long_name, cm_string
+  character(len=256) :: posted_cmor_units, posted_cmor_standard_name, posted_cmor_long_name
+  character(len=256) :: cm_string ! A string describing the cell methods returned from attach_cell_methods.
 
   MOM_missing_value = axes%diag_cs%missing_value
   if (present(missing_value)) MOM_missing_value = missing_value
@@ -854,9 +818,7 @@ logical function register_diag_field_expand_cmor(dm_id, module_name, field_name,
              verbose=verbose, do_not_log=do_not_log, err_msg=err_msg, &
              interp_method=interp_method, tile_count=tile_count)
   if (.not. diag_cs%diag_as_chksum) &
-    cm_string = ''
-    !### Uncoment this to add cell methods:
-    ! call attach_cell_methods(fms_id, axes, cm_string, cell_methods, x_cell_method, y_cell_method)
+    call attach_cell_methods(fms_id, axes, cm_string, cell_methods, x_cell_method, y_cell_method)
 
   this_diag => null()
   if (fms_id /= DIAG_FIELD_NOT_FOUND) then
@@ -888,9 +850,7 @@ logical function register_diag_field_expand_cmor(dm_id, module_name, field_name,
                missing_value=MOM_missing_value, range=range, mask_variant=mask_variant,               &
                standard_name=trim(posted_cmor_standard_name), verbose=verbose, do_not_log=do_not_log, &
                err_msg=err_msg, interp_method=interp_method, tile_count=tile_count)
-    cm_string = ''
-    !### Uncoment this to add cell methods:
-    ! call attach_cell_methods(fms_id, axes, cm_string, cell_methods, x_cell_method, y_cell_method)
+    call attach_cell_methods(fms_id, axes, cm_string, cell_methods, x_cell_method, y_cell_method)
 
     this_diag => null()
     if (fms_id /= DIAG_FIELD_NOT_FOUND) then
@@ -1378,8 +1338,7 @@ function register_MOM_IS_static_field(module_name, field_name, axes, &
   if (len_trim(dimensions) > 0) dimensions = trim_trailing_commas(dimensions)
 
   ! Document diagnostics in list of available diagnostics
-  !### if (is_root_pe() .and. diag_CS%available_diag_doc_unit > 0) then
-  if (is_root_pe() .and. .false.) then  ! Replace this to work like MOM6.
+  if (is_root_pe() .and. diag_CS%available_diag_doc_unit > 0) then
     if (present(cmor_field_name)) then
       call log_available_diag(associated(diag), module_name, field_name, '', '', diag_CS, &
                               long_name, units, standard_name, &
@@ -1728,34 +1687,25 @@ subroutine log_available_diag(used, module_name, field_name, cell_methods_string
   character(len=240) :: mesg
 
   if (used) then
-    mesg = '"'//trim(module_name)//'", "'//trim(field_name)//'"  [Used]'
+    mesg = '"'//trim(field_name)//'"  [Used]'
   else
-    mesg = '"'//trim(module_name)//'", "'//trim(field_name)//'"  [Unused]'
+    mesg = '"'//trim(field_name)//'"  [Unused]'
   endif
-  !### This form of output agrees with MOM_diag_manager:
-!  if (used) then
-!    mesg = '"'//trim(field_name)//'"  [Used]'
-!  else
-!    mesg = '"'//trim(field_name)//'"  [Unused]'
-!  endif
   if (len(trim((comment)))>0) then
     write(diag_CS%available_diag_doc_unit, '(a,1x,"(",a,")")') trim(mesg),trim(comment)
   else
     write(diag_CS%available_diag_doc_unit, '(a)') trim(mesg)
   endif
-  !### These should be uncommented later to align with MOM_diag_manager:
-! call describe_option("modules", module_name, diag_CS)
-! if (present(dimensions)) then
-!   if (len(trim(dimensions)) > 0) then
-!     call describe_option("dimensions", dimensions, diag_CS)
-!   endif
-! endif
+  call describe_option("modules", module_name, diag_CS)
+  if (present(dimensions)) then ; if (len(trim(dimensions)) > 0) then
+    call describe_option("dimensions", dimensions, diag_CS)
+  endif ; endif
   if (present(long_name)) call describe_option("long_name", long_name, diag_CS)
   if (present(units)) call describe_option("units", units, diag_CS)
   if (present(standard_name)) &
     call describe_option("standard_name", standard_name, diag_CS)
-! if (len(trim((cell_methods_string)))>0) &
-!   call describe_option("cell_methods", trim(cell_methods_string), diag_CS)
+  if (len(trim((cell_methods_string)))>0) &
+    call describe_option("cell_methods", trim(cell_methods_string), diag_CS)
   if (present(variants)) then ; if (len(trim(variants)) > 0) then
     call describe_option("variants", variants, diag_CS)
   endif ; endif

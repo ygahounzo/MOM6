@@ -116,6 +116,7 @@ use MOM_mixed_layer_restrat,   only : mixedlayer_restrat_register_restarts
 use MOM_obsolete_diagnostics,  only : register_obsolete_diagnostics
 use MOM_open_boundary,         only : ocean_OBC_type, open_boundary_end
 use MOM_open_boundary,         only : register_temp_salt_segments, update_segment_tracer_reservoirs
+use MOM_open_boundary,         only : read_OBC_segment_data, initialize_OBC_segment_reservoirs
 use MOM_open_boundary,         only : setup_OBC_tracer_reservoirs
 use MOM_open_boundary,         only : setup_OBC_thickness_reservoirs
 use MOM_open_boundary,         only : open_boundary_register_restarts, remap_OBC_fields
@@ -386,6 +387,7 @@ type, public :: MOM_control_struct ; private
                                 !! roundoff for non-Boussinesq cases.
   logical :: use_particles      !< Turns on the particles package
   logical :: use_uh_particles   !< particles are advected by uh/h
+  logical :: uh_particles_bug   !< If true, uses an inconsistent timestep for particle advection
   logical :: use_dbclient       !< Turns on the database client used for ML inference/analysis
   character(len=10) :: particle_type !< Particle types include: surface(default), profiling and sail drone.
 
@@ -1351,10 +1353,10 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
   if (Waves%Stokes_DDT .and. (.not.Waves%Passive_Stokes_DDT)) then
     do J=jsq,jeq ; do i=is,ie
       v(i,J,:) = v(i,J,:) + Waves%ddt_us_y(i,J,:)*dt
-    enddo; enddo
+    enddo ; enddo
     do j=js,je ; do I=isq,ieq
       u(I,j,:) = u(I,j,:) + Waves%ddt_us_x(I,j,:)*dt
-    enddo; enddo
+    enddo ; enddo
     call pass_vector(u, v, G%Domain)
   endif
   ! Added an additional output to track Stokes drift time tendency.
@@ -1363,12 +1365,12 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
   if (Waves%Stokes_DDT .and. (Waves%id_3dstokes_y_from_ddt>0)) then
     do J=jsq,jeq ; do i=is,ie
       Waves%us_y_from_ddt(i,J,:) = Waves%us_y_from_ddt(i,J,:) + Waves%ddt_us_y(i,J,:)*dt
-    enddo; enddo
+    enddo ; enddo
   endif
   if (Waves%Stokes_DDT .and. (Waves%id_3dstokes_x_from_ddt>0)) then
     do j=js,je ; do I=isq,ieq
       Waves%us_x_from_ddt(I,j,:) = Waves%us_x_from_ddt(I,j,:) + Waves%ddt_us_x(I,j,:)*dt
-    enddo; enddo
+    enddo ; enddo
   endif
 
 
@@ -1440,10 +1442,11 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
   ! Advance the dynamics time by dt.
   CS%t_dyn_rel_adv = CS%t_dyn_rel_adv + dt
 
-  if (CS%use_particles .and. CS%do_dynamics .and. CS%use_uh_particles) then
-    !Run particles using thickness-weighted velocity
+  if (CS%use_particles .and. CS%do_dynamics .and. CS%use_uh_particles .and. &
+      CS%uh_particles_bug) then
+    ! Run particles using thickness-weighted velocity
     call particles_run(CS%particles, Time_local, CS%uhtr, CS%vhtr, CS%h, &
-        CS%tv, CS%t_dyn_rel_adv, CS%use_uh_particles)
+                       CS%tv, CS%t_dyn_rel_adv, CS%use_uh_particles)
   endif
 
   CS%n_dyn_steps_in_adv = CS%n_dyn_steps_in_adv + 1
@@ -1506,6 +1509,13 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
 
   call cpu_clock_begin(id_clock_thermo) ; call cpu_clock_begin(id_clock_tracer)
   call enable_averages(CS%t_dyn_rel_adv, Time_local, CS%diag)
+
+  if (CS%use_particles .and. CS%use_uh_particles .and. (.not. CS%uh_particles_bug)) then
+    ! Run particles using thickness-weighted velocity
+    call particles_run(CS%particles, Time_local, CS%uhtr, CS%vhtr, CS%h, &
+                       CS%tv, CS%t_dyn_rel_adv, CS%use_uh_particles)
+  endif
+
 
   if (CS%alternate_first_direction) then
     ! This calculation of the value of G%first_direction from the start of the accumulation of
@@ -1852,11 +1862,13 @@ subroutine ALE_regridding_and_remapping(CS, G, GV, US, u, v, h, tv, dtdia, Time_
       call remap_dyn_split_RK2_aux_vars(G, GV, CS%dyn_split_RK2_CSp, h_old_u, h_old_v, h_new_u, h_new_v, CS%ALE_CSp)
     endif
 
-    if (associated(CS%OBC)) then
+    if (associated(CS%OBC) .or. associated(CS%visc%Kv_shear_Bu)) then
       call pass_var(h, G%Domain, complete=.false.)
       call pass_var(h_new, G%Domain, complete=.true.)
-      call remap_OBC_fields(G, GV, h, h_new, CS%OBC, PCM_cell=PCM_cell)
     endif
+
+    if (associated(CS%OBC)) &
+      call remap_OBC_fields(G, GV, h, h_new, CS%OBC, PCM_cell=PCM_cell)
 
     call remap_vertvisc_aux_vars(G, GV, CS%visc, h, h_new, CS%ALE_CSp, CS%OBC)
     if (associated(CS%visc%Kv_shear)) &
@@ -2353,7 +2365,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call get_MOM_input(param_file, dirs, default_input_filename=input_restart_file, ensemble_num=ensemble_num)
 
   verbosity = 2 ; call read_param(param_file, "VERBOSITY", verbosity)
-  call MOM_set_verbosity(verbosity)
+  call MOM_set_verbosity(verbosity, .true.)
   call callTree_enter("initialize_MOM(), MOM.F90")
 
   call find_obsolete_params(param_file)
@@ -2368,6 +2380,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                  "Integer controlling level of messaging\n" // &
                  "\t0 = Only FATAL messages\n" // &
                  "\t2 = Only FATAL, WARNING, NOTE [default]\n" // &
+                 "\t6 = Above plus call tree messages\n" //&
                  "\t9 = All)", default=2, debuggingParam=.true.)
   call get_param(param_file, "MOM", "DO_UNIT_TESTS", do_unit_tests, &
                  "If True, exercises unit tests at model start up.", &
@@ -2615,12 +2628,6 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                  units="s", default=default_val, scale=US%s_to_T, do_not_read=(dtbt > 0.0))
   endif
 
-  call get_param(param_file, "MOM", "DT_OBC_SEG_UPDATE_OBGC", CS%dt_obc_seg_period, &
-               "The time between OBC segment data updates for OBGC tracers. "//&
-               "This must be an integer multiple of DT and DT_THERM. "//&
-               "The default is set to DT.", &
-               units="s", default=US%T_to_s*CS%dt, scale=US%s_to_T, do_not_log=.not.associated(OBC_in))
-
   ! This is here in case these values are used inappropriately.
   use_frazil = .false. ; bound_salinity = .false. ; use_p_surf_in_EOS = .false.
   CS%tv%P_Ref = 2.0e7*US%Pa_to_RL2_T2
@@ -2769,7 +2776,12 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call get_param(param_file, "MOM", "USE_PARTICLES", CS%use_particles, &
                  "If true, use the particles package.", default=.false.)
   call get_param(param_file, "MOM", "USE_UH_PARTICLES", CS%use_uh_particles, &
-                 "If true, use the uh velocity in the particles package.",default=.false.)
+                 "If true, use the uh velocity in the particles package.", &
+                 default=.false., do_not_log=.not.CS%use_particles)
+  call get_param(param_file, "MOM", "UH_PARTICLES_BUG", CS%uh_particles_bug, &
+                 "If true, use a bug in which the particles are advected inconsistently"//&
+                 "with the dynamics timestep instead of the tracer timestep.", &
+                 default=enable_bugs, do_not_log=.not.CS%use_uh_particles)
   CS%ensemble_ocean=.false.
   call get_param(param_file, "MOM", "ENSEMBLE_OCEAN", CS%ensemble_ocean, &
                  "If False, The model is being run in serial mode as a single realization. "//&
@@ -2862,6 +2874,11 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
 
   ! Allocate initialize time-invariant MOM variables.
   call MOM_initialize_fixed(dG_in, US, OBC_in, param_file)
+
+  call get_param(param_file, "MOM", "DT_OBC_SEG_UPDATE_OBGC", CS%dt_obc_seg_period, &
+                 "The time between OBC segment data updates for OBGC tracers.  This must be an "//&
+                 "integer multiple of DT and DT_THERM.  The default is set to DT.", units="s", &
+                 default=US%T_to_s*CS%dt, scale=US%s_to_T, do_not_log=.not.associated(OBC_in))
 
   ! Copy the grid metrics and bathymetry to the ocean_grid_type
   call copy_dyngrid_to_MOM_grid(dG_in, G_in, US)
@@ -3167,7 +3184,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   G%ke = GV%ke
 
   if (use_ice_shelf) then
-    point_calving=.false.; if (present(calve_ice_shelf_bergs)) point_calving=calve_ice_shelf_bergs
+    point_calving = .false. ; if (present(calve_ice_shelf_bergs)) point_calving = calve_ice_shelf_bergs
   endif
 
   if (CS%rotate_index) then
@@ -3302,7 +3319,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     call calc_derived_thermo(CS%tv, CS%h, G, GV, US)
 
     ! Call this during initialization to fill boundary arrays from fixed values
-    call update_OBC_segment_data(G, GV, US, CS%OBC, CS%tv, CS%h, Time)
+    call read_OBC_segment_data(G, GV, US, CS%OBC, CS%tv, CS%h, Time)
+    call update_OBC_segment_data(G, GV, US, CS%OBC, CS%h, Time)
+    call initialize_OBC_segment_reservoirs(GV, CS%OBC)
   endif
 
   if (use_ice_shelf .and. CS%debug) then
@@ -3988,8 +4007,8 @@ subroutine extract_surface_state(CS, sfc_state_in)
   G => CS%G ; G_in => CS%G_in ; GV => CS%GV ; US => CS%US
   is  = G%isc ; ie  = G%iec ; js  = G%jsc ; je  = G%jec ; nz = GV%ke
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
-  iscB = G%iscB ; iecB = G%iecB; jscB = G%jscB ; jecB = G%jecB
-  isdB = G%isdB ; iedB = G%iedB; jsdB = G%jsdB ; jedB = G%jedB
+  iscB = G%iscB ; iecB = G%iecB ; jscB = G%jscB ; jecB = G%jecB
+  isdB = G%isdB ; iedB = G%iedB ; jsdB = G%jsdB ; jedB = G%jedB
   h => CS%h
 
   use_temperature = associated(CS%tv%T)
