@@ -100,9 +100,9 @@ function register_advection_test_tracer(G, GV, param_file, CS, tr_Reg, restart_C
   call log_version(param_file, mdl, version, "")
 
   call get_param(param_file, mdl, "ADVECTION_TEST_X_ORIGIN", CS%x_origin, &
-        "The x-coordinate of the center of the test-functions.", units=G%x_ax_unit_short, default=0.)
+      "The x-coordinate of the center of the test-functions.", units=G%x_ax_unit_short, default=0.)
   call get_param(param_file, mdl, "ADVECTION_TEST_Y_ORIGIN", CS%y_origin, &
-        "The y-coordinate of the center of the test-functions.", units=G%y_ax_unit_short, default=0.)
+      "The y-coordinate of the center of the test-functions.", units=G%y_ax_unit_short, default=0.)
   call get_param(param_file, mdl, "ADVECTION_TEST_X_WIDTH", CS%x_width, &
         "The x-width of the test-functions.", units=G%x_ax_unit_short, default=0.)
   call get_param(param_file, mdl, "ADVECTION_TEST_Y_WIDTH", CS%y_width, &
@@ -208,57 +208,34 @@ subroutine initialize_advection_test_tracer(restart, day, G, GV, h,diag, OBC, CS
       enddo ; enddo ; enddo
       k=1 ! Square wave
       do j=js,je ; do i=is,ie
-        !if (G%geoLonT(i,j) <= CS%x_origin) then
-        !  CS%tr(i,j,k,m) = 0.2
-        !else
-        !  CS%tr(i,j,k,m) = 1.0
-        !endif
-
-        if (abs(G%geoLonT(i,j)-CS%x_origin) <= 0.5*CS%x_width) then
-          CS%tr(i,j,k,m) = 1.0
-        endif
-
-        !if (abs(G%geoLonT(i,j)-CS%x_origin)<0.5*CS%x_width .and. &
-        !    abs(G%geoLatT(i,j)-CS%y_origin)<0.5*CS%y_width) CS%tr(i,j,k,m) = 1.0
-
-        !locx = (G%geoLonT(i,j)-CS%x_origin)/(0.05*(2.0*CS%x_origin))
-        !CS%tr(i,j,k,m) = exp(-0.5*(locx**2))
-
-        !CS%tr(i,j,k,m) = sin((acos(0.0)*2.)*G%geoLonT(i,j))**4
-
-        !CS%tr(i,j,k,m) = sin((acos(0.0)*2.)*G%geoLonT(i,j)/CS%x_origin)
-
+       if (abs(G%geoLonT(i,j)-CS%x_origin)<0.5*CS%x_width .and. &
+           abs(G%geoLatT(i,j)-CS%y_origin)<0.5*CS%y_width) CS%tr(i,j,k,m) = 1.0
       enddo ; enddo
-      !k=1 ! Square wave
-      !do j=js,je ; do i=is,ie
-      !  if (abs(G%geoLonT(i,j)-CS%x_origin)<0.5*CS%x_width .and. &
-      !      abs(G%geoLatT(i,j)-CS%y_origin)<0.5*CS%y_width) CS%tr(i,j,k,m) = 1.0
-      !enddo ; enddo
-      !k=2 ! Triangle wave
-      !do j=js,je ; do i=is,ie
-      !  locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
-      !  locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
-      !  CS%tr(i,j,k,m) = max(0.0, 1.0-locx)*max(0.0, 1.0-locy)
-      !enddo ; enddo
-      !k=3 ! Cosine bell
-      !do j=js,je ; do i=is,ie
-      !  locx = min(1.0, abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width) * (acos(0.0)*2.)
-      !  locy = min(1.0, abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width) * (acos(0.0)*2.)
-      !  CS%tr(i,j,k,m) = (1.0+cos(locx))*(1.0+cos(locy))*0.25
-      !enddo ; enddo
-      !k=4 ! Cylinder
-      !do j=js,je ; do i=is,ie
-      !  locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
-      !  locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
-      !  if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
-      !enddo ; enddo
-      !k=5 ! Cut cylinder
-      !do j=js,je ; do i=is,ie
-      !  locx = (G%geoLonT(i,j)-CS%x_origin)/CS%x_width
-      !  locy = (G%geoLatT(i,j)-CS%y_origin)/CS%y_width
-      !  if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
-      !  if (locx>0.0 .and. abs(locy)<0.2) CS%tr(i,j,k,m) = 0.0
-      !enddo ; enddo
+      k=2 ! Triangle wave
+      do j=js,je ; do i=is,ie
+       locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
+       locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
+       CS%tr(i,j,k,m) = max(0.0, 1.0-locx)*max(0.0, 1.0-locy)
+      enddo ; enddo
+      k=3 ! Cosine bell
+      do j=js,je ; do i=is,ie
+       locx = min(1.0, abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width) * (acos(0.0)*2.)
+       locy = min(1.0, abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width) * (acos(0.0)*2.)
+       CS%tr(i,j,k,m) = (1.0+cos(locx))*(1.0+cos(locy))*0.25
+      enddo ; enddo
+      k=4 ! Cylinder
+      do j=js,je ; do i=is,ie
+       locx = abs(G%geoLonT(i,j)-CS%x_origin)/CS%x_width
+       locy = abs(G%geoLatT(i,j)-CS%y_origin)/CS%y_width
+       if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
+      enddo ; enddo
+      k=5 ! Cut cylinder
+      do j=js,je ; do i=is,ie
+       locx = (G%geoLonT(i,j)-CS%x_origin)/CS%x_width
+       locy = (G%geoLatT(i,j)-CS%y_origin)/CS%y_width
+       if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
+       if (locx>0.0 .and. abs(locy)<0.2) CS%tr(i,j,k,m) = 0.0
+      enddo ; enddo
 
       call set_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp)
     endif ! restart
