@@ -430,7 +430,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
   real :: order3, order5, order7
-  real :: T3(3), T5(5), T7(7), T9(9), wq, qext
+  real :: T3(3), T7(7), wq, qext
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
@@ -615,20 +615,19 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             i_up = i+1
           endif
 
-          T3(:) = T_tmp(i_up-1:i_up+1,m) ; T5(:) = T_tmp(i_up-2:i_up+2,m)
+          T3(:) = T_tmp(i_up-1:i_up+1,m) ; T7(:) = T_tmp(i_up-3:i_up+3,m)
 
           order3 = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*G%mask2dCu(I_up+1,j)
           order5 = order3*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
 
           if ( advect_schemes(m) == ADVECT_WENO7) then
             order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
-            T7(:) = T_tmp(i_up-3:i_up+3,m)
           endif
 
           if (order7 == 1.0) then
             call weno7_reconstruction(wq, T7, uhh(I), CFL(I-1:I+1))
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, T5, uhh(I), CFL(I-1:I+1))
+            call weno5_reconstruction(wq, T7, uhh(I), CFL(I-1:I+1))
           else
             qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
             call PPM_reconstruction(wq, T3(1), T3(2), T3(3), uhh(I), CFL(I), qext)
@@ -857,7 +856,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
   real :: order3, order5, order7
-  real :: T3(3), T5(5), T7(7), T9(9), wq, qext
+  real :: T3(3), T7(7), wq, qext
   real, dimension(SZIB_(G), SZJB_(G)) :: CFL_iJ
   logical, dimension(SZJB_(G)) :: domore_tmp
   logical :: do_weno, do_ppm
@@ -1106,20 +1105,19 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             j_up = j + 1
           endif
 
-          T3(:) = T_tmp(i,m,j_up-1:j_up+1) ; T5(:) = T_tmp(i,m,j_up-2:j_up+2)
+          T3(:) = T_tmp(i,m,j_up-1:j_up+1) ; T7(:) = T_tmp(i,m,j_up-3:j_up+3)
 
           order3 = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up+1)
           order5 = order3*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
 
           if ((advect_schemes(m) == ADVECT_WENO7)) then
             order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
-            T7(:) = T_tmp(i,m,j_up-3:j_up+3)
           endif
 
           if (order7 == 1.0) then
             call weno7_reconstruction(wq, T7, vhh(i,J), CFL_iJ(i,J-1:J+1))
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, T5, vhh(i,J), CFL_iJ(i,J-1:J+1))
+            call weno5_reconstruction(wq, T7, vhh(i,J), CFL_iJ(i,J-1:J+1))
           else
             qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
             call PPM_reconstruction(wq, T3(1), T3(2), T3(3), vhh(i,J), CFL_iJ(i,J), qext)
