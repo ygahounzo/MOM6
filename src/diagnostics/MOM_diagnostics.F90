@@ -22,7 +22,6 @@ use MOM_diag_mediator,     only : diag_save_grids, diag_restore_grids, diag_copy
 use MOM_domains,           only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,           only : To_North, To_East
 use MOM_EOS,               only : calculate_density, calculate_density_derivs, EOS_domain
-use MOM_EOS,               only : calculate_spec_vol
 use MOM_EOS,               only : cons_temp_to_pot_temp, pot_temp_to_cons_temp
 use MOM_EOS,               only : prac_saln_to_abs_saln, abs_saln_to_prac_saln
 use MOM_error_handler,     only : MOM_error, FATAL, WARNING
@@ -37,6 +36,7 @@ use MOM_variables,         only : thermo_var_ptrs, ocean_internal_state, p3d
 use MOM_variables,         only : accel_diag_ptrs, cont_diag_ptrs, surface
 use MOM_verticalGrid,      only : verticalGrid_type, get_thickness_units, get_flux_units
 use MOM_wave_speed,        only : wave_speed, wave_speed_CS, wave_speed_init
+use Recon1d_EPPM_CWK,      only : EPPM_CWK
 
 implicit none ; private
 
@@ -125,6 +125,7 @@ type, public :: diagnostics_CS ; private
   integer :: id_drho_dT        = -1, id_drho_dS        = -1
   integer :: id_h_pre_sync     = -1
   integer :: id_tosq           = -1, id_sosq           = -1
+  integer :: id_t20d           = -1, id_t17d           = -1
 
   !>@}
   type(wave_speed_CS) :: wave_speed  !< Wave speed control struct
@@ -914,7 +915,7 @@ subroutine calculate_vertical_integrals(h, tv, p_surf, G, GV, US, CS)
                                                  !! as setting the surface pressure to 0.
   type(diagnostics_CS),    intent(inout) :: CS   !< Control structure returned by a
                                                  !! previous call to diagnostics_init.
-
+  ! Local variables
   real, dimension(SZI_(G),SZJ_(G)) :: &
     z_top, &  ! Height of the top of a layer or the ocean [Z ~> m].
     z_bot, &  ! Height of the bottom of a layer (for id_mass) or the
@@ -926,9 +927,16 @@ subroutine calculate_vertical_integrals(h, tv, p_surf, G, GV, US, CS)
     btm_pres,&! The pressure at the ocean bottom, or CMIP variable 'pbo'.
               ! This is the column mass multiplied by gravity plus the pressure
               ! at the ocean surface [R L2 T-2 ~> Pa].
-    tr_int    ! vertical integral of a tracer times density,
+    tr_int,&  ! vertical integral of a tracer times density,
               ! (Rho_0 in a Boussinesq model) [Conc R Z ~> Conc kg m-2].
+    d17,&     ! Depth of 17 degC isotherm [Z ~> m]
+    d20       ! Depth of 20 degC isotherm [Z ~> m]
   real :: tmp(SZI_(G),SZJ_(G),SZK_(GV)) ! Temporary array [defined at each usage]
+  real :: IG_Earth  ! Inverse of gravitational acceleration [T2 Z L-2 ~> s2 m-1].
+  real :: Ttop, Tbot ! Temperature at top/bottom of cell [C ~> degC]
+  type(EPPM_CWK) :: PPM ! Class for reconstruction
+  real :: d_from_ssh(0:GV%ke) ! eta-z (Distance from surface) [Z ~> m]
+  real :: dz ! Layer thickness in Z [Z ~> m]
 
   integer :: i, j, k, is, ie, js, je, nz
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
@@ -974,6 +982,53 @@ subroutine calculate_vertical_integrals(h, tv, p_surf, G, GV, US, CS)
       call find_col_mass(h, tv, G, GV, US, mass)
     endif
     if (CS%id_col_mass > 0) call post_data(CS%id_col_mass, mass, CS%diag)
+  endif
+  if (CS%id_t20d > 0 .or. CS%id_t17d > 0) then
+    call PPM%init(GV%ke, h_neglect=0.)
+    do j=js,je ; do i=is,ie
+      ! Pre-calculate the interface depths relative to the surface
+      if (GV%Boussinesq) then
+        d_from_ssh(0) = 0.
+        do k=1,nz
+          d_from_ssh(k) = d_from_ssh(k-1) + h(i,j,k) * GV%H_to_Z
+        enddo
+      else
+        ! Non-Boussinesq: use pre-computed layer-average specific volumes from tv%SpV_avg,
+        ! which are more accurate than cell-center specific volumes and correctly account
+        ! for surface pressure (including under ice-shelves).
+        d_from_ssh(0) = 0.
+        do k=1,nz
+          d_from_ssh(k) = d_from_ssh(k-1) + ( h(i,j,k) * GV%H_to_RZ ) * tv%SpV_avg(i,j,k)
+        enddo
+      endif
+      call PPM%reconstruct(h(i,j,:), tv%T(i,j,:))
+      d17(i,j) = d_from_ssh(nz)
+      d20(i,j) = d_from_ssh(nz)
+      do k=nz,1,-1
+        Ttop = PPM%f(k, 0.)
+        Tbot = PPM%f(k, 1.)
+        if ( Tbot>Ttop ) cycle ! The cell is inverted, skip to next
+        if ( 20.<Tbot .and. Tbot<Ttop ) exit ! The whole remaining column is warmer than 20
+        dz = d_from_ssh(k) - d_from_ssh(k-1) ! >=0
+        if ( Tbot<=17. .and. 17.<=Ttop ) then
+          ! The 17 degC isotherm is within the cell which is non-negatively stratified
+          d17(i,j) = d_from_ssh(k-1) + dz * PPM%x(k, 17.)
+        elseif ( Ttop<17. ) then
+          ! The 17 degC isotherm is above the top of the cell
+          d17(i,j) = d_from_ssh(k-1)
+        endif
+        if ( Tbot<=20. .and. 20.<=Ttop ) then
+          ! The 20 degC isotherm is within the cell which is non-negatively stratified
+          d20(i,j) = d_from_ssh(k-1) + dz * PPM%x(k, 20.)
+        elseif ( Ttop<20. ) then
+          ! The 20 degC isotherm is above the top of the cell
+          d20(i,j) = d_from_ssh(k-1)
+        endif
+      enddo
+    enddo ; enddo
+    call PPM%destroy()
+    if (CS%id_t17d > 0) call post_data(CS%id_t17d, d17, CS%diag)
+    if (CS%id_t20d > 0) call post_data(CS%id_t20d, d20, CS%diag)
   endif
 
   ! Practical salinity expressed as salt mass content
@@ -2037,6 +2092,14 @@ subroutine MOM_diagnostics_init(MIS, ADp, CDp, Time, G, GV, US, param_file, diag
         units='J m-2', conversion=US%Q_to_J_kg*US%RZ_to_kg_m2, v_extensive=.true., &
         standard_name='integral_wrt_depth_of_sea_water_potential_temperature_expressed_as_heat_content')
 
+    CS%id_t20d = register_diag_field('ocean_model', 't20d', diag%axesT1, Time, &
+        'Depth of 20 degree Celsius Isotherm', &
+        units='m', conversion=US%Z_to_m, &
+        standard_name='depth_of_isosurface_of_sea_water_potential_temperature')
+    CS%id_t17d = register_diag_field('ocean_model', 't17d', diag%axesT1, Time, &
+        'Depth of 17 degree Celsius Isotherm', &
+        units='m', conversion=US%Z_to_m, &
+        standard_name='depth_of_isosurface_of_sea_water_potential_temperature')
   endif
 
   CS%id_u = register_diag_field('ocean_model', 'u', diag%axesCuL, Time, &

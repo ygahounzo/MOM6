@@ -17,6 +17,7 @@ public PLM_WLS, testing
 !! - average()                 *locally defined
 !! - f()                       *locally defined
 !! - dfdx()                    *locally defined
+!! - x()                    -> recon1d_type.x()
 !! - check_reconstruction()    *locally defined
 !! - unit_tests()              *locally defined
 !! - destroy()                 *locally defined
@@ -230,8 +231,7 @@ logical function check_reconstruction(this, h, u)
   enddo
 
   ! Create a perturbable reconstruction
-  call perturbed%init( this%n, h_neglect=this%h_neglect )
-  call perturbed%reconstruct( h, u ) ! Should reproduce "this"
+  perturbed = this ! Complete copy of this
   ! Check the copy is identical
   do k = 1, this%n
     if ( abs( perturbed%u_mean(k) - this%u_mean(k) ) > 0. ) check_reconstruction = .true.
@@ -239,6 +239,7 @@ logical function check_reconstruction(this, h, u)
     if ( abs( perturbed%ur(k) - this%ur(k) ) > 0. ) check_reconstruction = .true.
     if ( abs( perturbed%slp(k) - this%slp(k) ) > 0. ) check_reconstruction = .true.
   enddo
+  ! The !DIR$ NOINLINE directive would be needed here to avoid ifort -O2 changing answers
   ! Now perturb the slope. The local error should not decrease.
   do k = 1, this%n
     slp = this%slp(k) * ( 1.0 + 1. * epsilon(slp) )
@@ -271,6 +272,7 @@ real function LS_error(this, k, h, u)
   real :: h_l0, h_r0, hc0 ! Thickness of left, right, center cells with h_neglect added [H]
   real :: hx2l, hx2r ! Contributions to denominator, <h x^2> [H3]
   real :: hxyl, hxyr ! Contributions to numerator, <h x y> [H2 A]
+  real :: slp ! The PLM slopes (difference across cell) [A]
   integer :: km1, kp1
 
   km1 = max(1, k-1)
@@ -286,11 +288,12 @@ real function LS_error(this, k, h, u)
 
   h_l0 = h_l + this%h_neglect
   h_r0 = h_r + this%h_neglect
-  hxyl = ( h_l * 0.5 * ( h_c + h_l ) ) * ( u_c - u_l )
-  hxyr = ( h_r * 0.5 * ( h_c + h_r ) ) * ( u_r - u_c )
-  hx2l = h_l0 * 0.25 * ( h_c + h_l0 )**2
-  hx2r = h_r0 * 0.25 * ( h_c + h_r0 )**2
-  LS_error = h_c * ( ( hx2l + hx2r ) * this%slp(k) - h(k) * ( hxyl + hxyr ) )**2
+  hxyl = ( h_l * ( h_c + h_l ) ) * ( u_c - u_l )
+  hxyr = ( h_r * ( h_c + h_r ) ) * ( u_r - u_c )
+  hx2l = h_l0 * ( h_c + h_l0 )**2
+  hx2r = h_r0 * ( h_c + h_r0 )**2
+  slp = 2. * h_c * ( hxyr + hxyl ) / ( hx2l + hx2r )
+  LS_error = h_c * ( ( hx2l + hx2r ) * ( this%slp(k) - slp ) )**2
   LS_error = LS_error / ( hc0 * ( hx2l + hx2r ) )
 end function LS_error
 
@@ -371,6 +374,16 @@ logical function unit_tests(this, verbose, stdout, stderr)
   enddo
   call test%real_arr(3, um, (/1.25,3.25,5.25/), "Return interval average")
 
+  call test%real_scalar( this%x(1,0.), 0., 'f-1(1,0)=0')
+  call test%real_scalar( this%x(1,1.), 0.5, 'f-1(1,1)=0.5')
+  call test%real_scalar( this%x(1,3.), 1., 'f-1(1,3)=1')
+  call test%real_scalar( this%x(2,1.), 0., 'f-1(2,1)=0')
+  call test%real_scalar( this%x(2,3.), 0.5, 'f-1(2,3)=0.5')
+  call test%real_scalar( this%x(2,5.), 1., 'f-1(2,5)=1')
+  call test%real_scalar( this%x(3,3.), 0., 'f-1(3,3)=0')
+  call test%real_scalar( this%x(3,5.), 0.5, 'f-1(3,5)=0.5')
+  call test%real_scalar( this%x(3,7.), 1., 'f-1(3,7)=1')
+
   call this%destroy()
   deallocate( um, ul, ur, ull, urr )
 
@@ -435,22 +448,22 @@ end function unit_tests
 !! then
 !! \f{align}{
 !!  G(b) &= 2 < h e^2 > \\\\
-!!       &= 2 b^2 \frac{ < h {x'}^2 > }{ h_{k}^2 } - 4 b \frac{ < h x' y' > }{ h_{k} } + 2 < h' {y'}^2 >
+!!       &= 2 b^2 \frac{ < h {x'}^2 > }{ h_{k}^2 } - 4 b \frac{ < h x' y' > }{ h_{k} } + 2 < h {y'}^2 >
 !! \;\; .
 !! \f}
 !!
 !! If we denote the value of b that yields the minimum value as \f$ b^* \f$ then
 !! \f[
-!!  G(b^*) = < h {y'}^2 > - \frac{ < h x' y' >^2 }{ < h {x'}^2 > }
+!!  G(b^*) = 2 < h {y'}^2 > - \frac{ 2 < h x' y' >^2 }{ < h {x'}^2 > }
 !! \;\; .
 !! \f]
 !!
 !! Let
 !! \f{align}{
 !!  G''(b) &= G(b) - G(b^*) \\\\
-!!         &= b^2 \frac{ < h {x'}^2 > }{ h_{k}^2 } - 2 b \frac{ < h x' y' > }{ h_{k} }
-!!            + \frac{ < h x' y' > }{ < h {x'}^2 > } \\\\
-!!         &= \frac{ \left( b < h {x'}^2 > - h_{k} < h x' y' > \right)^2 }{ h_{k} < h {x'}^2 > }
+!!         &= 2 b^2 \frac{ < h {x'}^2 > }{ h_{k}^2 } - 4 b \frac{ < h x' y' > }{ h_{k} }
+!!            + 2 \frac{ < h x' y' >^2 }{ < h {x'}^2 > } \\\\
+!!         &= 2 \frac{ \left( b < h {x'}^2 > - h_{k} < h x' y' > \right)^2 }{ h_{k} < h {x'}^2 > }
 !! \;\; .
 !! \f}
 !! Minimizing \f$ G''(b) \f$ is equivalent to minimizing \f$ G(b) \f$ for the same data.

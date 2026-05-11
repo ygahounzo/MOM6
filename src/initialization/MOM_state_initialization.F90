@@ -621,7 +621,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
                                                       sponge_CSp, ALE_sponge_CSp)
       case ("ISOMIP"); call ISOMIP_initialize_sponges(G, GV, US, tv, depth_tot, PF, useALE, &
                                                       sponge_CSp, ALE_sponge_CSp)
-      case("RGC"); call RGC_initialize_sponges(G, GV, US, tv, u, v, depth_tot, PF, useALE, &
+      case ("RGC"); call RGC_initialize_sponges(G, GV, US, tv, u, v, depth_tot, PF, useALE, &
                                                      sponge_CSp, ALE_sponge_CSp)
       case ("USER"); call user_initialize_sponges(G, GV, use_temperature, tv, PF, sponge_CSp, h)
       case ("BFB"); call BFB_initialize_sponges_southonly(G, GV, US, use_temperature, tv, depth_tot, PF, &
@@ -1218,7 +1218,7 @@ subroutine depress_surface(h, G, GV, US, param_file, tv, just_read, z_top_shelf)
   else
     do j=js,je ; do i=is,ie
       eta_sfc(i,j) = z_top_shelf(i,j)
-    enddo; enddo
+    enddo ; enddo
   endif
 
   ! Convert thicknesses to interface heights.
@@ -1440,7 +1440,7 @@ subroutine calc_sfc_displacement(PF, G, GV, US, mass_shelf, tv, h)
         enddo
         residual = mass_shelf(i,j) - mass_disp
         iter = iter+1
-      end do
+      enddo
       if (iter >= max_iter) call MOM_mesg("Warning: calc_sfc_displacement too many iterations.")
       z_top_shelf(i,j) = z_top
     endif
@@ -2258,7 +2258,7 @@ subroutine initialize_sponges_file(G, GV, US, use_temperature, tv, u, v, depth_t
       enddo ; enddo ; enddo
       do k=1,nz_data ; do j=js,je ; do i=is,ie
         dz(i,j,k) = eta(i,j,k)-eta(i,j,k+1)
-      enddo; enddo ; enddo
+      enddo ; enddo ; enddo
       deallocate(eta)
 
       if (use_temperature) then
@@ -2918,7 +2918,7 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
       call set_regrid_params( regridCS, min_thickness=0., &
                               use_adjust_interface_motion=use_adjust_interface_motion, &
                               use_depth_based_time_filter=use_depth_based_time_fitler)
-      allocate( dz_interface(isd:ied,jsd:jed,nkd+1) ) ! Need for argument to regridding_main() but is not used
+      allocate( dz_interface(isd:ied,jsd:jed,nkd+1), source=0.) ! Need for argument to regridding_main() but is not used
 
       call regridding_preadjust_reqs(regridCS, do_conv_adj, ignore)
       if (do_conv_adj) call convective_adjustment(G, GV_loc, h1, tv_loc)
@@ -3002,7 +3002,7 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
     call find_interfaces(rho_z, z_in, kd, Rb, Z_bottom, zi, G, GV, US, nlevs, nkml, &
                          Hmix_depth, eps_z, eps_rho, density_extrap_bug)
 
-    deallocate(rho_z)
+    deallocate(rho_z, Rb)
 
     dz(:,:,:) = 0.0
     if (correct_thickness) then
