@@ -100,7 +100,8 @@ function register_pseudo_salt_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, name="pseudo_salt", &
                        longname="Pseudo salt passive tracer", units="psu", &
                        registry_diags=.true., restart_CS=restart_CS, &
-                       mandatory=.not.CS%pseudo_salt_may_reinit, Tr_out=CS%tr_ptr)
+                       mandatory=.not.CS%pseudo_salt_may_reinit, Tr_out=CS%tr_ptr, &
+                       nonneg_lim=.false.)
 
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS

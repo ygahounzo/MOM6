@@ -73,6 +73,8 @@ type, public :: tracer_type
                                                               !! diagnostics associated with this tracer.
   real                            :: conc_underflow = 0.0     !< A magnitude of tracer concentrations below
                                                               !! which values should be set to 0. [CU ~> conc]
+  logical                         :: nonneg_lim = .true.     !< If true, apply limiter to WENO fluxes for
+                                                              !! positive-definite quantities.
   real                            :: conc_scale = 1.0         !< A scaling factor used to convert the concentrations
                                                               !! of this tracer to its desired units [CU conc-1 ~> 1]
   character(len=64)               :: cmor_name                !< CMOR name of this tracer

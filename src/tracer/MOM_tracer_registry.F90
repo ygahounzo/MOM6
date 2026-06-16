@@ -59,7 +59,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                            df_2d_x, df_2d_y, advection_xy, registry_diags, &
                            conc_scale, flux_nameroot, flux_longname, flux_units, flux_scale, &
                            convergence_units, convergence_scale, cmor_tendprefix, diag_form, &
-                           restart_CS, mandatory, underflow_conc, Tr_out, advect_scheme)
+                           restart_CS, mandatory, underflow_conc, nonneg_lim, Tr_out, advect_scheme)
   type(hor_index_type),           intent(in)    :: HI           !< horizontal index type
   type(verticalGrid_type),        intent(in)    :: GV           !< ocean vertical grid structure
   type(tracer_registry_type),     pointer       :: Reg          !< pointer to the tracer registry
@@ -131,6 +131,8 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                                                                 !! from a restart file.
   real,                 optional, intent(in)    :: underflow_conc !< A tiny concentration, below which the tracer
                                                                 !! concentration underflows to 0 [CU ~> conc].
+  logical,              optional, intent(in)    :: nonneg_lim   !< If true, apply Zhang-Shu positivity limiter
+                                                                !! to WENO fluxes for this tracer.
   type(tracer_type),    optional, pointer       :: Tr_out       !< If present, returns pointer into registry
 
   integer,                 optional, intent(in) :: advect_scheme !< Advection scheme for this tracer, the default is -1
@@ -187,6 +189,9 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
 
   Tr%conc_underflow = 0.0
   if (present(underflow_conc)) Tr%conc_underflow = underflow_conc
+
+  Tr%nonneg_lim = .true.
+  if (present(nonneg_lim)) Tr%nonneg_lim = nonneg_lim
 
   Tr%flux_nameroot = Tr%name
   if (present(flux_nameroot)) then
