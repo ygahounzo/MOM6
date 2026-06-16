@@ -16,7 +16,7 @@ use MOM_cpu_clock,            only : cpu_clock_id, cpu_clock_begin, cpu_clock_en
 use MOM_cpu_clock,            only : CLOCK_COMPONENT, CLOCK_SUBCOMPONENT
 use MOM_cpu_clock,            only : CLOCK_MODULE_DRIVER, CLOCK_MODULE, CLOCK_ROUTINE
 use MOM_diag_mediator,        only : diag_mediator_init, enable_averaging, enable_averages
-use MOM_diag_mediator,        only : diag_mediator_infrastructure_init
+use MOM_diag_mediator,        only : diag_mediator_infrastructure_init, diag_mediator_set_OBC_info
 use MOM_diag_mediator,        only : diag_set_state_ptrs, diag_update_remap_grids
 use MOM_diag_mediator,        only : disable_averaging, post_data, safe_alloc_ptr
 use MOM_diag_mediator,        only : register_diag_field, register_cell_measure
@@ -1233,7 +1233,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
         call calc_slope_functions(h, CS%tv, dt, G, GV, US, CS%VarMix, OBC=CS%OBC)
       call thickness_diffuse(h, CS%uhtr, CS%vhtr, CS%tv, dt_tr_adv, G, GV, US, &
                              CS%MEKE, CS%VarMix, CS%CDp, CS%thickness_diffuse_CSp, &
-                             CS%stoch_CS)
+                             CS%stoch_CS, u, v)
       call cpu_clock_end(id_clock_thick_diff)
       call pass_var(h, G%Domain, clock=id_clock_pass, halo=CS%dyn_h_stencil)
       if (showCallTree) call callTree_waypoint("finished thickness_diffuse_first (step_MOM)")
@@ -1384,8 +1384,8 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
       if (CS%VarMix%use_variable_mixing) &
         call calc_slope_functions(h, CS%tv, dt, G, GV, US, CS%VarMix, OBC=CS%OBC)
       call thickness_diffuse(h, CS%uhtr, CS%vhtr, CS%tv, dt, G, GV, US, &
-                             CS%MEKE, CS%VarMix, CS%CDp, CS%thickness_diffuse_CSp, CS%stoch_CS)
-
+                             CS%MEKE, CS%VarMix, CS%CDp, CS%thickness_diffuse_CSp, &
+                             CS%stoch_CS, u, v)
       call cpu_clock_end(id_clock_thick_diff)
       call pass_var(h, G%Domain, clock=id_clock_pass, halo=CS%dyn_h_stencil)
       if (CS%debug) call hchksum(h,"Post-thickness_diffuse h", G%HI, haloshift=1, unscale=GV%H_to_MKS)
@@ -2335,6 +2335,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   logical :: use_KPP           ! If true, diabatic is using KPP vertical mixing
   logical :: MLE_use_PBL_MLD   ! If true, use stored boundary layer depths for submesoscale restratification.
   logical :: OBC_reservoir_init_bug
+  logical :: OBC_bgc_time_ref_bug  ! If true, use the start of the current run (not the overall
+                               ! start time) as the reference for OBC BGC tracer update schedule.
   integer :: nkml, nkbl, verbosity, write_geom, number_of_OBC_segments
   integer :: dynamics_stencil  ! The computational stencil for the calculations
                                ! in the dynamic core.
@@ -2620,12 +2622,12 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     default_val = US%T_to_s*CS%dt_therm ; if (dtbt > 0.0) default_val = -1.0
     CS%dtbt_reset_period = -1.0
     call get_param(param_file, "MOM", "DTBT_RESET_PERIOD", CS%dtbt_reset_period, &
-                 "The period between recalculations of DTBT (if DTBT <= 0). "//&
-                 "If DTBT_RESET_PERIOD is negative, DTBT is set based "//&
-                 "only on information available at initialization.  If 0, "//&
-                 "DTBT will be set every dynamics time step. The default "//&
-                 "is set by DT_THERM.  This is only used if SPLIT is true.", &
-                 units="s", default=default_val, scale=US%s_to_T, do_not_read=(dtbt > 0.0))
+                   "The period between recalculations of DTBT (if DTBT <= 0). If "//&
+                   "DTBT_RESET_PERIOD is negative, DTBT is set based only on information "//&
+                   "available at initialization.  If 0, DTBT will be set every dynamics time "//&
+                   "step. Values between 0 and DT are treated as 0.  The default is set by "//&
+                   "DT_THERM. This is only used if SPLIT is true.", &
+                   units="s", default=default_val, scale=US%s_to_T, do_not_read=(dtbt > 0.0))
   endif
 
   ! This is here in case these values are used inappropriately.
@@ -2879,6 +2881,11 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                  "The time between OBC segment data updates for OBGC tracers.  This must be an "//&
                  "integer multiple of DT and DT_THERM.  The default is set to DT.", units="s", &
                  default=US%T_to_s*CS%dt, scale=US%s_to_T, do_not_log=.not.associated(OBC_in))
+  call get_param(param_file, "MOM", "OBC_BGC_TIME_REF_BUG", OBC_bgc_time_ref_bug, &
+                 "If true, recover a bug that the BGC OBC segment update schedule is "//&
+                 "referenced to the start of the current run rather than the overall start "//&
+                 "time, which can lead to restart reproducibility failures.", &
+                 default=.true., do_not_log=.not.associated(OBC_in))
 
   ! Copy the grid metrics and bathymetry to the ocean_grid_type
   call copy_dyngrid_to_MOM_grid(dG_in, G_in, US)
@@ -3461,6 +3468,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   diag => CS%diag
   ! Initialize the diag mediator.
   call diag_mediator_init(G, GV, US, GV%ke, param_file, diag, doc_file_dir=dirs%output_directory)
+  if (associated(CS%OBC)) then
+    call diag_mediator_set_OBC_info(G, CS%OBC%segnum_u, CS%OBC%segnum_v, diag)
+  endif
   if (present(diag_ptr)) diag_ptr => CS%diag
 
   ! Initialize the diagnostics masks for native arrays.
@@ -3544,16 +3554,22 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
               CS%visc, dirs, CS%ntrunc, CS%pbv, calc_dtbt=calc_dtbt, &
               cont_stencil=CS%cont_stencil, dyn_h_stencil=CS%dyn_h_stencil)
     endif
+    ! A reset period no longer than dt is equivalent to recalculating every step.
+    if (CS%dtbt_reset_period > 0.0 .and. CS%dtbt_reset_period <= CS%dt) &
+        CS%dtbt_reset_period = 0.0
     if (CS%dtbt_reset_period > 0.0) then
       CS%dtbt_reset_interval = real_to_time(CS%dtbt_reset_period, unscale=US%T_to_s)
-      ! Set dtbt_reset_time to be the next even multiple of dtbt_reset_interval.
-      CS%dtbt_reset_time = Time_init + CS%dtbt_reset_interval * &
-                                 ((Time - Time_init) / CS%dtbt_reset_interval)
-      if ((CS%dtbt_reset_time > Time) .and. calc_dtbt) then
-        ! Back up dtbt_reset_time one interval to force dtbt to be calculated,
-        ! because the restart was not aligned with the interval to recalculate
-        ! dtbt, and dtbt was not read from a restart file.
-        CS%dtbt_reset_time = CS%dtbt_reset_time - CS%dtbt_reset_interval
+      if (calc_dtbt) then
+        ! No restart DTBT (not found or new run) or DTBT_RESTART_BUG=True: set to the most recent
+        ! multiple of the interval before or equal to current time, so the set_dtbt is called on
+        ! the first step.
+        CS%dtbt_reset_time = Time_init + CS%dtbt_reset_interval * &
+                                   ((Time - Time_init) / CS%dtbt_reset_interval)
+      else
+        ! Restart DTBT available: defer to the next multiple after current time so the first step
+        ! uses the restart value unless a reset is naturally due.
+        CS%dtbt_reset_time = Time_init + CS%dtbt_reset_interval * &
+                                   ((Time - Time_init) / CS%dtbt_reset_interval + 1)
       endif
     endif
   elseif (CS%use_RK2) then
@@ -3571,10 +3587,31 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   endif
   CS%dyn_h_stencil = max(2, CS%dyn_h_stencil)
 
-  !Set OBC segment data update period
-  if (associated(CS%OBC) .and. CS%dt_obc_seg_period > 0.0) then
+  ! Set the next time to update OBC segment BGC tracer data
+  if (associated(CS%OBC) .and. (CS%dt_obc_seg_period > 0.0)) then
+    if (CS%dt_obc_seg_period > CS%dt_tr_adv) then
+      if (new_sim) then
+        call MOM_error(WARNING, "DT_OBC_SEG_UPDATE_OBGC > DT_TRACER_ADVECT: this run will "//&
+            "proceed normally, but any restart from it will fail with a FATAL error because "//&
+            "BGC OBC external data is not saved in restart files. "//&
+            "Set DT_OBC_SEG_UPDATE_OBGC = DT_TRACER_ADVECT or 0 until this is fixed.")
+      else
+        call MOM_error(FATAL, "DT_OBC_SEG_UPDATE_OBGC > DT_TRACER_ADVECT is not supported "//&
+            "for restart runs: BGC OBC external data is not saved in restart files, so the "//&
+            "first tracer advection step after restart may use incorrect boundary data. "//&
+            "Set DT_OBC_SEG_UPDATE_OBGC = DT_TRACER_ADVECT or 0 until this is fixed.")
+      endif
+    endif
     CS%dt_obc_seg_interval = real_to_time(CS%dt_obc_seg_period, unscale=US%T_to_s)
-    CS%dt_obc_seg_time = Time + CS%dt_obc_seg_interval
+    if (OBC_bgc_time_ref_bug) then
+      CS%dt_obc_seg_time = Time + CS%dt_obc_seg_interval
+    else
+      ! Set to the next update point after current time, so that %t read from initialization is
+      ! not overwritten.  Note that even though this line by itself is correct, there are still
+      ! issue with restart runs, as external data %t is not saved in restart files.
+      CS%dt_obc_seg_time = Time_init + CS%dt_obc_seg_interval * &
+                           ((Time - Time_init) / CS%dt_obc_seg_interval + 1)
+    endif
   endif
 
   call callTree_waypoint("dynamics initialized (initialize_MOM)")
