@@ -5,164 +5,164 @@
 !> This tracer package is used to test advection schemes
 module sphere_advection_tracer
 
-	use MOM_coms,            only : EFP_type
-	use MOM_coupler_types,   only : set_coupler_type_data, atmos_ocn_coupler_flux
-	use MOM_diag_mediator,   only : diag_ctrl
-	use MOM_error_handler,   only : MOM_error, FATAL, WARNING
-	use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
-	use MOM_forcing_type,    only : forcing
-	use MOM_grid,            only : ocean_grid_type
-	use MOM_hor_index,       only : hor_index_type
-	use MOM_io,              only : slasher, vardesc, var_desc, query_vardesc
-	use MOM_open_boundary,   only : ocean_OBC_type
-	use MOM_restart,         only : query_initialized, set_initialized, MOM_restart_CS
-	use MOM_spatial_means,   only : global_mass_int_EFP
-	use MOM_sponge,          only : set_up_sponge_field, sponge_CS
-	use MOM_time_manager,    only : time_type
-	use MOM_tracer_registry, only : register_tracer, tracer_registry_type
-	use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
-	use MOM_unit_scaling,    only : unit_scale_type
-	use MOM_variables,       only : surface
-	use MOM_verticalGrid,    only : verticalGrid_type
+  use MOM_coms,            only : EFP_type
+  use MOM_coupler_types,   only : set_coupler_type_data, atmos_ocn_coupler_flux
+  use MOM_diag_mediator,   only : diag_ctrl
+  use MOM_error_handler,   only : MOM_error, FATAL, WARNING
+  use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
+  use MOM_forcing_type,    only : forcing
+  use MOM_grid,            only : ocean_grid_type
+  use MOM_hor_index,       only : hor_index_type
+  use MOM_io,              only : slasher, vardesc, var_desc, query_vardesc
+  use MOM_open_boundary,   only : ocean_OBC_type
+  use MOM_restart,         only : query_initialized, set_initialized, MOM_restart_CS
+  use MOM_spatial_means,   only : global_mass_int_EFP
+  use MOM_sponge,          only : set_up_sponge_field, sponge_CS
+  use MOM_time_manager,    only : time_type
+  use MOM_tracer_registry, only : register_tracer, tracer_registry_type
+  use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
+  use MOM_unit_scaling,    only : unit_scale_type
+  use MOM_variables,       only : surface
+  use MOM_verticalGrid,    only : verticalGrid_type
 
-	implicit none ; private
+  implicit none ; private
 
 #include <MOM_memory.h>
 
-	public register_sphere_advection_tracer, initialize_sphere_advection_tracer
-	public sphere_advection_tracer_surface_state, sphere_advection_tracer_end
-	public sphere_advection_tracer_column_physics, sphere_advection_stock
+  public register_sphere_advection_tracer, initialize_sphere_advection_tracer
+  public sphere_advection_tracer_surface_state, sphere_advection_tracer_end
+  public sphere_advection_tracer_column_physics, sphere_advection_stock
 
-	integer, parameter :: NTR = 2  !< The number of tracers in this module.
+  integer, parameter :: NTR = 2  !< The number of tracers in this module.
 
 !> The control structure for the advect_test_tracer module
 type, public :: sphere_advection_tracer_CS ; private
-	integer :: ntr = NTR                 !< Number of tracers in this module
-	logical :: coupled_tracers = .false. !< These tracers are not offered to the coupler.
-	character(len=200) :: tracer_IC_file !< The full path to the IC file, or " " to initialize internally.
-	type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
-	type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM tracer registry
-	real, pointer :: tr(:,:,:,:) => NULL() !< The array of tracers used in this subroutine [conc]
-	real :: land_val(NTR) = -1.0 !< The value of tr used where land is masked out [conc]
-	logical :: use_sponge    !< If true, sponges may be applied somewhere in the domain.
-	logical :: tracers_may_reinit !< If true, the tracers may be set up via the initialization code if
-	!! they are not found in the restart files.  Otherwise it is a fatal error
-	!! if the tracers are not found in the restart files of a restarted run.
-	real :: x_origin !< Starting x-position of the tracer [m] or [km] or [degrees_E]
-	real :: x_width  !< Initial size in the x-direction of the tracer patch [m] or [km] or [degrees_E]
-	real :: y_origin !< Starting y-position of the tracer [m] or [km] or [degrees_N]
-	real :: y_width  !< Initial size in the y-direction of the tracer patch [m] or [km] or [degrees_N]
-	real :: rad_earth !< Radius of the earth
+  integer :: ntr = NTR                 !< Number of tracers in this module
+  logical :: coupled_tracers = .false. !< These tracers are not offered to the coupler.
+  character(len=200) :: tracer_IC_file !< The full path to the IC file, or " " to initialize internally.
+  type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
+  type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM tracer registry
+  real, pointer :: tr(:,:,:,:) => NULL() !< The array of tracers used in this subroutine [conc]
+  real :: land_val(NTR) = -1.0 !< The value of tr used where land is masked out [conc]
+  logical :: use_sponge    !< If true, sponges may be applied somewhere in the domain.
+  logical :: tracers_may_reinit !< If true, the tracers may be set up via the initialization code if
+  !! they are not found in the restart files.  Otherwise it is a fatal error
+  !! if the tracers are not found in the restart files of a restarted run.
+  real :: x_origin !< Starting x-position of the tracer [m] or [km] or [degrees_E]
+  real :: x_width  !< Initial size in the x-direction of the tracer patch [m] or [km] or [degrees_E]
+  real :: y_origin !< Starting y-position of the tracer [m] or [km] or [degrees_N]
+  real :: y_width  !< Initial size in the y-direction of the tracer patch [m] or [km] or [degrees_N]
+  real :: rad_earth !< Radius of the earth
 
-	integer, dimension(NTR) :: ind_tr !< Indices returned by atmos_ocn_coupler_flux if it is used and
-	!! the surface tracer concentrations are to be provided to the coupler.
+  integer, dimension(NTR) :: ind_tr !< Indices returned by atmos_ocn_coupler_flux if it is used and
+  !! the surface tracer concentrations are to be provided to the coupler.
 
-	type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
-	!! regulate the timing of diagnostic output.
-	type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< A pointer to the restart control structure.
+  type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
+  !! regulate the timing of diagnostic output.
+  type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< A pointer to the restart control structure.
 
-	type(vardesc) :: tr_desc(NTR) !< Descriptions and metadata for the tracers
+  type(vardesc) :: tr_desc(NTR) !< Descriptions and metadata for the tracers
 end type sphere_advection_tracer_CS
 
 contains
 
 !> Register tracer fields and subroutines to be used with MOM.
 function register_sphere_advection_tracer(G, GV, US, param_file, CS, tr_Reg, restart_CS)
-	type(ocean_grid_type),       intent(in) :: G    !< The ocean's grid structure
-	type(verticalGrid_type),     intent(in) :: GV   !< The ocean's vertical grid structure
-	type(unit_scale_type),   intent(in) :: US   !< A dimensional unit scaling type
-	type(param_file_type),       intent(in) :: param_file !< A structure to parse for run-time parameters
-	type(sphere_advection_tracer_CS), pointer :: CS !< The control structure returned by a previous
-	!! call to register_sphere_advection_tracer.
-	type(tracer_registry_type),  pointer    :: tr_Reg !< A pointer that is set to point to the control
-	!! structure for the tracer advection and
-	!! diffusion module
-	type(MOM_restart_CS), target, intent(inout) :: restart_CS !< MOM restart control struct
+  type(ocean_grid_type),       intent(in) :: G    !< The ocean's grid structure
+  type(verticalGrid_type),     intent(in) :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),   intent(in) :: US   !< A dimensional unit scaling type
+  type(param_file_type),       intent(in) :: param_file !< A structure to parse for run-time parameters
+  type(sphere_advection_tracer_CS), pointer :: CS !< The control structure returned by a previous
+  !! call to register_sphere_advection_tracer.
+  type(tracer_registry_type),  pointer    :: tr_Reg !< A pointer that is set to point to the control
+  !! structure for the tracer advection and
+  !! diffusion module
+  type(MOM_restart_CS), target, intent(inout) :: restart_CS !< MOM restart control struct
 
-	! Local variables
-	character(len=80)  :: name, longname
-	! This include declares and sets the variable "version".
+  ! Local variables
+  character(len=80)  :: name, longname
+  ! This include declares and sets the variable "version".
 # include "version_variable.h"
-	character(len=40)  :: mdl = "sphere_advection_tracer" ! This module's name.
-	character(len=200) :: inputdir   ! The directory where the input file can be found
-	character(len=48)  :: flux_units ! The units for tracer fluxes, usually
-	! kg(tracer) kg(water)-1 m3 s-1 or kg(tracer) s-1.
-	real, pointer :: tr_ptr(:,:,:) => NULL() ! A pointer to a tracer array [conc]
-	logical :: register_sphere_advection_tracer
-	integer :: isd, ied, jsd, jed, nz, m
-	isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed ; nz = GV%ke
+  character(len=40)  :: mdl = "sphere_advection_tracer" ! This module's name.
+  character(len=200) :: inputdir   ! The directory where the input file can be found
+  character(len=48)  :: flux_units ! The units for tracer fluxes, usually
+  ! kg(tracer) kg(water)-1 m3 s-1 or kg(tracer) s-1.
+  real, pointer :: tr_ptr(:,:,:) => NULL() ! A pointer to a tracer array [conc]
+  logical :: register_sphere_advection_tracer
+  integer :: isd, ied, jsd, jed, nz, m
+  isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed ; nz = GV%ke
 
-	if (associated(CS)) then
-		call MOM_error(FATAL, "register_sphere_advection_tracer called with an "// &
-			"associated control structure.")
-	endif
-	allocate(CS)
+  if (associated(CS)) then
+      call MOM_error(FATAL, "register_sphere_advection_tracer called with an "// &
+        "associated control structure.")
+  endif
+  allocate(CS)
 
-	! Read all relevant parameters and write them to the model log.
-	call log_version(param_file, mdl, version, "")
+  ! Read all relevant parameters and write them to the model log.
+  call log_version(param_file, mdl, version, "")
 
-	call get_param(param_file, mdl, "SPHERE_ADVECTION_X_ORIGIN", CS%x_origin, &
-			"The x-coordinate of the center of the test-functions.", units=G%x_ax_unit_short, default=0.)
-	call get_param(param_file, mdl, "SPHERE_ADVECTION_Y_ORIGIN", CS%y_origin, &
-			"The y-coordinate of the center of the test-functions.", units=G%y_ax_unit_short, default=0.)
-	call get_param(param_file, mdl, "SPHERE_ADVECTION_X_WIDTH", CS%x_width, &
-			"The x-width of the test-functions.", units=G%x_ax_unit_short, default=0.)
-	call get_param(param_file, mdl, "SPHERE_ADVECTION_Y_WIDTH", CS%y_width, &
-			"The y-width of the test-functions.", units=G%y_ax_unit_short, default=0.)
-	call get_param(param_file, mdl, "sphere_advection_tracer_IC_FILE", CS%tracer_IC_file, &
-			"The name of a file from which to read the initial "//&
-			"conditions for the tracers, or blank to initialize "//&
-			"them internally.", default=" ")
+  call get_param(param_file, mdl, "SPHERE_ADVECTION_X_ORIGIN", CS%x_origin, &
+      "The x-coordinate of the center of the test-functions.", units=G%x_ax_unit_short, default=0.)
+  call get_param(param_file, mdl, "SPHERE_ADVECTION_Y_ORIGIN", CS%y_origin, &
+      "The y-coordinate of the center of the test-functions.", units=G%y_ax_unit_short, default=0.)
+  call get_param(param_file, mdl, "SPHERE_ADVECTION_X_WIDTH", CS%x_width, &
+      "The x-width of the test-functions.", units=G%x_ax_unit_short, default=0.)
+  call get_param(param_file, mdl, "SPHERE_ADVECTION_Y_WIDTH", CS%y_width, &
+      "The y-width of the test-functions.", units=G%y_ax_unit_short, default=0.)
+  call get_param(param_file, mdl, "sphere_advection_tracer_IC_FILE", CS%tracer_IC_file, &
+      "The name of a file from which to read the initial "//&
+      "conditions for the tracers, or blank to initialize "//&
+      "them internally.", default=" ")
 
-	if (len_trim(CS%tracer_IC_file) >= 1) then
-			call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
-			CS%tracer_IC_file = trim(slasher(inputdir))//trim(CS%tracer_IC_file)
-			call log_param(param_file, mdl, "INPUTDIR/sphere_advection_tracer_IC_FILE", &
-				CS%tracer_IC_file)
-	endif
-	call get_param(param_file, mdl, "SPONGE", CS%use_sponge, &
-			"If true, sponges may be applied anywhere in the domain. "//&
-			"The exact location and properties of those sponges are "//&
-			"specified from MOM_initialization.F90.", default=.false.)
+  if (len_trim(CS%tracer_IC_file) >= 1) then
+      call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
+      CS%tracer_IC_file = trim(slasher(inputdir))//trim(CS%tracer_IC_file)
+      call log_param(param_file, mdl, "INPUTDIR/sphere_advection_tracer_IC_FILE", &
+        CS%tracer_IC_file)
+  endif
+  call get_param(param_file, mdl, "SPONGE", CS%use_sponge, &
+      "If true, sponges may be applied anywhere in the domain. "//&
+      "The exact location and properties of those sponges are "//&
+      "specified from MOM_initialization.F90.", default=.false.)
 
-	call get_param(param_file, mdl, "TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
-			"If true, tracers may go through the initialization code "//&
-			"if they are not found in the restart files.  Otherwise "//&
-			"it is a fatal error if the tracers are not found in the "//&
-			"restart files of a restarted run.", default=.false.)
-	call get_param(param_file, mdl, "RAD_EARTH", CS%rad_earth, &
-			"The radius of the Earth.", units="m", default=6.378e6, scale=US%m_to_L)
+  call get_param(param_file, mdl, "TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
+      "If true, tracers may go through the initialization code "//&
+      "if they are not found in the restart files.  Otherwise "//&
+      "it is a fatal error if the tracers are not found in the "//&
+      "restart files of a restarted run.", default=.false.)
+  call get_param(param_file, mdl, "RAD_EARTH", CS%rad_earth, &
+      "The radius of the Earth.", units="m", default=6.378e6, scale=US%m_to_L)
 
-	allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
+  allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
 
-	do m=1,NTR
-		write(name,'("tr",I0)') m
-		write(longname,'("Concentration of Tracer ",I2.2)') m
-		CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mdl)
-		if (GV%Boussinesq) then ; flux_units = "kg kg-1 m3 s-1"
-		else ; flux_units = "kg s-1" ; endif
+  do m=1,NTR
+    write(name,'("tr",I0)') m
+    write(longname,'("Concentration of Tracer ",I2.2)') m
+    CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mdl)
+    if (GV%Boussinesq) then ; flux_units = "kg kg-1 m3 s-1"
+    else ; flux_units = "kg s-1" ; endif
 
 
-		! This is needed to force the compiler not to do a copy in the registration
-		! calls.  Curses on the designers and implementers of Fortran90.
-		tr_ptr => CS%tr(:,:,:,m)
-		! Register the tracer for horizontal advection, diffusion, and restarts.
-		call register_tracer(tr_ptr, tr_Reg, param_file, G%HI, GV, &
-			name=name, longname=longname, units="kg kg-1", &
-			registry_diags=.true., flux_units=flux_units, &
-			restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+    ! This is needed to force the compiler not to do a copy in the registration
+    ! calls.  Curses on the designers and implementers of Fortran90.
+    tr_ptr => CS%tr(:,:,:,m)
+    ! Register the tracer for horizontal advection, diffusion, and restarts.
+    call register_tracer(tr_ptr, tr_Reg, param_file, G%HI, GV, &
+      name=name, longname=longname, units="kg kg-1", &
+      registry_diags=.true., flux_units=flux_units, &
+      restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
 
-		!   Set coupled_tracers to be true (hard-coded above) to provide the surface
-		! values to the coupler (if any).  This is meta-code and its arguments will
-		! currently (deliberately) give fatal errors if it is used.
-		if (CS%coupled_tracers) &
-			CS%ind_tr(m) = atmos_ocn_coupler_flux(trim(name)//'_flux', &
-			flux_type=' ', implementation=' ', caller="register_sphere_advection_tracer")
-	enddo
+    !   Set coupled_tracers to be true (hard-coded above) to provide the surface
+    ! values to the coupler (if any).  This is meta-code and its arguments will
+    ! currently (deliberately) give fatal errors if it is used.
+    if (CS%coupled_tracers) &
+      CS%ind_tr(m) = atmos_ocn_coupler_flux(trim(name)//'_flux', &
+      flux_type=' ', implementation=' ', caller="register_sphere_advection_tracer")
+  enddo
 
-	CS%tr_Reg => tr_Reg
-	CS%restart_CSp => restart_CS
-	register_sphere_advection_tracer = .true.
+  CS%tr_Reg => tr_Reg
+  CS%restart_CSp => restart_CS
+  register_sphere_advection_tracer = .true.
 end function register_sphere_advection_tracer
 
 !>   Initializes the NTR tracer fields in tr(:,:,:,:) and it sets up the tracer output.
@@ -195,7 +195,12 @@ subroutine initialize_sphere_advection_tracer(restart, day, G, GV, h,diag, OBC, 
   real :: r, RR, x, y, y0, x0, dsigma, sig
   real :: PI, PI_2  ! PI = 3.1415926... as 4*atan(1), PI_2 = (PI) /2.0 [nondim]
 
+  real :: lon_c, arg, sigma, lat_c
+
   PI = 4.0*atan(1.0) ; PI_2 = 0.5*PI
+
+  lon_c = 0.0 !3.0 * PI / 2.0
+  lat_c = 0.0
 
   if (.not.associated(CS)) return
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -223,32 +228,47 @@ subroutine initialize_sphere_advection_tracer(restart, day, G, GV, h,diag, OBC, 
     if ((.not.restart) .or. (CS%tracers_may_reinit .and. .not. &
       query_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp))) then
       do k=1,nz ; do j=js,je ; do i=is,ie
-                CS%tr(i,j,k,m) = 0.0
+          CS%tr(i,j,k,m) = 0.0
       enddo ; enddo ; enddo
 
       k=1 ! Cosine bell
       do j=js,je ; do i=is,ie
 
         ! Mercator grid
-        x = CS%rad_earth*G%geoLonT(i,j)*(PI/180.0)
-        y = CS%rad_earth*log(tan(0.25*PI + 0.5*(G%geoLatT(i,j)*(PI/180.0))))
-        y0 = CS%rad_earth*log(tan(0.25*PI + 0.5*(CS%y_origin*(PI/180.0))))
+        ! x = CS%rad_earth*G%geoLonT(i,j)*(PI/180.0)
+        ! y = CS%rad_earth*log(tan(0.25*PI + 0.5*(G%geoLatT(i,j)*(PI/180.0))))
+        ! y0 = CS%rad_earth*log(tan(0.25*PI + 0.5*(CS%y_origin*(PI/180.0))))
 
-        locx = x-CS%x_origin*(PI/180.0)
-        locy = y-y0
-        RR = CS%rad_earth/1.5
+        ! locx = x-CS%x_origin*(PI/180.0)
+        ! locy = y-y0
+        ! RR = CS%rad_earth/1.5
 
         ! Cartesian coordinates
         ! locx = (G%geoLonT(i,j)-CS%x_origin)
         ! locy = (G%geoLatT(i,j)-CS%y_origin)
         ! RR = 50.0
 
-        r = sqrt(locx**2 + locy**2)
-        if (r < RR) then
-            CS%tr(i,j,k,m) = 0.5*(1.0 + cos(((acos(0.0)*2.)*r)/RR))
-        else
-            CS%tr(i,j,k,m) = 0.0
-        endif
+
+
+        ! r = sqrt(locx**2 + locy**2)
+        ! if (r < RR) then
+        !    CS%tr(i,j,k,m) = 0.5*(1.0 + cos(((acos(0.0)*2.)*r)/RR))
+        ! else
+        !    CS%tr(i,j,k,m) = 0.0
+        ! endif
+
+        ! Gaussian bell
+        x = G%geoLonT(i,j)*(PI/180.0)
+        y = G%geoLatT(i,j)*(PI/180.0)
+
+        arg = sin(lat_c) * sin(y) + cos(lat_c) * cos(y) * cos(x - lon_c)
+        arg = max(-1.0, min(1.0, arg))  ! guard against acos domain error
+
+        RR = CS%rad_earth / 3.0
+        sigma = RR
+
+        r = CS%rad_earth * acos(arg)
+        CS%tr(i,j,k,m) = 1000.0 * exp( -0.50 * (r / sigma)**2 )
 
       enddo ; enddo
 

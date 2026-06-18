@@ -63,8 +63,6 @@ type, public :: tracer_type
                                                               !! [CU H ~> conc m or conc kg m-2]
   real, dimension(:,:,:), pointer :: cfl_x         => NULL()  !< diagnostic x-advective cfl
   real, dimension(:,:,:), pointer :: cfl_y         => NULL()  !< diagnostic y-advective cfl
-  real, dimension(:,:,:), pointer :: do_more_u      => NULL()  !< diagnostic x-advective domore
-  real, dimension(:,:,:), pointer :: do_more_v      => NULL()  !< diagnostic y-advective domore
 
   character(len=32)               :: name                     !< tracer name used for diagnostics and error messages
   character(len=64)               :: units                    !< Physical dimensions of the tracer concentration
@@ -74,6 +72,8 @@ type, public :: tracer_type
                                                               !! diagnostics associated with this tracer.
   real                            :: conc_underflow = 0.0     !< A magnitude of tracer concentrations below
                                                               !! which values should be set to 0. [CU ~> conc]
+  logical                         :: nonneg_lim = .true.     !< If true, apply limiter to WENO fluxes for
+                                                              !! positive-definite quantities.
   real                            :: conc_scale = 1.0         !< A scaling factor used to convert the concentrations
                                                               !! of this tracer to its desired units [CU conc-1 ~> 1]
   character(len=64)               :: cmor_name                !< CMOR name of this tracer
@@ -124,7 +124,6 @@ type, public :: tracer_type
   integer :: id_zint = -1, id_zint_100m = -1, id_surf = -1
   integer :: id_net_surfflux = -1, id_NLT_tendency = -1, id_NLT_budget = -1
   integer :: id_cflx = -1, id_cfly = -1
-  integer :: id_domore_u = -1, id_domore_v = -1
   !>@}
 end type tracer_type
 

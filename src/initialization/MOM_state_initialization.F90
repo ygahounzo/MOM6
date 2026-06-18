@@ -521,6 +521,8 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
        " \t zero - the fluid is initially at rest. \n"//&
        " \t uniform - the flow is uniform (determined by\n"//&
        " \t\t parameters INITIAL_U_CONST and INITIAL_V_CONST).\n"//&
+       " \t mercator - a Mercator projection of the initial uniform velocity \n"//&
+       " \t\t (determined by INITIAL_U_CONST and INITIAL_V_CONST).\n"//&
        " \t rossby_front - a mixed layer front in thermal wind balance.\n"//&
        " \t soliton - Equatorial Rossby soliton.\n"//&
        " \t USER - call a user modified routine.", default="zero", &
@@ -529,6 +531,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
     case ("file"); call initialize_velocity_from_file(u, v, G, GV, US, PF, just_read)
     case ("zero"); call initialize_velocity_zero(u, v, G, GV, PF, just_read)
     case ("uniform"); call initialize_velocity_uniform(u, v, G, GV, US, PF, just_read)
+    case ("mercator"); call initialize_velocity_mercator(u, v, G, GV, US, PF, just_read)
     case ("circular"); call initialize_velocity_circular(u, v, G, GV, US, PF, just_read)
     case ("phillips"); call Phillips_initialize_velocity(u, v, G, GV, US, PF, just_read)
     case ("rossby_front"); call Rossby_front_initialize_velocity(u, v, h, &
@@ -1688,6 +1691,48 @@ subroutine initialize_velocity_uniform(u, v, G, GV, US, param_file, just_read)
   enddo ; enddo ; enddo
 
 end subroutine initialize_velocity_uniform
+
+!> Sets the initial velocity components to uniform
+subroutine initialize_velocity_mercator(u, v, G, GV, US, param_file, just_read)
+  type(ocean_grid_type),   intent(in)  :: G  !< The ocean's grid structure
+  type(verticalGrid_type), intent(in)  :: GV !< The ocean's vertical grid structure.
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(out) :: u  !< The zonal velocity that is being initialized [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(out) :: v  !< The meridional velocity that is being initialized [L T-1 ~> m s-1]
+  type(unit_scale_type),   intent(in)  :: US !< A dimensional unit scaling type
+  type(param_file_type),   intent(in)  :: param_file  !< A structure indicating the open file to
+                                                      !! parse for model parameter values.
+  logical,                 intent(in)  :: just_read   !< If true, this call will only read
+                                                      !! parameters without changing u or v.
+  ! Local variables
+  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  real    :: initial_u_const, initial_v_const ! Constant initial velocities [L T-1 ~> m s-1]
+  character(len=200) :: mdl = "initialize_velocity_mercator" ! This subroutine's name.
+  real :: dpi
+
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  call get_param(param_file, mdl, "INITIAL_U_CONST", initial_u_const, &
+                 "A initial uniform value for the zonal flow.", &
+                 default=0.0, units="m s-1", scale=US%m_s_to_L_T, do_not_log=just_read)
+  call get_param(param_file, mdl, "INITIAL_V_CONST", initial_v_const, &
+                 "A initial uniform value for the meridional flow.", &
+                 default=0.0, units="m s-1", scale=US%m_s_to_L_T, do_not_log=just_read)
+
+  if (just_read) return ! All run-time parameters have been read, so return.
+
+  dpi = acos(0.0)*2.0
+
+  do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+    u(I,j,k) = initial_u_const * cos(G%geoLatBu(I,j)*dpi/180.0)
+  enddo ; enddo ; enddo
+  do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+    v(i,J,k) = initial_v_const
+  enddo ; enddo ; enddo
+
+end subroutine initialize_velocity_mercator
 
 !> Sets the initial velocity components to be circular with
 !! no flow at edges of domain and center.

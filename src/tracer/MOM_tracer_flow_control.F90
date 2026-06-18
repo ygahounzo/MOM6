@@ -82,6 +82,9 @@ use nw2_tracers, only : initialize_nw2_tracers, nw2_tracers_end
 use sphere_advection_tracer, only : register_sphere_advection_tracer, initialize_sphere_advection_tracer
 use sphere_advection_tracer, only : sphere_advection_tracer_column_physics, sphere_advection_tracer_surface_state
 use sphere_advection_tracer, only : sphere_advection_stock, sphere_advection_tracer_end, sphere_advection_tracer_CS
+use convergence_test_tracer, only : register_convergence_test_tracer, initialize_convergence_test_tracer
+use convergence_test_tracer, only : convergence_test_tracer_column_physics, convergence_test_tracer_surface_state
+use convergence_test_tracer, only : convergence_test_stock, convergence_test_tracer_end, convergence_test_tracer_CS
 
 implicit none ; private
 
@@ -110,6 +113,7 @@ type, public :: tracer_flow_control_CS ; private
   logical :: use_nw2_tracers = .false.             !< If true, use the NW2 tracer package
   logical :: get_chl_from_MARBL = .false.          !< If true, use the MARBL-provided Chl for shortwave penetration
   logical :: use_sphere_advection_tracer = .false.   !< If true, use the sphere_advection_tracer package
+  logical :: use_convergence_test_tracer = .false.   !< If true, use the convergence_test_tracer package
   !>@{ Pointers to the control strucures for the tracer packages
   type(USER_tracer_example_CS), pointer :: USER_tracer_example_CSp => NULL()
   type(DOME_tracer_CS), pointer :: DOME_tracer_CSp => NULL()
@@ -128,6 +132,7 @@ type, public :: tracer_flow_control_CS ; private
   type(dyed_obc_tracer_CS), pointer :: dyed_obc_tracer_CSp => NULL()
   type(nw2_tracers_CS), pointer :: nw2_tracers_CSp => NULL()
   type(sphere_advection_tracer_CS), pointer :: sphere_advection_tracer_CSp => NULL()
+  type(convergence_test_tracer_CS), pointer :: convergence_test_tracer_CSp => NULL()
   !>@}
 end type tracer_flow_control_CS
 
@@ -247,6 +252,9 @@ subroutine call_tracer_register(G, GV, US, param_file, CS, tr_Reg, restart_CS)
   call get_param(param_file, mdl, "USE_SPHERE_ADVECTION_TRACER", CS%use_sphere_advection_tracer, &
                  "If true, use the sphere_advection_tracer tracer package.", &
                  default=.false.)
+  call get_param(param_file, mdl, "USE_CONVERGENCE_TEST_TRACER", CS%use_convergence_test_tracer, &
+                 "If true, use the convergence_test_tracer tracer package.", &
+                 default=.false.)
 
 !    Add other user-provided calls to register tracers for restarting here. Each
 !  tracer package registration call returns a logical false if it cannot be run
@@ -301,6 +309,9 @@ subroutine call_tracer_register(G, GV, US, param_file, CS, tr_Reg, restart_CS)
   if (CS%use_sphere_advection_tracer) CS%use_sphere_advection_tracer = &
     register_sphere_advection_tracer(G, GV, US, param_file, CS%sphere_advection_tracer_CSp, &
                                    tr_Reg, restart_CS)
+  if (CS%use_convergence_test_tracer) CS%use_convergence_test_tracer = &
+    register_convergence_test_tracer(G, GV, param_file, CS%convergence_test_tracer_CSp, &
+                                     tr_Reg, restart_CS)
 
 end subroutine call_tracer_register
 
@@ -386,6 +397,9 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
     call initialize_nw2_tracers(restart, day, G, GV, US, h, tv, diag, CS%nw2_tracers_CSp)
   if (CS%use_sphere_advection_tracer) &
     call initialize_sphere_advection_tracer(restart, day, G, GV, h, diag, OBC, CS%sphere_advection_tracer_CSp, &
+                                sponge_CSp)
+  if (CS%use_convergence_test_tracer) &
+    call initialize_convergence_test_tracer(restart, day, G, GV, h, diag, OBC, CS%convergence_test_tracer_CSp, &
                                 sponge_CSp)
 
 end subroutine tracer_flow_control_init
@@ -617,6 +631,11 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
                                                 G, GV, US, CS%sphere_advection_tracer_CSp, &
                                                 evap_CFL_limit=evap_CFL_limit, &
                                                 minimum_forcing_depth=minimum_forcing_depth)
+    if (CS%use_convergence_test_tracer) &
+      call convergence_test_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                                G, GV, US, CS%convergence_test_tracer_CSp, &
+                                                evap_CFL_limit=evap_CFL_limit, &
+                                                minimum_forcing_depth=minimum_forcing_depth)
   else ! Apply tracer surface fluxes using ea on the first layer
     if (CS%use_USER_tracer_example) &
       call tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
@@ -686,6 +705,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
     if (CS%use_sphere_advection_tracer) &
       call sphere_advection_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                       G, GV, US, CS%sphere_advection_tracer_CSp)
+    if (CS%use_convergence_test_tracer) &
+      call convergence_test_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                      G, GV, US, CS%convergence_test_tracer_CSp)
   endif
 
 end subroutine call_tracer_column_fns
@@ -839,6 +861,13 @@ subroutine call_tracer_stocks(h, stock_values, G, GV, US, CS, stock_names, stock
                       set_pkg_name, max_ns, ns_tot, stock_names, stock_units)
   endif
 
+  if (CS%use_convergence_test_tracer) then
+    ns = convergence_test_stock( h, values_EFP, G, GV, CS%convergence_test_tracer_CSp, &
+                         names, units, stock_index )
+    call store_stocks("convergence_test_tracer", ns, names, units, values_EFP, index, stock_val_EFP, &
+                      set_pkg_name, max_ns, ns_tot, stock_names, stock_units)
+  endif
+
   !   Sum the various quantities across all the processors.
   if (ns_tot > 0) then
     call EFP_sum_across_PEs(stock_val_EFP, ns_tot)
@@ -951,6 +980,8 @@ subroutine call_tracer_surface_state(sfc_state, h, G, GV, US, CS)
     call MOM_generic_tracer_surface_state(sfc_state, h, G, GV, CS%MOM_generic_tracer_CSp)
   if (CS%use_sphere_advection_tracer) &
     call sphere_advection_tracer_surface_state(sfc_state, h, G, GV, CS%sphere_advection_tracer_CSp)
+  if (CS%use_convergence_test_tracer) &
+    call convergence_test_tracer_surface_state(sfc_state, h, G, GV, CS%convergence_test_tracer_CSp)
 
 end subroutine call_tracer_surface_state
 
@@ -969,6 +1000,7 @@ subroutine tracer_flow_control_end(CS)
   if (CS%use_oil) call oil_tracer_end(CS%oil_tracer_CSp)
   if (CS%use_advection_test_tracer) call advection_test_tracer_end(CS%advection_test_tracer_CSp)
   if (CS%use_sphere_advection_tracer) call sphere_advection_tracer_end(CS%sphere_advection_tracer_CSp)
+  if (CS%use_convergence_test_tracer) call convergence_test_tracer_end(CS%convergence_test_tracer_CSp)
   if (CS%use_OCMIP2_CFC) call OCMIP2_CFC_end(CS%OCMIP2_CFC_CSp)
   if (CS%use_CFC_cap) call CFC_cap_end(CS%CFC_cap_CSp)
   if (CS%use_MOM_generic_tracer) call end_MOM_generic_tracer(CS%MOM_generic_tracer_CSp)

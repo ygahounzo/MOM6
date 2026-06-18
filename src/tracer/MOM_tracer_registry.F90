@@ -59,7 +59,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                            df_2d_x, df_2d_y, advection_xy, registry_diags, &
                            conc_scale, flux_nameroot, flux_longname, flux_units, flux_scale, &
                            convergence_units, convergence_scale, cmor_tendprefix, diag_form, &
-                           restart_CS, mandatory, underflow_conc, Tr_out, advect_scheme)
+                           restart_CS, mandatory, underflow_conc, nonneg_lim, Tr_out, advect_scheme)
   type(hor_index_type),           intent(in)    :: HI           !< horizontal index type
   type(verticalGrid_type),        intent(in)    :: GV           !< ocean vertical grid structure
   type(tracer_registry_type),     pointer       :: Reg          !< pointer to the tracer registry
@@ -131,6 +131,8 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                                                                 !! from a restart file.
   real,                 optional, intent(in)    :: underflow_conc !< A tiny concentration, below which the tracer
                                                                 !! concentration underflows to 0 [CU ~> conc].
+  logical,              optional, intent(in)    :: nonneg_lim   !< If true, apply Zhang-Shu positivity limiter
+                                                                !! to WENO fluxes for this tracer.
   type(tracer_type),    optional, pointer       :: Tr_out       !< If present, returns pointer into registry
 
   integer,                 optional, intent(in) :: advect_scheme !< Advection scheme for this tracer, the default is -1
@@ -187,6 +189,9 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
 
   Tr%conc_underflow = 0.0
   if (present(underflow_conc)) Tr%conc_underflow = underflow_conc
+
+  Tr%nonneg_lim = .true.
+  if (present(nonneg_lim)) Tr%nonneg_lim = nonneg_lim
 
   Tr%flux_nameroot = Tr%name
   if (present(flux_nameroot)) then
@@ -492,13 +497,6 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
       if (Tr%id_cflx > 0) call safe_alloc_ptr(Tr%cfl_x,IsdB,IedB,jsd,jed,nz)
       if (Tr%id_cfly > 0) call safe_alloc_ptr(Tr%cfl_y,isd,ied,JsdB,JedB,nz)
 
-      Tr%id_domore_u = register_diag_field("ocean_model", "do_more_u", &
-            diag%axesCuL, Time, "do more count in i-component", 'nodim')
-      Tr%id_domore_v = register_diag_field("ocean_model", "do_more_v", &
-            diag%axesCvL, Time, "do more count in j-component", 'nodim')
-
-      if (Tr%id_domore_u > 0) call safe_alloc_ptr(Tr%do_more_u,IsdB,IedB,jsd,jed,nz)
-      if (Tr%id_domore_v > 0) call safe_alloc_ptr(Tr%do_more_v,isd,ied,JsdB,JedB,nz)
     endif
 
     ! Neutral/Horizontal diffusion convergence tendencies
@@ -737,8 +735,6 @@ subroutine post_tracer_diagnostics_at_sync(Reg, h, diag_prev, diag, G, GV, dt)
     if (Tr%id_tr > 0) call post_data(Tr%id_tr, Tr%t, diag)
     if (Tr%id_cflx > 0) call post_data(Tr%id_cflx, Tr%cfl_x, diag)
     if (Tr%id_cfly > 0) call post_data(Tr%id_cfly, Tr%cfl_y, diag)
-    if (Tr%id_domore_u > 0) call post_data(Tr%id_domore_u, Tr%do_more_u, diag)
-    if (Tr%id_domore_v > 0) call post_data(Tr%id_domore_v, Tr%do_more_v, diag)
     if (Tr%id_tendency > 0) then
       work3d(:,:,:) = 0.0
       do k=1,nz ; do j=js,je ; do i=is,ie
