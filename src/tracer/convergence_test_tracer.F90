@@ -205,15 +205,6 @@ subroutine initialize_convergence_test_tracer(restart, day, G, GV, h, diag, OBC,
         CS%tr(i,j,k,m) = sin(acos(0.0)*2.*locx) !*sin(acos(0.0)*2.*locy)
       enddo ; enddo
 
-      ! k=1 ! Cut cylinder
-      ! do j=js,je ; do i=is,ie
-      !  locx = (G%geoLonT(i,j)-CS%x_origin)/CS%x_width
-      !  locy = (G%geoLatT(i,j)-CS%y_origin)/CS%y_width
-      !  if ((locx**2) + (locy**2) <= 1.0) CS%tr(i,j,k,m) = 1.0
-      ! !  if (abs(locx) < 0.2 .and. locy < 0.7) CS%tr(i,j,k,m) = 0.0
-      ! !  if (locx>0.0 .and. abs(locy)<0.2) CS%tr(i,j,k,m) = 0.0
-      ! enddo ; enddo
-
       call set_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp)
     endif
   enddo
@@ -225,8 +216,10 @@ subroutine convergence_test_tracer_column_physics(h_old, h_new, ea, eb, fluxes, 
   evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h_old !< Layer thickness before entrainment [H ~> m or kg m-2].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h_new !< Layer thickness after entrainment [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h_old !< Layer thickness before
+                                                                 ! entrainment [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h_new !< Layer thickness after
+                                                                 !! entrainment [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: ea   !< Fluid entrained from layer above [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: eb   !< Fluid entrained from layer below [H ~> m or kg m-2].
   type(forcing),           intent(in) :: fluxes !< Thermodynamic and tracer forcing fields.
@@ -235,7 +228,8 @@ subroutine convergence_test_tracer_column_physics(h_old, h_new, ea, eb, fluxes, 
   type(convergence_test_tracer_CS), pointer :: CS !< The control structure returned by a previous
   !! call to register_convergence_test_tracer.
   real, optional,          intent(in) :: evap_CFL_limit !< Limit on fraction of water fluxed out of top layer [nondim]
-  real, optional,          intent(in) :: minimum_forcing_depth !< Smallest depth over which fluxes can be applied [H ~> m or kg m-2]
+  real, optional,          intent(in) :: minimum_forcing_depth !< Smallest depth over which fluxes
+                                                               !! can be applied [H ~> m or kg m-2]
 
   ! Local variables
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: h_work

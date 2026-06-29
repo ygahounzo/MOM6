@@ -208,18 +208,6 @@ subroutine initialize_sphere_advection_tracer(restart, day, G, GV, h,diag, OBC, 
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
   h_neglect = GV%H_subroundoff
 
-  ! if (GP%equator_reference) then
-  !    ! With the following expression, the equator will always be placed
-  !    ! on either h or q points, in a position consistent with the ratio
-  !    ! GP%south_lat to GP%len_lat.
-  !    jRef =  (G%jsg-1) + 0.5*FLOOR(GP%njglobal*((-1.0*GP%south_lat*2.0)/GP%len_lat)+0.5)
-  !    fnRef = Int_dj_dy(0.0, GP)
-  ! else
-  !    ! The following line sets the reference latitude GP%south_lat at j=js-1 (or -2?)
-  !    jRef = (G%jsg-1)
-  !    fnRef = Int_dj_dy((GP%south_lat*PI/180.0), GP)
-  ! endif
-
   CS%diag => diag
   CS%ntr = NTR
   do m=1,NTR
@@ -242,13 +230,6 @@ subroutine initialize_sphere_advection_tracer(restart, day, G, GV, h,diag, OBC, 
         ! locx = x-CS%x_origin*(PI/180.0)
         ! locy = y-y0
         ! RR = CS%rad_earth/1.5
-
-        ! Cartesian coordinates
-        ! locx = (G%geoLonT(i,j)-CS%x_origin)
-        ! locy = (G%geoLatT(i,j)-CS%y_origin)
-        ! RR = 50.0
-
-
 
         ! r = sqrt(locx**2 + locy**2)
         ! if (r < RR) then

@@ -1726,7 +1726,7 @@ subroutine initialize_velocity_mercator(u, v, G, GV, US, param_file, just_read)
   dpi = acos(0.0)*2.0
 
   do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-    u(I,j,k) = initial_u_const * cos(G%geoLatBu(I,j)*dpi/180.0)
+    u(I,j,k) = initial_u_const * cos(G%geoLatCu(I,j)*dpi/180.0)
   enddo ; enddo ; enddo
   do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
     v(i,J,k) = initial_v_const

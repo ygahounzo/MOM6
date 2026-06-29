@@ -24,29 +24,20 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public weno5_reconstruction, ppmw5_reconstruction
-public weno7_reconstruction, ppmw7_reconstruction
+public ppmw5_reconstruction
 public PPM_reconstruction
 public rk3_substep
 
 contains
 
-!> One SSP-RK3 2D-unsplit sub-step for use inside advect_tracer_v0.
-!! uhr/vhr must already be pre-scaled to 1/nsub of the total flux by the caller.
-!! Unlike rk3_unsplit_step, this routine does NOT subtract uhh/vhh from uhr/vhr.
-!! domore_k is updated from a direct flux check on uhr/vhr at the end of each layer;
-!! because uhr = uhtr/nsub is constant across sub-steps, the caller does not need
-!! to reset domore_k between sub-steps.
-
-subroutine rk3_substep(G, GV, US, OBC, Reg, hprev, uhr, vhr, &
-  uh_neglect, vh_neglect, domore_k, domore_j, &
-  ntr, nz, isv, iev, jsv, jev, dump_cfl, &
-    local_advect_scheme, Idt, CFL_subcycle)
-  type(ocean_grid_type),      intent(in)    :: G
-  type(verticalGrid_type),    intent(in)    :: GV
-  type(unit_scale_type),      intent(in)    :: US
-  type(ocean_OBC_type),       pointer       :: OBC
-  type(tracer_registry_type), pointer       :: Reg
+!> One SSP-RK3 2D-unsplit sub-step for use inside advect_tracer_RK3.
+subroutine rk3_substep(G, GV, US, OBC, Reg, hprev, uhr, vhr, uh_neglect, vh_neglect, domore_k, &
+    domore_j, ntr, nz, isv, iev, jsv, jev, dump_cfl, local_advect_scheme, Idt, CFL_subcycle)
+  type(ocean_grid_type),      intent(in)    :: G                     !< ocean grid structure
+  type(verticalGrid_type),    intent(in)    :: GV                    !< ocean vertical grid structure
+  type(unit_scale_type),      intent(in)    :: US                    !< A dimensional unit scaling type
+  type(ocean_OBC_type),       pointer       :: OBC             !< specifies whether, where, and what OBCs are used
+  type(tracer_registry_type), pointer       :: Reg             !< pointer to tracer registry
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: hprev !< cell volume at the end of previous
                                                                      !! tracer change [H L2 ~> m3 or kg]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: uhr   !< accumulated volume/mass flux through
@@ -151,8 +142,10 @@ subroutine rk3_substep(G, GV, US, OBC, Reg, hprev, uhr, vhr, &
           vhh(i,J,k) = 0.0 ; cycle
         endif
         if ((G%mask2dCv(i,J)*vhr(i,J,k) == 0.0) .or. &
-            ((G%mask2dCv(i,J)*vhr(i,J,k) < 0.0) .and. (hprev(i,j+1,k)*Idt <= G%areaT(i+1,j)*tiny_h)) .or. &
-            ((G%mask2dCv(i,J)*vhr(i,J,k) > 0.0) .and. (hprev(i,j,k)*Idt <= G%areaT(i,j)*tiny_h))) then
+            ((G%mask2dCv(i,J)*vhr(i,J,k) < 0.0) .and. &
+            (hprev(i,j+1,k)*Idt <= G%areaT(i+1,j)*tiny_h)) .or. &
+            ((G%mask2dCv(i,J)*vhr(i,J,k) > 0.0) .and. &
+            (hprev(i,j,k)*Idt <= G%areaT(i,j)*tiny_h))) then
           vhh(i,J,k) = 0.0
         elseif (G%mask2dCv(i,J)*vhr(i,J,k) > 0.0) then
           vhh(i,J,k) = G%mask2dCv(i,J)*vhr(i,J,k) * scale(i,J,k)
@@ -172,7 +165,7 @@ subroutine rk3_substep(G, GV, US, OBC, Reg, hprev, uhr, vhr, &
         no_flux(i,j,k) = (uhh(I,j,k) == 0.0) .and. (uhh(I-1,j,k) == 0.0) .and. &
                           (vhh(i,J,k) == 0.0) .and. (vhh(i,J-1,k) == 0.0)
         dh(i,j,k) = (uhh(I,j,k) - uhh(I-1,j,k)) + (vhh(i,J,k) - vhh(i,J-1,k))
-        if (no_flux(i,j,k)) then 
+        if (no_flux(i,j,k)) then
           do_ij = .false.
         else
           do_ij = .true.
@@ -239,7 +232,7 @@ subroutine rk3_substep(G, GV, US, OBC, Reg, hprev, uhr, vhr, &
       ! h** = h^n - (1/2)*dh  (stored in hprev_s2 for stage-3 reconstruction)
       do j=jsv,jev ; do i=isv,iev
         if (.not. domore_j(j,k)) cycle
-        if (no_flux(i,j,k)) then 
+        if (no_flux(i,j,k)) then
           do_ij = .false.
         else
           do_ij = .true.
@@ -393,19 +386,28 @@ end subroutine rk3_substep
 subroutine compute_flux_2d(tk, uhh_in, vhh_in, h_k, OBC, ntr, &
   is, ie, js, je, k, G, GV, advect_schemes, flux_x_out, flux_y_out, domore_j_k, &
   uhr, vhr, apply_lim)
-  type(ocean_grid_type),                          intent(in)    :: G
-  type(verticalGrid_type),                        intent(in)    :: GV
-  integer,                                        intent(in)    :: ntr
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV),ntr), intent(in)    :: tk
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)),     intent(inout) :: uhh_in   !< zonal mass flux [H L2]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)),     intent(inout) :: vhh_in   !< meridional mass flux [H L2]
-  real, dimension(SZI_(G),SZJ_(G)),                intent(in)    :: h_k      !< layer thickness [H ~> m or kg m-2]
-  type(ocean_OBC_type),                           pointer       :: OBC
-  integer,                                        intent(in)    :: is, ie, js, je, k
-  integer, dimension(ntr),                        intent(in)    :: advect_schemes
-  real, dimension(SZIB_(G),SZJ_(G),ntr),          intent(out)   :: flux_x_out
-  real, dimension(SZI_(G),SZJB_(G),ntr),          intent(out)   :: flux_y_out
-  logical, dimension(SZJ_(G),SZK_(GV)),           intent(in)    :: domore_j_k
+  type(ocean_grid_type),                          intent(in)    :: G   !< Ocean grid structure
+  type(verticalGrid_type),                        intent(in)    :: GV  !< Ocean vertical grid structure
+  integer,                                        intent(in)    :: ntr !< Number of tracers
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV),ntr), intent(in)    :: tk  !< Tracer concentrations [conc]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)),     intent(inout) :: uhh_in   !< Zonal mass flux [H L2 ~> m3 or kg]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)),     intent(inout) :: vhh_in   !< Meridional mass flux [H L2 ~> m3 or kg]
+  real, dimension(SZI_(G),SZJ_(G)),                intent(in)    :: h_k     !< Layer thickness at
+                                                                            ! current step [H ~> m or kg m-2]
+  type(ocean_OBC_type),                           pointer       :: OBC  !< Open boundary condition structure
+  integer,                                        intent(in)    :: is  !< Start of i-index computational domain
+  integer,                                        intent(in)    :: ie  !< End of i-index computational domain
+  integer,                                        intent(in)    :: js  !< Start of j-index computational domain
+  integer,                                        intent(in)    :: je  !< End of j-index computational domain
+  integer,                                        intent(in)    :: k   !< Vertical layer index
+  integer, dimension(ntr),                        intent(in)    :: advect_schemes !< Per-tracer advection scheme
+                                                                        !! identifier
+  real, dimension(SZIB_(G),SZJ_(G),ntr),          intent(out)   :: flux_x_out !< Zonal tracer
+                                                                              ! flux [conc H L2 ~> conc m3]
+  real, dimension(SZI_(G),SZJB_(G),ntr),          intent(out)   :: flux_y_out !< Meridional tracer
+                                                                              ! flux [conc H L2 ~> conc m3]
+  logical, dimension(SZJ_(G),SZK_(GV)),           intent(in)    :: domore_j_k !< Per-row per-layer
+                                                                              ! activity flag [nondim]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)),     intent(inout) :: uhr   !< accumulated zonal mass flux [H L2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)),     intent(inout) :: vhr   !< accumulated meridional mass flux [H L2]
   logical, dimension(ntr),                        intent(in)    :: apply_lim  !< per-tracer Zhang-Shu enable
@@ -484,9 +486,9 @@ subroutine compute_flux_2d(tk, uhh_in, vhh_in, h_k, OBC, ntr, &
           if (advect_schemes(m) == ADVECT_WENO7) &
             order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
           if (order7 == 1.0) then
-            call weno7_reconstruction(wq, T7, uhh_in(I,j,k), cfl_face, G%dxCu(i,J))
+            call weno7_reconstruction(wq, T7, uhh_in(I,j,k))
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, T7, uhh_in(I,j,k), cfl_face, G%dxCu(i,J))
+            call weno5_reconstruction(wq, T7, uhh_in(I,j,k))
           else
             qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
             call PPM_reconstruction(wq, T3(1), T3(2), T3(3), uhh_in(I,j,k), cfl_face, qext)
@@ -559,9 +561,9 @@ subroutine compute_flux_2d(tk, uhh_in, vhh_in, h_k, OBC, ntr, &
           if (advect_schemes(m) == ADVECT_WENO7) &
             order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
           if (order7 == 1.0) then
-            call weno7_reconstruction(wq, T7, vhh_in(i,J,k), cfl_face, G%dyCv(i,J))
+            call weno7_reconstruction(wq, T7, vhh_in(i,J,k))
           elseif (order5 == 1.0) then
-            call weno5_reconstruction(wq, T7, vhh_in(i,J,k), cfl_face, G%dyCv(i,J))
+            call weno5_reconstruction(wq, T7, vhh_in(i,J,k))
           else
             qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
             call PPM_reconstruction(wq, T3(1), T3(2), T3(3), vhh_in(i,J,k), cfl_face, qext)
@@ -652,28 +654,24 @@ subroutine compute_flux_2d(tk, uhh_in, vhh_in, h_k, OBC, ntr, &
 end subroutine compute_flux_2d
 
 !> WENO5-Z + MP reconstruction at the upwind face of the donor cell.
-pure subroutine weno5_reconstruction(wq, q, u, cfl, ds)
+pure subroutine weno5_reconstruction(wq, q, u)
   real, intent(in)  :: q(7)      !< tracer concentration from cell i-3 to i+3 [conc]
   real, intent(in)  :: u         !< advective velocity [H L2 ~> m3 or kg]
-  real, intent(in)  :: cfl    !< absolute value of the advective upwind-cell CFL number [nondim]
-  real, intent(in)  :: ds        !< grid spacing [L ~> m]
   real, intent(out) :: wq        !< WENO5 reconstructed face value [conc]
 
   if (u >= 0.0) then
-    call weno5_face(wq, q, cfl, ds, u)          ! left state at i+1/2
+    call weno5_face(wq, q, u)          ! left state at i+1/2
   else
-    call weno5_face(wq, q(7:1:-1), cfl, ds, u)  ! right state at i-1/2 via mirrored stencil
+    call weno5_face(wq, q(7:1:-1), u)  ! right state at i-1/2 via mirrored stencil
   endif
 
 end subroutine weno5_reconstruction
 
 !> WENO5-Z + MP reconstruction at the right face of cell q(4), given a 7-point upwind-ordered stencil.
-pure subroutine weno5_face(wf, q, cfl, ds, u)
-  real, intent(in)  :: q(7)     !< stencil ordered upwind to downwind [conc]
-  real, intent(in)  :: cfl   !< absolute value of the advective CFL number [nondim]
-  real, intent(in)  :: ds       !< grid spacing [L ~> m]
+pure subroutine weno5_face(wf, q, u)
+  real, intent(in)  :: q(7)      !< stencil ordered upwind to downwind [conc]
   real, intent(in)  :: u         !< advective velocity [H L2 ~> m3 or kg]
-  real, intent(out) :: wf       !< reconstructed value at the right face of q(4) [conc]
+  real, intent(out) :: wf        !< reconstructed value at the right face of q(4) [conc]
 
   real :: P0, P1, P2                   ! sub-stencil polynomial reconstructions
   real :: b0, b1, b2                   ! smoothness indicators
@@ -683,144 +681,109 @@ pure subroutine weno5_face(wf, q, cfl, ds, u)
   real :: dm4p, dm4m                   ! 4th-order minmod combinations
   real :: qul, qmp, qmd, qlc           ! MP limiter reference values
   real :: qmin, qmax                   ! monotone range
-  real :: q0_min, q0_max, Dqm, Dqp    ! fallback limiter values
-  logical :: flag
   real, parameter :: C1_6 = 1.0/6.0
   real, parameter :: d0 = 1.0/10.0, d1 = 6.0/10.0, d2 = 3.0/10.0
   real, parameter :: alpha = 2.0
-  real :: wpl, wmr, dA, mA, a6, fc, bM
 
   ! WENO5-Z sub-stencil reconstructions
-  P0 = (2.0*q(2) - 7.0*q(3) + 11.0*q(4)) * C1_6
-  b0 = q(2)*(4.0*q(2) - 19.0*q(3) + 11.0*q(4)) + q(3)*(25.0*q(3) - 31.0*q(4)) + 10.0*q(4)*q(4)
+  P0 = ((2.0*q(2) - 7.0*q(3)) + 11.0*q(4))*C1_6
+  b0 = (13.0/12.0)*(q(2) - 2.0*q(3) + q(4))**2 &
+        + ( 1.0/ 4.0)*(q(2) - 4.0*q(3) + 3.0*q(4))**2
 
-  P1 = (-q(3) + 5.0*q(4) + 2.0*q(5)) * C1_6
-  b1 = q(3)*(4.0*q(3) - 13.0*q(4) + 5.0*q(5)) + q(4)*(13.0*q(4) - 13.0*q(5)) + 4.0*q(5)*q(5)
+	P1 = ((-q(3) + 5.0*q(4)) + 2.0*q(5))*C1_6
+  b1 = (13.0/12.0)*(q(3) - 2.0*q(4) + q(5))**2 &
+        + ( 1.0/ 4.0)*(q(3) - q(5))**2
 
-  P2 = (2.0*q(4) + 5.0*q(5) - q(6)) * C1_6
-  b2 = q(4)*(10.0*q(4) - 31.0*q(5) + 11.0*q(6)) + q(5)*(25.0*q(5) - 19.0*q(6)) + 4.0*q(6)*q(6)
-
-  bmin = min(b0, b1, b2)
-  bM = (b0+b1+b2)/3.0
+	P2 = ((2.0*q(4) + 5.0*q(5)) - q(6))*C1_6
+  b2 = (13.0/12.0)*(q(4) - 2.0*q(5) + q(6))**2 &
+        + ( 1.0/ 4.0)*(3.0*q(4) - 4.0*q(5) + q(6))**2
 
   ! WENO-Z nonlinear weights
-  tau = abs(b2 - b0)
+  tau = abs(b0 - 2.0*b1 + b2)
   w0 = d0 * weight_fac(tau, b0)
   w1 = d1 * weight_fac(tau, b1)
   w2 = d2 * weight_fac(tau, b2)
   wnorm = 1.0 / (w0 + w1 + w2)
   wf = (w0*P0 + w1*P1 + w2*P2) * wnorm
 
-  ! MP limiter (Suresh & Huynh 1997, bounds from He et al. 2016)
+  ! MP limiter (Suresh & Huynh 1997)
   qul  = q(4) + alpha * (q(4) - q(3))
   qmp  = q(4) + minmod2(q(5) - q(4), qul - q(4))
 
-  dm2  = q(3) - 2.0*q(2) + q(1)
-  dm1  = q(2) - 2.0*q(3) + q(4)
-  dd0  = q(5) - 2.0*q(4) + q(3)
-  dd1  = q(4) - 2.0*q(5) + q(6)
-  dd2  = q(5) - 2.0*q(6) + q(7)
+  if ((wf - q(4)) * (wf - qmp) > 0) then
 
-  dm4p = minmod6(4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1, dm1, dd2)
-  dm4m = minmod6(4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0, dm2, dd1)
+    dm2  = q(3) - 2.0*q(2) + q(1)
+    dm1  = q(2) - 2.0*q(3) + q(4)
+    dd0  = q(5) - 2.0*q(4) + q(3)
+    dd1  = q(4) - 2.0*q(5) + q(6)
+    dd2  = q(5) - 2.0*q(6) + q(7)
 
-  qmd  = 0.5*(q(5) + q(4)) - 0.5*dm4p
-  qlc  = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
+    dm4p = minmod6(4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1, dm1, dd2)
+    dm4m = minmod6(4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0, dm2, dd1)
 
-  qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
-  qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
-  q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
+    qmd  = 0.5*(q(5) + q(4)) - 0.5*dm4p
+    qlc  = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
 
-  wf = min(max(qmin, qmax), wf) ; wf = max(min(qmin, qmax), wf)
+    qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
+    qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
 
-  ! Near-discontinuity fallback
-  fc = maxval(q(:)**2)
-  flag = (((tau > fc*(ds**2)) .or. (tau > bM) .or. (bmin > fc*ds)))
-
-  if (((qmax-qmin) > (q0_max-q0_min) .and. flag) .or. (abs(minval(q)) <= 1.0e-5) .or. &
-      (wf < 1.0e-5 .and. minval(q(:)) >= 0.0)) then
-
-    wpl = ((-q(3) + 5.0*q(4)) + 2.0*q(5))*C1_6
-    wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
-    wmr = ((-q(5) + 5.0*q(4)) + 2.0*q(3))*C1_6
-    wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
-    dA = wpl - wmr ; mA = 0.5*( wpl + wmr )
-    if ((q(5)-q(4))*(q(4)-q(3)) <= 0.) then
-      wmr = q(4) ; wpl = q(4)
-    elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
-      wmr = (3.*q(4)) - 2.*wpl
-    elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
-      wpl = (3.*q(4)) - 2.*wmr
-    endif
-
-    a6 = 6.*q(4) - 3. * (wpl + wmr) ! Curvature
-    wf = (wpl - 0.5 * cfl * ((wpl - wmr) - a6 * (1. - 2./3. * cfl)))
+    wf = min(max(qmin, qmax), wf) ; wf = max(min(qmin, qmax), wf)
   endif
 
 end subroutine weno5_face
 
-!> WENO7-Z + MP reconstruction at the upwind face of the donor cell.  
-pure subroutine weno7_reconstruction(wq, q, u, cfl, ds)
+!> WENO7-Z + MP reconstruction at the upwind face of the donor cell.
+pure subroutine weno7_reconstruction(wq, q, u)
   real, intent(in)  :: q(7)      !< tracer concentration from cell i-3 to i+3 [conc]
   real, intent(in)  :: u         !< advective velocity [H L2 ~> m3 or kg]
-  real, intent(in)  :: cfl       !< absolute value of the advective upwind-cell CFL number [nondim]
-  real, intent(in)  :: ds        !< grid spacing [L ~> m]
   real, intent(out) :: wq        !< WENO7 reconstructed face value [conc]
 
   if (u >= 0.0) then
-    call weno7_face(wq, q, cfl, ds, u)          ! left state at i+1/2
+    call weno7_face(wq, q, u)          ! left state at i+1/2
   else
-    call weno7_face(wq, q(7:1:-1), cfl, ds, u)  ! right state at i-1/2
+    call weno7_face(wq, q(7:1:-1), u)  ! right state at i-1/2
   endif
 
-  end subroutine weno7_reconstruction
+end subroutine weno7_reconstruction
 
-!> WENO7-Z + MP5 reconstruction at the right face of cell q(4), given a 7-point upwind-ordered stencil.
-pure subroutine weno7_face(wf, q, cfl, ds, u)
+!> WENO7-Z + MP reconstruction at the right face of cell q(4), given a 7-point upwind-ordered stencil.
+pure subroutine weno7_face(wf, q, u)
   real, intent(in)  :: q(7)     !< stencil ordered upwind to downwind [conc]
-  real, intent(in)  :: cfl   !< absolute value of the advective CFL number [nondim]
-  real, intent(in)  :: ds       !< grid spacing [L ~> m]
   real, intent(in)  :: u         !< advective velocity [H L2 ~> m3 or kg]
   real, intent(out) :: wf       !< reconstructed value at the right face of q(4) [conc]
 
   real :: P0, P1, P2, P3               ! sub-stencil polynomial reconstructions
   real :: b0, b1, b2, b3               ! smoothness indicators
   real :: w0, w1, w2, w3               ! nonlinear weights
-  real :: tau, wnorm, bmin             ! WENO-Z indicators
+  real :: tau, wnorm                   ! WENO-Z indicators
   real :: dm2, dm1, dd0, dd1, dd2      ! second differences
   real :: dm4p, dm4m                   ! 4th-order minmod combinations
   real :: qul, qmp, qmd, qlc           ! MP limiter reference values
   real :: qmin, qmax                   ! monotone range
-  real :: q0_min, q0_max, Dqm, Dqp    ! fallback limiter values
-  logical :: flag
   real, parameter :: C1_12 = 1.0/12.0
   real, parameter :: d0 = 1.0/35.0, d1 = 12.0/35.0, d2 = 18.0/35.0, d3 = 4.0/35.0
   real, parameter :: alpha = 2.0
-  real :: wpl, wmr, dA, mA, a6, fc, bM, r, phi
 
   ! WENO7-Z sub-stencil reconstructions
   P0 = (-3.0*q(1) + 13.0*q(2) - 23.0*q(3) + 25.0*q(4)) * C1_12
-  b0 = q(1)*(547.0*q(1) - 3882.0*q(2) + 4642.0*q(3) - 1854.0*q(4)) + &
-      q(2)*(7043.0*q(2) - 17246.0*q(3) + 7042.0*q(4)) + &
-      q(3)*(11003.0*q(3) - 9402.0*q(4)) + 2107.0*q(4)*q(4)
+  b0 = (  1.0/  4.0) * (q(1) - 4.0*q(2) + 3.0*q(3))**2 &
+        + ( 13.0/ 12.0) * (q(1) - 2.0*q(2) + q(3))**2 &
+        + (781.0/720.0) * (q(1) - 3.0*q(2) + 3.0*q(3) - q(4))**2
 
   P1 = (q(2) - 5.0*q(3) + 13.0*q(4) + 3.0*q(5)) * C1_12
-  b1 = q(2)*(267.0*q(2) - 1642.0*q(3) + 1602.0*q(4) - 494.0*q(5)) + &
-      q(3)*(2843.0*q(3) - 5966.0*q(4) + 1922.0*q(5)) + &
-      q(4)*(3443.0*q(4) - 2522.0*q(5)) + 547.0*q(5)*q(5)
+  b1 = (  1.0/  4.0) * (q(2) - q(4))**2 &
+        + ( 13.0/ 12.0) * (q(2) - 2.0*q(3) + q(4))**2 &
+        + (781.0/720.0) * (q(2) - 3.0*q(3) + 3.0*q(4) - q(5))**2
 
   P2 = (-q(3) + 7.0*q(4) + 7.0*q(5) - q(6)) * C1_12
-  b2 = q(3)*(547.0*q(3) - 2522.0*q(4) + 1922.0*q(5) - 494.0*q(6)) + &
-      q(4)*(3443.0*q(4) - 5966.0*q(5) + 1602.0*q(6)) + &
-      q(5)*(2843.0*q(5) - 1642.0*q(6)) + 267.0*q(6)*q(6)
+  b2 = (  1.0/  4.0) * (q(3) - q(5))**2 &
+        + ( 13.0/ 12.0) * (q(3) - 2.0*q(4) + q(5))**2 &
+        + (781.0/720.0) * (q(3) - 3.0*q(4) + 3.0*q(5) - q(6))**2
 
   P3 = (3.0*q(4) + 13.0*q(5) - 5.0*q(6) + q(7)) * C1_12
-  b3 = q(4)*(2107.0*q(4) - 9402.0*q(5) + 7042.0*q(6) - 1854.0*q(7)) + &
-      q(5)*(11003.0*q(5) - 17246.0*q(6) + 4642.0*q(7)) + &
-      q(6)*(7043.0*q(6) - 3882.0*q(7)) + 547.0*q(7)*q(7)
-
-  bmin = min(b0, b1, b2, b3)
-  bM = 0.25*(b0+b1+b2+b3)
+  b3 = (  1.0/  4.0) * (3.0*q(4) - 4.0*q(5) + q(6))**2 &
+        + ( 13.0/ 12.0) * (q(4) - 2.0*q(5) + q(6))**2 &
+        + (781.0/720.0) * (q(4) - 3.0*q(5) + 3.0*q(6) - q(7))**2
 
   ! WENO7-Z nonlinear weights
   tau = abs((b0 - b3) + 3*(b1 - b2))
@@ -831,50 +794,28 @@ pure subroutine weno7_face(wf, q, cfl, ds, u)
   wnorm = 1.0 / (w0 + w1 + w2 + w3)
   wf = (w0*P0 + w1*P1 + w2*P2 + w3*P3) * wnorm
 
-  ! MP limiter (Suresh & Huynh 1997, bounds from He et al. 2016)
+  ! MP limiter (Suresh & Huynh 1997)
   qul  = q(4) + alpha * (q(4) - q(3))
   qmp  = q(4) + minmod2(q(5) - q(4), qul - q(4))
 
-  dm2  = q(3) - 2.0*q(2) + q(1)
-  dm1  = q(2) - 2.0*q(3) + q(4)
-  dd0  = q(5) - 2.0*q(4) + q(3)
-  dd1  = q(4) - 2.0*q(5) + q(6)
-  dd2  = q(5) - 2.0*q(6) + q(7)
+  if ((wf - q(4)) * (wf - qmp) > 0) then
 
-  dm4p = minmod6(4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1, dm1, dd2)
-  dm4m = minmod6(4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0, dm2, dd1)
+    dm2  = q(3) - 2.0*q(2) + q(1)
+    dm1  = q(2) - 2.0*q(3) + q(4)
+    dd0  = q(5) - 2.0*q(4) + q(3)
+    dd1  = q(4) - 2.0*q(5) + q(6)
+    dd2  = q(5) - 2.0*q(6) + q(7)
 
-  qmd  = 0.5*(q(5) + q(4)) - 0.5*dm4p
-  qlc  = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
+    dm4p = minmod6(4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1, dm1, dd2)
+    dm4m = minmod6(4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0, dm2, dd1)
 
-  qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
-  qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
-  q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
+    qmd  = 0.5*(q(5) + q(4)) - 0.5*dm4p
+    qlc  = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
 
-  wf = min(max(qmin, qmax), wf) ; wf = max(min(qmin, qmax), wf)
+    qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
+    qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
 
-  ! Near-discontinuity fallback
-  fc = maxval(q(:)**2)
-  flag = (((tau > fc*(ds**2)) .or. (tau > bM) .or. (bmin > fc*ds)))
-
-  if (((qmax-qmin) > (q0_max-q0_min) .and. flag) .or. (abs(minval(q)) <= 1.0e-5) .or. &
-      (wf < 1.0e-5 .and. minval(q(:)) >= 0.0)) then
-
-    wpl = ((-q(3) + 5.0*q(4)) + 2.0*q(5)) / 6.0
-    wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
-    wmr = ((-q(5) + 5.0*q(4)) + 2.0*q(3)) / 6.0
-    wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
-    dA = wpl - wmr ; mA = 0.5*( wpl + wmr )
-    if ((q(5)-q(4))*(q(4)-q(3)) <= 0.) then
-      wmr = q(4) ; wpl = q(4)
-    elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
-      wmr = (3.*q(4)) - 2.*wpl
-    elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
-      wpl = (3.*q(4)) - 2.*wmr
-    endif
-
-    a6 = 6.*q(4) - 3. * (wpl + wmr) ! Curvature
-    wf = (wpl - 0.5 * cfl * ((wpl - wmr) - a6 * (1. - 2./3. * cfl)))
+    wf = min(max(qmin, qmax), wf) ; wf = max(min(qmin, qmax), wf)
   endif
 
 end subroutine weno7_face
@@ -897,27 +838,30 @@ pure subroutine ppmw5_reconstruction(wq, q, u, cfl)
 	real :: wnorm                                 ! Temporary variable
 	real :: dm1, dd0, dd1, dm4p, dm4m             ! Temporary variables
 	real :: qul, qmd, qlc, qmin, qmax, alpha      ! Temporary variables
-	real :: qmp, Tm, Tp, wpm, sg, q0_min, q0_max  ! Temporary variables
-	real :: dm2, dd2, wpl, wmr, dA, mA, a6, disct
+	real :: qmp, Tm, Tp, wpm, q0_min, q0_max  ! Temporary variables
+	real :: dm2, dd2, wpl, wmr, dA, mA, a6
 	logical :: lim, disc
 
 	lim = .false.
 
 	! Left state at i+1/2
 	P0 = ((2.0*q(2) - 7.0*q(3)) + 11.0*q(4))*C1_6
-	b0 = q(2)*((4.0*q(2) - 19.0*q(3)) + 11.0*q(4)) + (q(3)*(25.0*q(3) - 31.0*q(4)) + 10.0*(q(4)*q(4)))
+  b0 = (13.0/12.0)*(q(2) - 2.0*q(3) + q(4))**2 &
+        + ( 1.0/ 4.0)*(q(2) - 4.0*q(3) + 3.0*q(4))**2
 
 	P1 = ((-q(3) + 5.0*q(4)) + 2.0*q(5))*C1_6
-	b1 = q(3)*((4.0*q(3) - 13.0*q(4)) + 5.0*q(5)) + (q(4)*(13.0*q(4) - 13.0*q(5)) + 4.0*(q(5)*q(5)))
+  b1 = (13.0/12.0)*(q(3) - 2.0*q(4) + q(5))**2 &
+        + ( 1.0/ 4.0)*(q(3) - q(5))**2
 
 	P2 = ((2.0*q(4) + 5.0*q(5)) - q(6))*C1_6
-	b2 = q(4)*((10.0*q(4) - 31.0*q(5)) + 11.0*q(6)) + (q(5)*(25.0*q(5) - 19.0*q(6)) + 4.0*(q(6)*q(6)))
+  b2 = (13.0/12.0)*(q(4) - 2.0*q(5) + q(6))**2 &
+        + ( 1.0/ 4.0)*(3.0*q(4) - 4.0*q(5) + q(6))**2
 
 	disc = (abs(b2-b0) >= min(b0, b1, b2) .or. &
-          (abs(maxval(cfl) - minval(cfl)) > 0.0))
+          (abs(maxval(cfl) - minval(cfl)) > 1.0e-6))
 
 	! Nonlinear weights
-	tau = abs(b2 - b0)
+  tau = abs(b0 - 2.0*b1 + b2)
 	w0 = d0*weight_fac(tau, b0)
 	w1 = d1*weight_fac(tau, b1)
 	w2 = d2*weight_fac(tau, b2)
@@ -925,7 +869,7 @@ pure subroutine ppmw5_reconstruction(wq, q, u, cfl)
 	wnorm = 1.0 / (w0 + w1 + w2)
 	wpl = (w0*P0 + w1*P1 + w2*P2) * wnorm
 
-	! MP limiter (He et al. 2016)
+	! MP limiter (Suresh & Huynh 1997, He et al. 2016)
 	alpha = 2.0
 	qul = q(4) + alpha*(q(4) - q(3))
 	qmp = q(4) + minmod2((q(5)-q(4)), (qul-q(4)))
@@ -946,29 +890,29 @@ pure subroutine ppmw5_reconstruction(wq, q, u, cfl)
 	q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
   wpl = min(max(qmin, qmax), wpl) ; wpl = max(min(qmin, qmax), wpl)
 
-	if ((wpl < 1.0e-5 .and. ((minval(q(:)) >= 0.0) )) .or. &
-      (((qmax-qmin) > (q0_max-q0_min)) .and. disc )) then
+  ! Near-discontinuity fallback
+  if ((((qmax-qmin) > (q0_max-q0_min)) .and. disc )) then
 		lim = .true.
 	endif
 
 	! Right state at i-1/2
 	P0 = ((2.0*q(6) - 7.0*q(5)) + 11.0*q(4))*C1_6
-	b0 = q(6)*((4.0*q(6) - 19.0*q(5)) + 11.0*q(4)) + &
-			(q(5)*(25.0*q(5) - 31.0*q(4)) + 10.0*(q(4)*q(4)))
+  b0 = (13.0/12.0)*(q(6) - 2.0*q(5) + q(4))**2 &
+        + ( 1.0/ 4.0)*(q(6) - 4.0*q(5) + 3.0*q(4))**2
 
 	P1 = ((-q(5) + 5.0*q(4)) + 2.0*q(3))*C1_6
-	b1 = q(5)*((4.0*q(5) - 13.0*q(4)) + 5.0*q(3)) + &
-			(q(4)*(13.0*q(4) - 13.0*q(3)) + 4.0*(q(3)*q(3)))
+  b1 = (13.0/12.0)*(q(5) - 2.0*q(4) + q(3))**2 &
+        + ( 1.0/ 4.0)*(q(5) - q(3))**2
 
 	P2 = ((2.0*q(4) + 5.0*q(3)) - q(2))*C1_6
-	b2 = q(4)*((10.0*q(4) - 31.0*q(3)) + 11.0*q(2)) + &
-			(q(3)*(25.0*q(3) - 19.0*q(2)) + 4.0*(q(2)*q(2)))
+  b2 = (13.0/12.0)*(q(4) - 2.0*q(3) + q(2))**2 &
+        + ( 1.0/ 4.0)*(3.0*q(4) - 4.0*q(3) + q(2))**2
 
 	disc = (abs(b2-b0) >= min(b0, b1, b2) &
-				.or. (abs(maxval(cfl) - minval(cfl)) > 0.0))
+				.or. (abs(maxval(cfl) - minval(cfl)) > 1.0e-6))
 
 	! Nonlinear weights
-	tau = abs(b2 - b0)
+  tau = abs(b0 - 2.0*b1 + b2)
 	w0 = d0*weight_fac(tau, b0)
 	w1 = d1*weight_fac(tau, b1)
 	w2 = d2*weight_fac(tau, b2)
@@ -976,7 +920,7 @@ pure subroutine ppmw5_reconstruction(wq, q, u, cfl)
 	wnorm = 1.0 / (w0 + w1 + w2)
 	wmr = (w0*P0 + w1*P1 + w2*P2) * wnorm
 
-	! MP limiter based on He et al. 2016
+	! MP limiter (Suresh & Huynh 1997, He et al. 2016)
 	qul = q(4) + alpha*(q(4) - q(5))
 	qmp = q(4) + minmod2((q(3)-q(4)), (qul-q(4)))
 
@@ -990,31 +934,35 @@ pure subroutine ppmw5_reconstruction(wq, q, u, cfl)
 	dm4m = minmod6( (4.0*dm1 - dd0), (4.0*dd0 - dm1), dm1, dd0, dm2, dd1 )
 
 	qmd = 0.5*((q(3) + q(4)) - dm4p)
-  qlc = 0.5*(3.0*q(3) - q(4)) + (4.0/3.0)*dm4m
+  qlc = 0.5*(3.0*q(4) - q(5)) + (4.0/3.0)*dm4m
 
 	qmin = max(min(q(4), q(3), qmd), min(q(4), qul, qlc))
 	qmax = min(max(q(4), q(3), qmd), max(q(4), qul, qlc))
 	q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
-  
-	if ((wmr < 1.0e-5 .and. ((minval(q(:)) >= 0.0) )) .or. &
-      (((qmax-qmin) > (q0_max-q0_min)) .and. disc )) then
+  wmr = min(max(qmin, qmax), wmr) ; wmr = max(min(qmin, qmax), wmr)
+
+  ! Near-discontinuity fallback
+  if ((((qmax-qmin) > (q0_max-q0_min)) .and. disc )) then
 		lim = .true.
 	endif
 
-	if (lim .or. (abs(minval(q)) <= 1.0e-5)) then
-		wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
-		wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
+  if (lim .or. (abs(q(4)) <= 1.0e-5)) then
+		wpl = ((-q(3) + 5.0*q(4)) + 2.0*q(5))*C1_6
+    wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
+    wmr = ((-q(5) + 5.0*q(4)) + 2.0*q(3))*C1_6
+    wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
 		dA = wpl - wmr ; mA = 0.5*( wpl + wmr )
-		if ((q(5)-q(4))*(q(4)-q(3)) <= 0.) then
-			wmr = q(4) ; wpl = q(4)
-		elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
-			wmr = (3.*q(4)) - 2.*wpl
-		elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
-			wpl = (3.*q(4)) - 2.*wmr
-		endif
+    if ((q(5)-q(4))*(q(4)-q(3)) < 0.) then
+      wmr = q(4) ; wpl = q(4)
+    elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
+      wmr = (3.*q(4)) - 2.*wpl
+    elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
+      wpl = (3.*q(4)) - 2.*wmr
+    endif
 	endif
 
 	a6 = 6.*q(4) - 3. * (wpl + wmr) ! Curvature
+  a6 = max(-3.0*abs(wpl - wmr), min(3.0*abs(wpl - wmr), a6))
 	if (u >= 0.0) then
     wq = (wpl - 0.5 * cfl(2) * ((wpl - wmr) - a6 * (1. - 2./3. * cfl(2))))
 	else
@@ -1022,181 +970,6 @@ pure subroutine ppmw5_reconstruction(wq, q, u, cfl)
 	endif
 
 end subroutine ppmw5_reconstruction
-
-!> 7th-order weno z-type reconstruction flux
-pure subroutine ppmw7_reconstruction(wq, q, u, cfl)
-  real, intent(in) :: q(7)  !< tracer concentration from i-3 to i+3 [conc]
-  real, intent(in) :: u     !< advective flux [H L2 ~> m3 or kg]
-  real, intent(in) :: cfl(3)!< absolute value of the advective upwind-cell CFL number [nondim]
-  real, intent(out) :: wq   !< weno flux  [conc]
-
-  real :: P0, P1, P2, P3     ! reconstructed polynomials
-  real :: b0, b1, b2, b3     ! smoothness indicator
-  real :: w0, w1, w2, w3     ! nonlinear weights
-  real :: tau                ! Difference of smoothness indicators
-  real, parameter :: C1_12 = 1.0/12.0  ! [nondim]
-  real, parameter :: d0 = 1.0/35.0     ! The ratio of 1/35 [nondim]
-  real, parameter :: d1 = 12.0/35.0    ! The ratio of 12/35 [nondim]
-  real, parameter :: d2 = 18.0/35.0    ! The ratio of 18/35 [nondim]
-  real, parameter :: d3 = 4.0/35.0     ! The ratio of 4/35 [nondim]
-  real :: wnorm                        ! Temporary variable
-  real :: dm1, dd0, dd1, dm4p, dm4m         ! Temporary variables
-  real :: qul, qmd, qlc, qmin, qmax, alpha  ! Temporary variables
-  real :: sg, Tm, Tp, q0_min, q0_max, qmp   ! Temporary variables
-  real :: dm2, dd2, wpl, wmr, dA, mA, a6
-  logical :: lim, disc
-
-  lim = .false.
-
-  ! Left state at i+1/2
-  P0 = (((-3.0*q(1) + 13.0*q(2)) - 23.0*q(3)) + 25.0*q(4))*C1_12
-  b0 = q(1)*((547.0*q(1) - 3882.0*q(2)) + (4642.0*q(3) - 1854.0*q(4))) + &
-      q(2)*((7043.0*q(2) - 17246.0*q(3)) + 7042.0*q(4)) + &
-      q(3)*(11003.0*q(3) - 9402.0*q(4)) + 2107.0*(q(4)*q(4))
-
-  P1 = (((q(2) - 5.0*q(3)) + 13.0*q(4)) + 3.0*q(5))*C1_12
-  b1 = q(2)*((267.0*q(2) - 1642.0*q(3)) + (1602.0*q(4) - 494.0*q(5))) + &
-      q(3)*((2843.0*q(3) - 5966.0*q(4)) + 1922.0*q(5)) + &
-      q(4)*(3443.0*q(4) - 2522.0*q(5)) + 547.0*(q(5)*q(5))
-
-  P2 = (((-q(3) + 7.0*q(4)) + 7.0*q(5)) - q(6))*C1_12
-  b2 = q(3)*((547.0*q(3) - 2522.0*q(4)) + (1922.0*q(5) - 494.0*q(6))) + &
-      q(4)*((3443.0*q(4) - 5966.0*q(5)) + 1602.0*q(6)) + &
-      q(5)*(2843.0*q(5) - 1642.0*q(6)) + 267.0*(q(6)*q(6))
-
-  P3 = (((3.0*q(4) + 13.0*q(5)) - 5.0*q(6)) + q(7))*C1_12
-  b3 = q(4)*((2107.0*q(4) - 9402.0*q(5)) + (7042.0*q(6) - 1854.0*q(7))) + &
-      q(5)*((11003.0*q(5) - 17246.0*q(6)) + 4642.0*q(7)) + &
-      q(6)*(7043.0*q(6) - 3882.0*q(7)) + 547.0*(q(7)*q(7))
-
-  ! Nonlinear weights
-  tau = abs(b0 - b3)
-  w0 = d0*weight_fac(tau, b0)
-  w1 = d1*weight_fac(tau, b1)
-  w2 = d2*weight_fac(tau, b2)
-  w3 = d3*weight_fac(tau, b3)
-
-  wnorm = 1.0 / (w0 + w1 + w2 + w3)
-  w0 = w0 * wnorm
-  w1 = w1 * wnorm
-  w2 = w2 * wnorm
-  w3 = w3 * wnorm
-
-  disc = (((abs(w0-d0) + abs(w1-d1) + abs(w2-d2) + abs(w3-d3)) > 1.1) &
-            .or. (abs(maxval(cfl) - minval(cfl)) > 0.0))
-
-  wpl = (w0*P0 + w1*P1 + w2*P2 + w3*P3) !* wnorm
-
-  ! MP limiter based on He et al. 2016
-  alpha = 2.0
-  qul = q(4) + alpha*(q(4) - q(3))
-  qmp = q(4) + minmod2((q(5)-q(4)), (qul-q(4)))
-
-  dm2 = q(1) - 2.0*q(2) + q(3)
-  dm1 = q(2) - 2.0*q(3) + q(4)
-  dd0 = q(5) - 2.0*q(4) + q(3)
-  dd1 = q(4) - 2.0*q(5) + q(6)
-  dd2 = q(5) - 2.0*q(6) + q(7)
-
-  dm4p = minmod6( (4.0*dd0 - dd1), (4.0*dd1 - dd0), dd0, dd1, dm1, dd2 )
-  dm4m = minmod6( (4.0*dm1 - dd0), (4.0*dd0 - dm1), dm1, dd0, dm2, dd1 )
-
-  qmd = 0.5*((q(5) + q(4)) - dm4p)
-  qlc = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
-
-  qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
-  qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
-  q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
-
-  if ((wpl < 1.0e-5 .and. ((minval(q(:)) >= 0.0) )) .or. &
-    (((qmax-qmin) > (q0_max-q0_min)) .and. disc )) then
-    lim = .true.
-  endif
-
-  ! Right state at i-1/2
-  P0 = (((-3.0*q(7) + 13.0*q(6)) - 23.0*q(5)) + 25.0*q(4))*C1_12
-  b0 = q(7)*((547.0*q(7) - 3882.0*q(6)) + (4642.0*q(5) - 1854.0*q(4))) + &
-      q(6)*((7043.0*q(6) - 17246.0*q(5)) + 7042.0*q(4)) + &
-      q(5)*(11003.0*q(5) - 9402.0*q(4)) + 2107.0*(q(4)*q(4))
-
-  P1 = (((q(6) - 5.0*q(5)) + 13.0*q(4)) + 3.0*q(3))*C1_12
-  b1 = q(6)*((267.0*q(6) - 1642.0*q(5)) + (1602.0*q(4) - 494.0*q(3))) + &
-      q(5)*((2843.0*q(5) - 5966.0*q(4)) + 1922.0*q(3)) + &
-      q(4)*(3443.0*q(4) - 2522.0*q(3)) + 547.0*(q(3)*q(3))
-
-  P2 = (((-q(5) + 7.0*q(4)) + 7.0*q(3)) - q(2))*C1_12
-  b2 = q(5)*((547.0*q(5) - 2522.0*q(4)) + (1922.0*q(3) - 494.0*q(2))) + &
-      q(4)*((3443.0*q(4) - 5966.0*q(3)) + 1602.0*q(2)) + &
-      q(3)*(2843.0*q(3) - 1642.0*q(2)) + 267.0*(q(2)*q(2))
-
-  P3 = (((3.0*q(4) + 13.0*q(3)) - 5.0*q(2)) + q(1))*C1_12
-  b3 = q(4)*((2107.0*q(4) - 9402.0*q(3)) + (7042.0*q(2) - 1854.0*q(1))) + &
-      q(3)*((11003.0*q(3) - 17246.0*q(2)) + 4642.0*q(1)) + &
-      q(2)*(7043.0*q(2) - 3882.0*q(1)) + 547.0*(q(1)*q(1))
-
-  ! Nonlinear weights
-  tau = abs(b0 - b3)
-  w0 = d0*weight_fac(tau, b0)
-  w1 = d1*weight_fac(tau, b1)
-  w2 = d2*weight_fac(tau, b2)
-  w3 = d3*weight_fac(tau, b3)
-
-  wnorm = 1.0 / (w0 + w1 + w2 + w3)
-  w0 = w0 * wnorm
-  w1 = w1 * wnorm
-  w2 = w2 * wnorm
-  w3 = w3 * wnorm
-
-  disc = (((abs(w0-d0) + abs(w1-d1) + abs(w2-d2) + abs(w3-d3)) > 1.1) &
-            .or. (abs(maxval(cfl) - minval(cfl)) > 0.0))
-  wmr = (w0*P0 + w1*P1 + w2*P2 + w3*P3) !* wnorm
-
-  ! MP limiter based on He et al. 2016
-  qul = q(4) + alpha*(q(4) - q(5))
-  qmp = q(4) + minmod2((q(3)-q(4)), (qul-q(4)))
-
-  dm2 = q(7) - 2.0*q(6) + q(5)
-  dm1 = q(6) - 2.0*q(5) + q(4)
-  dd0 = q(3) - 2.0*q(4) + q(5)
-  dd1 = q(4) - 2.0*q(3) + q(2)
-  dd2 = q(3) - 2.0*q(2) + q(1)
-
-  dm4p = minmod6( (4.0*dd0 - dd1), (4.0*dd1 - dd0), dd0, dd1, dm1, dd2 )
-  dm4m = minmod6( (4.0*dm1 - dd0), (4.0*dd0 - dm1), dm1, dd0, dm2, dd1 )
-  qmd = 0.5*((q(3) + q(4)) - dm4p)
-  qlc = 0.5*(3.0*q(3) - q(4)) + (4.0/3.0)*dm4m
-
-  qmin = max(min(q(4), q(3), qmd), min(q(4), qul, qlc))
-  qmax = min(max(q(4), q(3), qmd), max(q(4), qul, qlc))
-  q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
-
-  if ((wmr < 1.0e-5 .and. ((minval(q(:)) >= 0.0) )) &
-    .or. ((wmr-qmin)*(wmr-qmax) > 0.0) .or. &
-      (((qmax-qmin) > (q0_max-q0_min)) .and. disc )) then
-    lim = .true.
-  endif
-
-  if (lim .or. (abs(minval(q)) <= 1.0e-5)) then
-    wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
-    wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
-    dA = wpl - wmr ; mA = 0.5*( wpl + wmr )
-    if ((q(5)-q(4))*(q(4)-q(3)) <= 0.) then
-      wmr = q(4) ; wpl = q(4)
-    elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
-      wmr = (3.*q(4)) - 2.*wpl
-    elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
-      wpl = (3.*q(4)) - 2.*wmr
-    endif
-  endif
-
-  a6 = 6.*q(4) - 3. * (wpl + wmr) ! Curvature
-  if (u >= 0.0) then
-    wq = (wpl - 0.5 * cfl(2) * ((wpl - wmr) - a6 * (1. - 2./3. * cfl(2))))
-  else
-    wq = (wmr + 0.5 * cfl(2) * ((wpl - wmr) + a6 * (1. - 2./3. * cfl(2))))
-  endif
-
-end subroutine ppmw7_reconstruction
 
 !> PPM reconstruction at the upwind face of the donor cell.
 pure subroutine PPM_reconstruction(wq_ppm, qm, q0, qp, u, cfl, qext)
@@ -1252,13 +1025,13 @@ pure elemental function minmod6(a, b, c, d, e, f) result(r)
   endif
 end function minmod6
 
-!> Compute the WENO-Z weight factor (1 + (tau/b)^2), protected against b=0.
+!> Compute the WENO-Z weight factor (1 + (tau/b)^2).
 pure function weight_fac(tau, b) result(factor)
   real, intent(in) :: tau  !< Difference of the smoothness indicator [A ~> a]
   real, intent(in) :: b    !< The smoothness indicator [A ~> a]
   real :: factor
 
-  factor = (1.0 + (tau/(b + 1.0e-40))**2)
+  factor = (1.0 + (tau/(b + 1.0e-20)))
 
 end function weight_fac
 

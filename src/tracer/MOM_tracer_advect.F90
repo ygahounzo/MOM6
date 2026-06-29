@@ -22,11 +22,10 @@ use MOM_unit_scaling,    only : unit_scale_type
 use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_tracer_advect_schemes, only : ADVECT_PLM, ADVECT_PPMH3, ADVECT_PPM
 use MOM_tracer_advect_schemes, only : ADVECT_WENO5, ADVECT_WENO7
-use MOM_tracer_advect_schemes, only : ADVECT_PPMWENO5, ADVECT_PPMWENO7
+use MOM_tracer_advect_schemes, only : ADVECT_PPMWENO5
 use MOM_tracer_advect_schemes, only : set_tracer_advect_scheme, TracerAdvectionSchemeDoc
-use MOM_tracer_advect_weno, only : weno5_reconstruction, weno7_reconstruction, PPM_reconstruction
-use MOM_tracer_advect_weno, only : rk3_substep
-use MOM_tracer_advect_weno, only : ppmw5_reconstruction, ppmw7_reconstruction
+use MOM_tracer_advect_weno, only : PPM_reconstruction, rk3_substep
+use MOM_tracer_advect_weno, only : ppmw5_reconstruction
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -218,8 +217,6 @@ subroutine advect_tracer_ppm(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_f
       endif
     elseif (local_advect_scheme(m) == ADVECT_PPMWENO5) then
       stencil_local = 3
-    elseif (local_advect_scheme(m) == ADVECT_PPMWENO7) then
-      stencil_local = 4
     endif
     stencil = max(stencil, stencil_local)
   enddo
@@ -575,8 +572,6 @@ subroutine advect_tracer_RK3(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_f
   !$OMP end parallel
 
   ! Pre-compute the exact number of subcycles from the global max outflow CFL.
-  ! uhr/vhr are loaded (is-1:ie, js-1:je) and hprev covers is:ie, js:je, so
-  ! all outgoing faces of interior cells are available without a prior halo exchange.
   CFL_max_global = 0.0
   do k=1,nz ; do j=js,je ; do i=is,ie
     CFL_face = 0.0
@@ -602,14 +597,13 @@ subroutine advect_tracer_RK3(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_f
     ! Exchange uhr, vhr, hprev, and tracers so halos reflect the current residuals.
     call do_group_pass(pass_group, G%Domain, clock=id_clock_pass)
 
-    ! Re-initialize domore_j from current residuals uhr/vhr (done after the halo
-    ! exchange so that adjacent-face checks, e.g. vhr(i,j,k) for the northern face
-    ! of row j, are up to date).  Checking both zonal faces of a row AND the
+    ! Re-initialize domore_j from current residuals uhr/vhr.
+    ! Checking both zonal faces of a row AND the
     ! meridional faces bordering it captures rows that receive inflow from a
     ! CFL-limited neighbour without themselves exceeding CFL.
     !$OMP parallel do default(shared)
     do k=1,nz
-        
+
       do j=js,je
         domore_j(j,k) = .false.
         do I=is-1,ie
@@ -705,7 +699,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer :: i, j, m, n, i_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
-  real :: order3, order5, order7
+  real :: order3, order5
   real :: T3(3), T7(7), wq, qext
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
@@ -871,8 +865,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
-      elseif ((advect_schemes(m) == ADVECT_PPMWENO5) .or. (advect_schemes(m) == ADVECT_PPMWENO7)) then
-        order7 = 0.0
+      elseif (advect_schemes(m) == ADVECT_PPMWENO5) then
 
         do I=is-1,ie
 
@@ -888,13 +881,7 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           order3 = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*G%mask2dCu(I_up+1,j)
           order5 = order3*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
 
-          if ( advect_schemes(m) == ADVECT_PPMWENO7) then
-            order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
-          endif
-
-          if (order7 == 1.0) then
-            call ppmw7_reconstruction(wq, T7, uhh(I), CFL(I-1:I+1))
-          elseif (order5 == 1.0) then
+          if (order5 == 1.0) then
             call ppmw5_reconstruction(wq, T7, uhh(I), CFL(I-1:I+1))
           else
             qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
@@ -1119,7 +1106,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer :: i, j, j2, m, n, j_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
-  real :: order3, order5, order7
+  real :: order3, order5
   real :: T3(3), T7(7), wq, qext
   real, dimension(SZIB_(G), SZJB_(G)) :: CFL_iJ
   logical, dimension(SZJB_(G)) :: domore_tmp
@@ -1134,8 +1121,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
     if ((advect_schemes(m) == ADVECT_PLM) .or. (advect_schemes(m) == ADVECT_PPM)) &
             usePLMslope = .true.
     if (advect_schemes(m) == ADVECT_PPM) stencil = 2
-    if ((advect_schemes(m) == ADVECT_PPMWENO5) .or. (advect_schemes(m) == ADVECT_PPMWENO7)) &
-            do_weno = .true.
+    if (advect_schemes(m) == ADVECT_PPMWENO5) do_weno = .true.
     if ((advect_schemes(m) == ADVECT_PLM) .or. (advect_schemes(m) == ADVECT_PPM) &
         .or. (advect_schemes(m) == ADVECT_PPMH3)) do_ppm = .true.
   enddo
@@ -1349,8 +1335,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
-      elseif ((advect_schemes(m) == ADVECT_PPMWENO5) .or. (advect_schemes(m) == ADVECT_PPMWENO7)) then
-        order7 = 0.0
+      elseif (advect_schemes(m) == ADVECT_PPMWENO5) then
 
         do i=is,ie
 
@@ -1366,13 +1351,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           order3 = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up+1)
           order5 = order3*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
 
-          if ((advect_schemes(m) == ADVECT_PPMWENO7)) then
-            order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
-          endif
-
-          if (order7 == 1.0) then
-            call ppmw7_reconstruction(wq, T7, vhh(i,J), CFL_iJ(i,J-1:J+1))
-          elseif (order5 == 1.0) then
+          if (order5 == 1.0) then
             call ppmw5_reconstruction(wq, T7, vhh(i,J), CFL_iJ(i,J-1:J+1))
           else
             qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)

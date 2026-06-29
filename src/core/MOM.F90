@@ -1337,6 +1337,16 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
     endif
     if (showCallTree) call callTree_waypoint("finished step_MOM_dyn_unsplit (step_MOM)")
 
+  else ! ----------------------------------------- DO_DYNAMICS = False
+    ! Accumulate thickness transports from the prescribed velocity so that
+    ! tracers are advected even when dynamics is skipped.
+    do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      CS%uhtr(I,j,k) = CS%uhtr(I,j,k) + u(I,j,k) * 0.5*(h(I,j,k)+h(I+1,j,k)) * G%dyCu(I,j) * dt
+    enddo ; enddo ; enddo
+    do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      CS%vhtr(i,J,k) = CS%vhtr(i,J,k) + v(i,J,k) * 0.5*(h(i,J,k)+h(i,J+1,k)) * G%dxCv(i,J) * dt
+    enddo ; enddo ; enddo
+
   endif ! -------------------------------------------------- end SPLIT
 
   if (CS%use_particles .and. CS%do_dynamics .and. (.not. CS%use_uh_particles)) then

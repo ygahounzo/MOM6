@@ -2887,7 +2887,7 @@ subroutine radiation_open_bdry_conds(OBC, u_new, u_old, v_new, v_old, G, GV, US,
       if (segment%is_E_or_W) then
         I = segment%HI%IsdB
         do m=1,segment%tr_Reg%ntseg
-          if (allocated(OBC%tres_x)) then
+          if (allocated(OBC%tres_x) .and. OBC%tracer_x_reservoirs_used(m)) then
             do k=1,GV%ke
               do j=segment%HI%jsd,segment%HI%jed
                 segment%tr_Reg%Tr(m)%tres(I,j,k) = segment%tr_Reg%Tr(m)%scale * OBC%tres_x(I,j,k,m)
@@ -2898,7 +2898,7 @@ subroutine radiation_open_bdry_conds(OBC, u_new, u_old, v_new, v_old, G, GV, US,
       else
         J = segment%HI%JsdB
         do m=1,segment%tr_Reg%ntseg
-          if (allocated(OBC%tres_y)) then
+          if (allocated(OBC%tres_y) .and. OBC%tracer_y_reservoirs_used(m)) then
             do k=1,GV%ke
               do i=segment%HI%isd,segment%HI%ied
                 segment%tr_Reg%Tr(m)%tres(i,J,k) = segment%tr_Reg%Tr(m)%scale * OBC%tres_y(i,J,k,m)
