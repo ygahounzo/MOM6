@@ -1035,10 +1035,11 @@ pure function weight_fac(tau, b) result(factor)
 
 end function weight_fac
 
-!> \namespace mom_tracer_advect
+!> \namespace mom_tracer_advect_weno
 !!
 !!  WENO5-Z and WENO7-Z tracer reconstruction schemes (Balsara et al. 2016, Borges et al. 2008)
-!!  with MP5 monotonicity-preserving limiting (Suresh & Huynh 1997, He et al. 2016).
+!!  with MP monotonicity-preserving limiting (Suresh & Huynh 1997, He et al. 2016)
+!!  and using RK3 time stepping.
 !!  A near-discontinuity fallback uses a van Leer harmonic-mean reconstruction when the
 !!  smoothness indicators detect strong variation (flag condition).
 !!
@@ -1053,5 +1054,9 @@ end function weight_fac
 !!               | I{i-2}| I{i-1}|  I{i} | I{i+1}| I{i+2}|
 !!                               |+     -|
 !!                             i-1/2    i+1/2
+!!
+!! The advection scheme of some tracers can be set to be different
+!! to that used by active tracers.  However, either all or none of
+!! the tracers must use RK3 and WENO5-Z or WENO7-Z.
 
 end module MOM_tracer_advect_weno

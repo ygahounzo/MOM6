@@ -21,10 +21,10 @@ integer, parameter :: ADVECT_PPMWENO5  = 5 !< PPM with WENO5 edges
 character(len=*), parameter :: TracerAdvectionSchemeDoc = &
   "  PLM    - Piecewise Linear Method\n"//&
   "  PPM    - Piecewise Parabolic Method (Colella-Woodward)\n"//&
-  "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order)\n"// &
+  "  PPM:H3 - Piecewise Parabolic Method (Huyhn 3rd order edges)\n"// &
+  "  PPM:W5  - Piecewise Parabolic Method (WENO 5th order edges)\n"//&
   "  WENO5  - Weighted Essentially Non-Oscillatory, 5th order\n"//&
-  "  WENO7  - Weighted Essentially Non-Oscillatory, 7th order\n"//&
-  "  PPM:W5  - Piecewise Parabolic Method (WENO 5th order for the edges)"
+  "  WENO7  - Weighted Essentially Non-Oscillatory, 7th order\n"
 
 contains
 
@@ -40,14 +40,14 @@ subroutine set_tracer_advect_scheme(scheme_value, advect_scheme_name)
       scheme_value = ADVECT_PLM
     case ("PPM:H3")
       scheme_value = ADVECT_PPMH3
+    case ("PPM:W5")
+      scheme_value = ADVECT_PPMWENO5
     case ("PPM")
       scheme_value = ADVECT_PPM
     case ("WENO5")
       scheme_value = ADVECT_WENO5
     case ("WENO7")
       scheme_value = ADVECT_WENO7
-    case ("PPM:W5")
-      scheme_value = ADVECT_PPMWENO5
     case default
       call MOM_error(FATAL, "set_tracer_advect_scheme: "//&
         "Unknown TRACER_ADVECTION_SCHEME = "//trim(advect_scheme_name))

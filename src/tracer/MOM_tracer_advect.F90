@@ -1589,6 +1589,9 @@ end subroutine tracer_advect_end
 !!  This scheme conserves the total amount of tracer while avoiding
 !!  spurious maxima and minima of the tracer concentration.
 !!
+!!  * or it advects tracer concentrations using WENO5/WENO7 with RK3
+!!  time stepping.
+!!
 !!  * advect_tracer subroutine determines the volume of a layer in
 !!  a grid cell at the previous instance when the tracer concentration
 !!  was changed, so it is essential that the volume fluxes should be
@@ -1596,7 +1599,8 @@ end subroutine tracer_advect_end
 !!  before each calculation of the diabatic forcing.
 !!
 !! The advection scheme of some tracers can be set to be different
-!! to that used by active tracers.
+!! to that used by active tracers. However, either all or none of
+!! the tracers must use RK3.
 
 
 end module MOM_tracer_advect

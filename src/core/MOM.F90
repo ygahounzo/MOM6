@@ -2999,7 +2999,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                            net_surfflux_longname='Net temperature flux ignoring short-wave, as used by [CVMix] KPP', &
                            flux_scale=conv2watt, convergence_units='W m-2', &
                            convergence_scale=conv2watt, CMOR_tendprefix="opottemp", &
-                           diag_form=2, underflow_conc=temp_underflow, Tr_out=CS%tv%tr_T)
+                           diag_form=2, underflow_conc=temp_underflow, Tr_out=CS%tv%tr_T, nonneg_lim=.false.)
       call register_tracer(CS%tv%S, CS%tracer_Reg, param_file, HI, GV, &
                            tr_desc=vd_S, registry_diags=.true., conc_scale=US%S_to_ppt, &
                            flux_nameroot='S', flux_units=S_flux_units, flux_longname='Salt', &
