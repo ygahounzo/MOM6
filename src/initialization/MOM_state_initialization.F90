@@ -51,6 +51,7 @@ use ISOMIP_initialization, only : ISOMIP_initialize_sponges
 use ISOMIP_initialization, only : ISOMIP_initialize_temperature_salinity
 use RGC_initialization, only : RGC_initialize_sponges
 use baroclinic_zone_initialization, only : baroclinic_zone_init_temperature_salinity
+use baroclinic_eddies_initialization, only : baroclinic_eddies_init_temperature_salinity
 use benchmark_initialization, only : benchmark_initialize_thickness
 use benchmark_initialization, only : benchmark_init_temperature_salinity
 use Neverworld_initialization, only : Neverworld_initialize_thickness
@@ -383,6 +384,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
              " \t dumbbell - sloshing channel ICs. \n"//&
              " \t rossby_front - a mixed layer front in thermal wind balance.\n"//&
              " \t SCM_CVMix_tests - used in the SCM CVMix tests.\n"//&
+             " \t baroclinic_eddies - the Ilicak et al. (2012) baroclinic eddies test case.\n"//&
              " \t USER - call a user modified routine.", &
              fail_if_missing=new_sim, do_not_log=just_read)
 !            " \t baroclinic_zone - an analytic baroclinic zone. \n"//&
@@ -390,7 +392,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
       ! Check for incompatible THICKNESS_CONFIG and TS_CONFIG settings
       if (new_sim .and. (.not.convert)) then ; select case (trim(config))
         case ("DOME2D", "ISOMIP", "adjustment2d", "baroclinic_zone", "sloshing", &
-              "seamount", "dumbbell", "SCM_CVMix_tests", "dense")
+              "seamount", "dumbbell", "SCM_CVMix_tests", "dense", "baroclinic_eddies")
           call MOM_error(FATAL, "TS_CONFIG = "//trim(config)//" does not work with thicknesses "//&
               "that have already been converted to thickness units, as is the case with "//&
               "THICKNESS_CONFIG = "//trim(h_config)//".")
@@ -414,6 +416,8 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
         case ("adjustment2d"); call adjustment_initialize_temperature_salinity ( tv%T, &
                                         tv%S, dz, depth_tot, G, GV, US, PF, just_read=just_read)
         case ("baroclinic_zone"); call baroclinic_zone_init_temperature_salinity( tv%T, &
+                                           tv%S, dz, depth_tot, G, GV, US, PF, just_read=just_read)
+        case ("baroclinic_eddies"); call baroclinic_eddies_init_temperature_salinity( tv%T, &
                                            tv%S, dz, depth_tot, G, GV, US, PF, just_read=just_read)
         case ("sloshing"); call sloshing_initialize_temperature_salinity(tv%T, &
                                     tv%S, dz, G, GV, US, PF, just_read=just_read)
