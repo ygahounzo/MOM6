@@ -491,6 +491,13 @@ type, public :: ocean_OBC_type
   logical :: tracer_dz_bug      !< If true, recover a bug that OBC tracer segment data is read
                                 !! without recomputing segment layer thicknesses using the current
                                 !! layer thicknesses and thermodynamic state.
+  logical :: reservoir_scalar_overwrite_bug !< If true, recover a bug that OBC tracer reservoirs
+                                !! registered with a fixed scalar inflow value (e.g., by the
+                                !! dyed_obcs user example) are overwritten by the global OBC
+                                !! tracer reservoir arrays, which are never populated for such
+                                !! tracers, incorrectly resetting the reservoir to zero whenever
+                                !! native temperature/salinity or OBGC tracer reservoirs are also
+                                !! in use on the same open boundary segment.
 end type ocean_OBC_type
 
 !> Control structure for open boundaries that read from files.
@@ -779,6 +786,13 @@ subroutine open_boundary_config(G, US, param_file, OBC)
                  "If true, recover a bug that OBC tracer segment data is read without "//&
                  "recomputing segment layer thicknesses from the current layer thicknesses "//&
                  "and thermodynamic state.", default=enable_bugs)
+  call get_param(param_file, mdl, "OBC_RESERVOIR_SCALAR_OVERWRITE_BUG", OBC%reservoir_scalar_overwrite_bug, &
+                 "If true, recover a bug that OBC tracer reservoirs registered with a fixed "//&
+                 "scalar inflow value (e.g., by the dyed_obcs user example) are overwritten by "//&
+                 "the global OBC tracer reservoir arrays, which are never populated for such "//&
+                 "tracers, incorrectly resetting the reservoir to zero whenever native "//&
+                 "temperature/salinity or OBGC tracer reservoirs are also in use on the same "//&
+                 "open boundary segment.", default=enable_bugs)
   call get_param(param_file, mdl, "REENTRANT_X", reentrant_x, default=.true.)
   call get_param(param_file, mdl, "REENTRANT_Y", reentrant_y, default=.false.)
 
@@ -2824,14 +2838,26 @@ subroutine copy_OBC_tracer_reservoirs(OBC)
     if (.not. (segment%on_pe .and. associated(segment%tr_Reg))) cycle
     if (segment%is_E_or_W .and. allocated(OBC%tres_x)) then ! EW segment
       I = segment%HI%IsdB ; js = segment%HI%jsd ; je = segment%HI%jed
-      do m=1, segment%tr_Reg%ntseg ; do k=1,nz ; do j=js,je
-        segment%tr_Reg%Tr(m)%tres(I,j,k) = segment%tr_Reg%Tr(m)%scale * OBC%tres_x(I,j,k,m)
-      enddo ; enddo ; enddo
+      do m=1, segment%tr_Reg%ntseg
+        ! Tracers registered with a fixed scalar inflow value (is_initialized=.true., e.g. by the
+        ! dyed_obcs user example) are not tracked in the global OBC%tres_x/y reservoir arrays, so
+        ! those arrays are never populated for such tracers and must not be copied back over the
+        ! reservoir value that was explicitly set at registration.
+        if (OBC%reservoir_scalar_overwrite_bug .or. .not.segment%tr_Reg%Tr(m)%is_initialized) then
+          do k=1,nz ; do j=js,je
+            segment%tr_Reg%Tr(m)%tres(I,j,k) = segment%tr_Reg%Tr(m)%scale * OBC%tres_x(I,j,k,m)
+          enddo ; enddo
+        endif
+      enddo
     elseif (segment%is_N_or_S .and. allocated(OBC%tres_y)) then ! NS segment
       J = segment%HI%JsdB ; is = segment%HI%isd ; ie = segment%HI%ied
-      do m=1, segment%tr_Reg%ntseg ; do k=1,nz ; do i=is,ie
-        segment%tr_Reg%Tr(m)%tres(i,J,k) = segment%tr_Reg%Tr(m)%scale * OBC%tres_y(i,J,k,m)
-      enddo ; enddo ; enddo
+      do m=1, segment%tr_Reg%ntseg
+        if (OBC%reservoir_scalar_overwrite_bug .or. .not.segment%tr_Reg%Tr(m)%is_initialized) then
+          do k=1,nz ; do i=is,ie
+            segment%tr_Reg%Tr(m)%tres(i,J,k) = segment%tr_Reg%Tr(m)%scale * OBC%tres_y(i,J,k,m)
+          enddo ; enddo
+        endif
+      enddo
     endif
   enddo ! end segment loop
 end subroutine copy_OBC_tracer_reservoirs

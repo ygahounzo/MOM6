@@ -3781,7 +3781,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   if (associated(CS%oda_incupd_CSp)) &
     call init_oda_incupd_diags(Time, G, GV, diag, CS%oda_incupd_CSp, US)
 
-  call tracer_advect_init(Time, G, US, param_file, diag, CS%tracer_adv_CSp)
+  call tracer_advect_init(Time, G, GV, US, param_file, diag, CS%tracer_adv_CSp)
   call tracer_hor_diff_init(Time, G, GV, US, param_file, diag, CS%tv%eqn_of_state, CS%diabatic_CSp, &
                             CS%tracer_diff_CSp)
 
