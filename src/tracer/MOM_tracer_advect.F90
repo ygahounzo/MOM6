@@ -50,9 +50,6 @@ type, public :: tracer_advect_CS ; private
   real    :: weno_min_thickness    !< The minimum layer thickness used by the WENO5/WENO7 RK3
                                    !! scheme to determine whether a cell is "thin" for CFL-limiting
                                    !! purposes [H ~> m or kg m-2]
-  real    :: weno_conc_floor       !< Global concentration floor: zero any tracer concentration
-                                   !! below this magnitude after each WENO RK3 substep, for tracers
-                                   !! whose per-tracer conc_underflow is unset. 0 disables. [conc]
 end type tracer_advect_CS
 
 !>@{ CPU time clocks
@@ -129,7 +126,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     if (.not. associated(CS%weno_CS)) allocate(CS%weno_CS)
     call advect_tracer_RK3(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS%weno_CS, Reg, CS%dt, &
         CS%default_advect_scheme, id_clock_advect, id_clock_pass, CS%weno_min_thickness, &
-        CS%weno_conc_floor, x_first_in, vol_prev, max_iter_in, update_vol_prev, uhr_out, vhr_out)
+        x_first_in, vol_prev, max_iter_in, update_vol_prev, uhr_out, vhr_out)
   else
     call advect_tracer_ppm(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, &
         x_first_in, vol_prev, max_iter_in, update_vol_prev, uhr_out, vhr_out, &
@@ -360,7 +357,8 @@ subroutine advect_tracer_ppm(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_f
     enddo
   else
     call MOM_error(FATAL, &
-          "Inconsistent flux type in advect_tracer. Must be of 0 (residual), 1 (resolved), or 2 (parameterized)")
+          "Inconsistent flux type in advect_tracer. " // &
+          "Must be of 0 (residual), 1 (resolved), or 2 (parameterized)")
   endif ! flux_type_ctrl
   !$OMP end parallel
 
@@ -903,8 +901,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           ! division by areaT to get into W/m2 for heat and kg/(s*m2) for salt.
           if (associated(Tr(m)%advection_xy)) then
             do i=is,ie ; if (do_i(i,j)) then
-              Tr(m)%advection_xy(i,j,k) = Tr(m)%advection_xy(i,j,k) - (flux_x(I,j,m) - flux_x(I-1,j,m)) * &
-                                              Idt * G%IareaT(i,j)
+              Tr(m)%advection_xy(i,j,k) = Tr(m)%advection_xy(i,j,k) - &
+                                          (flux_x(I,j,m) - flux_x(I-1,j,m)) * Idt * G%IareaT(i,j)
             endif ; enddo
           endif
         elseif (flux_type == 1) then
@@ -1411,8 +1409,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           ! division by areaT to get into W/m2 for heat and kg/(s*m2) for salt.
           if (associated(Tr(m)%advection_xy)) then
             do i=is,ie ; if (do_i(i,j)) then
-              Tr(m)%advection_xy(i,j,k) = Tr(m)%advection_xy(i,j,k) - (flux_y(i,m,J) - flux_y(i,m,J-1))* Idt * &
-                                              G%IareaT(i,j)
+              Tr(m)%advection_xy(i,j,k) = Tr(m)%advection_xy(i,j,k) - &
+                                          (flux_y(i,m,J) - flux_y(i,m,J-1))* Idt * G%IareaT(i,j)
             endif ; enddo
           endif
         endif ! flux_type == 0
@@ -1517,11 +1515,6 @@ subroutine tracer_advect_init(Time, G, GV, US, param_file, diag, CS)
         desc="The minimum layer thickness used by the WENO5/WENO7 RK3 tracer advection "//&
         "scheme to determine whether a cell is too thin to exchange tracer through its faces.", &
         units="m", default=1.0e-3, scale=GV%m_to_H)
-  call get_param(param_file, mdl, "WENO_CONCENTRATION_FLOOR", CS%weno_conc_floor, &
-        desc="Zero any tracer concentration below this magnitude after each WENO RK3 "//&
-        "substep. Prevents sub-float32 values from producing layout-dependent "//&
-        "smoothness-indicator noise. 0 disables.", &
-        units="conc", default=1.0e-10)
 
   if (CS%default_advect_scheme == ADVECT_PPMH3) then
       call get_param(param_file, mdl, "USE_HUYNH_STENCIL_BUG", &

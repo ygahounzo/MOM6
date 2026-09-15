@@ -48,7 +48,7 @@ contains
 !! All tracers in Reg must use WENO5 or WENO7.
 subroutine advect_tracer_RK3(h_end, uhtr, vhtr, OBC, dt, G, GV, US, weno_CS, Reg, dt_dyn, &
                          default_advect_scheme, id_clock_advect, id_clock_pass, min_thickness, &
-                         conc_floor, x_first_in, vol_prev, max_iter_in, update_vol_prev, uhr_out, vhr_out)
+                         x_first_in, vol_prev, max_iter_in, update_vol_prev, uhr_out, vhr_out)
   type(ocean_grid_type),   intent(inout) :: G     !< ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV    !< ocean vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -73,9 +73,6 @@ subroutine advect_tracer_RK3(h_end, uhtr, vhtr, OBC, dt, G, GV, US, weno_CS, Reg
   real,                    intent(in)    :: min_thickness !< The minimum layer thickness used to
                                                   !! determine whether a cell is "thin" for CFL-limiting
                                                   !! purposes [H ~> m or kg m-2]
-  real,                    intent(in)    :: conc_floor !< Zero any tracer
-                                                  !! concentration below this magnitude after each RK3
-                                                  !! substep for tracers with conc_underflow unset[ conc]
   logical,       optional, intent(in)    :: x_first_in !< If present, indicate whether to update
                                                   !! first in the x- or y-direction.
   ! The remaining optional arguments are only used in offline tracer mode.
@@ -264,7 +261,7 @@ subroutine advect_tracer_RK3(h_end, uhtr, vhtr, OBC, dt, G, GV, US, weno_CS, Reg
     call rk3_substep(weno_CS, G, GV, US, OBC, Reg, hprev, uhr, vhr, &
               uh_neglect, vh_neglect, domore_k, domore_j, &
               ntr, nz, isv, iev, jsv, jev, &
-              local_advect_scheme, Idt, CFL_subcycle, min_thickness, conc_floor, dump_cfl)
+              local_advect_scheme, Idt, CFL_subcycle, min_thickness, dump_cfl)
 
     dump_cfl = .false.
 
@@ -282,7 +279,8 @@ end subroutine advect_tracer_RK3
 
 !> One SSP-RK3 2D-unsplit sub-step for use inside advect_tracer_RK3.
 subroutine rk3_substep(CS, G, GV, US, OBC, Reg, hprev, uhr, vhr, uh_neglect, vh_neglect, domore_k, &
-    domore_j, ntr, nz, isv, iev, jsv, jev, local_advect_scheme, Idt, CFL_subcycle, min_thickness, conc_floor, dump_cfl)
+    domore_j, ntr, nz, isv, iev, jsv, jev, local_advect_scheme, Idt, CFL_subcycle, min_thickness, &
+    dump_cfl)
   type(weno_advect_CS),       pointer       :: CS                    !< Persistent WENO/RK3 control structure
   type(ocean_grid_type),      intent(inout) :: G                     !< ocean grid structure
   type(verticalGrid_type),    intent(in)    :: GV                    !< ocean vertical grid structure
@@ -310,8 +308,8 @@ subroutine rk3_substep(CS, G, GV, US, OBC, Reg, hprev, uhr, vhr, uh_neglect, vh_
   integer, dimension(ntr),                     intent(in)    :: local_advect_scheme  !< list of advection schemes to use
   real,                                        intent(in)    :: Idt  !< The inverse of dt [T-1 ~> s-1]
   real,                                        intent(in)    :: CFL_subcycle  !< per-subcycle CFL limit [nondim]
-  real,                                        intent(in)    :: min_thickness  !< The minimum layer thicknesses [H ~> m or kg m-2]
-  real,                                        intent(in)    :: conc_floor !< Concentration floor [conc]
+  real,                                        intent(in)    :: min_thickness  !< The minimum layer
+                                                                               !! thicknesses [H ~> m or kg m-2]
   logical,                                     intent(in)    :: dump_cfl !< If true, write the CFL_scalar_x/CFL_scalar_y
                                                                      !! diagnostics from this substep's combined
                                                                      !! zonal+meridional outflow CFL (should only be
@@ -358,14 +356,9 @@ subroutine rk3_substep(CS, G, GV, US, OBC, Reg, hprev, uhr, vhr, uh_neglect, vh_
 
   ! Stage 1: initialize T^n snapshot, compute mass fluxes,
   ! reconstruct stage-1 fluxes, and compute T* and h*.
-  ! Serial: pass_var(theta) is a collective and cannot run in an OpenMP k-loop.
   do k=1,nz
     ! CS%Ts1_s/CS%Ts2_s/CS%hprev_s1/CS%hprev_s2 persist across calls and are halo-exchanged
-    ! in full below, regardless of domore_k. domore_k(k) is a per-PE local flag (derived from
-    ! this PE's own residual uhr/vhr), so a neighboring PE can have domore_k(k) > 0 for the same
-    ! global layer k in the same substep. Refresh every layer from the current, authoritative
-    ! T^n/hprev unconditionally, so a PE that is locally inactive at k never ships a
-    ! decomposition-dependent stale value into an active neighbor's halo.
+    ! in full below, regardless of domore_k.
     do j=G%jsd,G%jed ; do i=G%isd,G%ied
       CS%hprev_s1(i,j,k) = hprev(i,j,k)
       CS%hprev_s2(i,j,k) = hprev(i,j,k)
@@ -486,25 +479,6 @@ subroutine rk3_substep(CS, G, GV, US, OBC, Reg, hprev, uhr, vhr, uh_neglect, vh_
     endif ! domore_k
   enddo ! Stage 1 k-loop
 
-  ! Apply concentration floor to T* before halo exchange so that sub-floor values are never
-  ! communicated across PE boundaries at intermediate RK3 stages.  Without this, a layout-
-  ! dependent tiny value in Ts1_s (produced by the WENO5 stencil at the leading edge of a
-  ! tracer plume) can pass through the halo exchange and cause 1-ULP weight differences in
-  ! the next stage's reconstruction, seeding non-reproducibility across PE layouts.
-  ! do k=1,nz ; if (domore_k(k) == 0) cycle
-  !   do m=1,ntr
-  !     if (Reg%Tr(m)%conc_underflow > 0.0) then
-  !       do j=jsv,jev ; do i=isv,iev
-  !         if (abs(CS%Ts1_s(i,j,k,m)) < Reg%Tr(m)%conc_underflow) CS%Ts1_s(i,j,k,m) = 0.0
-  !       enddo ; enddo
-  !     elseif (conc_floor > 0.0) then
-  !       do j=jsv,jev ; do i=isv,iev
-  !         if (abs(CS%Ts1_s(i,j,k,m)) < conc_floor) CS%Ts1_s(i,j,k,m) = 0.0
-  !       enddo ; enddo
-  !     endif
-  !   enddo
-  ! enddo
-
   ! T* halo exchange: Ts1_s/hprev_s1's group pass was created once, on first use, above.
   call do_group_pass(CS%pass_Ts1_hprev_s1, G%Domain)
 
@@ -564,21 +538,6 @@ subroutine rk3_substep(CS, G, GV, US, OBC, Reg, hprev, uhr, vhr, uh_neglect, vh_
       enddo ; enddo
     endif ! domore_k
   enddo ! Stage 2 k-loop
-
-  ! Apply concentration floor to T** before halo exchange — same rationale as T* above.
-  ! do k=1,nz ; if (domore_k(k) == 0) cycle
-  !   do m=1,ntr
-  !     if (Reg%Tr(m)%conc_underflow > 0.0) then
-  !       do j=jsv,jev ; do i=isv,iev
-  !         if (abs(CS%Ts2_s(i,j,k,m)) < Reg%Tr(m)%conc_underflow) CS%Ts2_s(i,j,k,m) = 0.0
-  !       enddo ; enddo
-  !     elseif (conc_floor > 0.0) then
-  !       do j=jsv,jev ; do i=isv,iev
-  !         if (abs(CS%Ts2_s(i,j,k,m)) < conc_floor) CS%Ts2_s(i,j,k,m) = 0.0
-  !       enddo ; enddo
-  !     endif
-  !   enddo
-  ! enddo
 
   ! T** halo exchange: Ts2_s/hprev_s2's group pass was created once, on first use, above.
   call do_group_pass(CS%pass_Ts2_hprev_s2, G%Domain)
@@ -686,11 +645,6 @@ subroutine rk3_substep(CS, G, GV, US, OBC, Reg, hprev, uhr, vhr, uh_neglect, vh_
           if (abs(Reg%Tr(m)%t(i,j,k)) < Reg%Tr(m)%conc_underflow) &
               Reg%Tr(m)%t(i,j,k) = 0.0
         enddo ; enddo
-      ! elseif (conc_floor > 0.0) then
-      !   do j=jsv,jev ; do i=isv,iev
-      !     if (abs(Reg%Tr(m)%t(i,j,k)) < conc_floor) &
-      !         Reg%Tr(m)%t(i,j,k) = 0.0
-      !   enddo ; enddo
       endif
     enddo
 
@@ -748,239 +702,236 @@ subroutine compute_flux_2d(tk, uhh_in, vhh_in, h_k, OBC, ntr, &
 
   if (do_recon) then
 
-  ! Y pre-init: fill Ts2y for all j
-  do j=G%jsd,G%jed ; do m=1,ntr ; do i=G%isd,G%ied
-    Ts2y(i,m,j) = tk(i,j,k,m)
-  enddo ; enddo ; enddo
-  if (associated(OBC)) then ; if (OBC%OBC_pe) then
-    do n=1,OBC%number_of_segments
-      segment=>OBC%segment(n)
-      if (.not. segment%on_pe) cycle
-      if (.not. associated(segment%tr_Reg)) cycle
-      do i=is,ie
-        if (segment%is_N_or_S .and. i>=segment%HI%isd .and. i<=segment%HI%ied) then
-          J = segment%HI%JsdB
-          do m=1,segment%tr_Reg%ntseg
-            ntr_id = segment%tr_reg%Tr(m)%ntr_index
-            if (segment%direction == OBC_DIRECTION_S) then
-              Ts2y(i,ntr_id,j) = segment%tr_Reg%Tr(m)%tres(i,j,k)
-            else
-              Ts2y(i,ntr_id,j+1) = segment%tr_Reg%Tr(m)%tres(i,j,k)
-            endif
-          enddo
-        endif
-      enddo
-    enddo
-  endif ; endif
-
-  ! X reconstruction
-  do j=js,je ; if (domore_j_k(j,k)) then
-    ! CFL at every zonal face this row needs, computed once per row.
-    do I=is-2,ie+1
-      if (uhh_in(I,j,k) >= 0.0) then ; i_up = I ; else ; i_up = I+1 ; endif
-      if (h_k(i_up,j) > 0.0) then
-        cfl_row(I) = abs(uhh_in(I,j,k)) / h_k(i_up,j)
-      else
-        cfl_row(I) = 0.0
-      endif
-    enddo
-    do m=1,ntr ; do i=G%isd,G%ied ; Ts2x(i,m) = tk(i,j,k,m) ; enddo ; enddo
+    ! Y pre-init: fill Ts2y for all j
+    do j=G%jsd,G%jed ; do m=1,ntr ; do i=G%isd,G%ied
+      Ts2y(i,m,j) = tk(i,j,k,m)
+    enddo ; enddo ; enddo
     if (associated(OBC)) then ; if (OBC%OBC_pe) then
       do n=1,OBC%number_of_segments
         segment=>OBC%segment(n)
         if (.not. segment%on_pe) cycle
         if (.not. associated(segment%tr_Reg)) cycle
-        if (segment%is_E_or_W .and. j>=segment%HI%jsd .and. j<=segment%HI%jed) then
-          I = segment%HI%IsdB
-          do m=1,segment%tr_Reg%ntseg
-            ntr_id = segment%tr_reg%Tr(m)%ntr_index
-            if (segment%direction == OBC_DIRECTION_W) then
-              Ts2x(i,ntr_id) = segment%tr_Reg%Tr(m)%tres(i,j,k)
-            else
-              Ts2x(i+1,ntr_id) = segment%tr_Reg%Tr(m)%tres(i,j,k)
-            endif
-          enddo
-        endif
+        do i=is,ie
+          if (segment%is_N_or_S .and. i>=segment%HI%isd .and. i<=segment%HI%ied) then
+            J = segment%HI%JsdB
+            do m=1,segment%tr_Reg%ntseg
+              ntr_id = segment%tr_reg%Tr(m)%ntr_index
+              if (segment%direction == OBC_DIRECTION_S) then
+                Ts2y(i,ntr_id,j) = segment%tr_Reg%Tr(m)%tres(i,j,k)
+              else
+                Ts2y(i,ntr_id,j+1) = segment%tr_Reg%Tr(m)%tres(i,j,k)
+              endif
+            enddo
+          endif
+        enddo
       enddo
     endif ; endif
-    do m=1,ntr
-      if ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7)) then
-        do I=is-1,ie
-          if (uhh_in(I,j,k) >= 0.0) then ; i_up = i ; else ; i_up = i+1 ; endif
-          T7(:) = Ts2x(i_up-3:i_up+3,m)
-          order3 = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*G%mask2dCu(I_up+1,j)
-          order5 = order3*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
-          order7 = 0.0
-          if (advect_schemes(m) == ADVECT_WENO7) &
-            order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
-          if (order7 == 1.0) then
-            if (uhh_in(I,j,k) >= 0.0) then
-              call weno7_face(wq, T7, cfl_row(I-1:I+1))
-            else
-              call weno7_face(wq, T7(7:1:-1), cfl_row(I-1:I+1))
-            endif
-          elseif (order5 == 1.0) then
-            if (uhh_in(I,j,k) >= 0.0) then
-              call weno5_face(wq, T7, cfl_row(I-1:I+1))
-            else
-              call weno5_face(wq, T7(7:1:-1), cfl_row(I-1:I+1))
-            endif
-          else
-            qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
-            call PPM_reconstruction(wq, T7(3), T7(4), T7(5), sign(1.0,uhh_in(I,j,k)), cfl_row(I), qext)
-          endif
-          flux_x_out(I,j,m) = uhh_in(I,j,k)*wq
-        enddo
-      endif
-    enddo
-    if (associated(OBC)) then ; if (OBC%OBC_pe) then
-      if (OBC%specified_u_BCs_exist_globally .or. OBC%open_u_BCs_exist_globally) then
+
+    ! X reconstruction
+    do j=js,je ; if (domore_j_k(j,k)) then
+      ! CFL at every zonal face this row needs, computed once per row.
+      do I=is-1,ie
+        if (uhh_in(I,j,k) >= 0.0) then ; i_up = I ; else ; i_up = I+1 ; endif
+        if (h_k(i_up,j) > 0.0) then
+          cfl_row(I) = abs(uhh_in(I,j,k)) / h_k(i_up,j)
+        else
+          cfl_row(I) = 0.0
+        endif
+      enddo
+      do m=1,ntr ; do i=G%isd,G%ied ; Ts2x(i,m) = tk(i,j,k,m) ; enddo ; enddo
+      if (associated(OBC)) then ; if (OBC%OBC_pe) then
         do n=1,OBC%number_of_segments
           segment=>OBC%segment(n)
           if (.not. segment%on_pe) cycle
           if (.not. associated(segment%tr_Reg)) cycle
           if (segment%is_E_or_W .and. j>=segment%HI%jsd .and. j<=segment%HI%jed) then
             I = segment%HI%IsdB
-            ! Tracer fluxes are set to prescribed values only for inflows from masked areas.
-            ! Now changing to simply fixed inflows.
-            if ((uhr(I,j,k) > 0.0 .and. segment%direction == OBC_DIRECTION_W) .or. &
-              (uhr(I,j,k) < 0.0 .and. segment%direction == OBC_DIRECTION_E)) then
-              uhh_in(I,j,k) = uhr(I,j,k)
-              do m=1,segment%tr_Reg%ntseg
-                ntr_id = segment%tr_reg%Tr(m)%ntr_index
-                flux_x_out(I,j,ntr_id) = uhh_in(I,j,k)*segment%tr_Reg%Tr(m)%tres(I,j,k)
-              enddo
-            endif
-          endif
-        enddo
-      endif
-      if (OBC%open_u_BCs_exist_globally) then
-        do n=1,OBC%number_of_segments
-          segment=>OBC%segment(n)
-          if (.not. segment%on_pe) cycle
-          I = segment%HI%IsdB
-          if (segment%is_E_or_W .and. j>=segment%HI%jsd .and. j<=segment%HI%jed) then
-            if (segment%specified) cycle
-            if (.not. associated(segment%tr_Reg)) cycle
-
-            ! Tracer fluxes are set to prescribed values only for inflows from masked areas.
-            if ((uhr(I,j,k) > 0.0 .and. G%mask2dT(i,j) < 0.5) .or. &
-              (uhr(I,j,k) < 0.0 .and. G%mask2dT(i+1,j) < 0.5)) then
-              uhh_in(I,j,k) = uhr(I,j,k)
-              do m=1,segment%tr_Reg%ntseg
-                ntr_id = segment%tr_reg%Tr(m)%ntr_index
-                flux_x_out(I,j,ntr_id) = uhh_in(I,j,k)*segment%tr_Reg%Tr(m)%tres(I,j,k)
-              enddo
-            endif
-          endif
-        enddo
-      endif
-    endif ; endif
-  endif ; enddo ! j-loop
-
-  ! CFL at every meridional face in the full column, computed once here
-  do J=js-2,je+1
-    do i=is,ie
-      if (vhh_in(i,J,k) >= 0.0) then ; j_up = J ; else ; j_up = J+1 ; endif
-      if (h_k(i,j_up) > 0.0) then
-        cfl_v(i,J) = abs(vhh_in(i,J,k)) / h_k(i,j_up)
-      else
-        cfl_v(i,J) = 0.0
-      endif
-    enddo
-  enddo
-
-  ! Y reconstruction and flux assembly (face-centric), analogous to the X-direction above.
-  do J=js-1,je
-    if (.not. (domore_j_k(J,k) .or. domore_j_k(J+1,k))) cycle
-    do m=1,ntr
-      if ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7)) then
-        do i=is,ie
-          if (vhh_in(i,J,k) >= 0.0) then ; j_up = j ; else ; j_up = j+1 ; endif
-          T7(:) = Ts2y(i,m,j_up-3:j_up+3)
-          order3 = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up+1)
-          order5 = order3*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
-          order7 = 0.0
-          if (advect_schemes(m) == ADVECT_WENO7) &
-            order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
-          if (order7 == 1.0) then
-            if (vhh_in(i,J,k) >= 0.0) then
-              call weno7_face(wq, T7, cfl_v(i,J-1:J+1))
-            else
-              call weno7_face(wq, T7(7:1:-1), cfl_v(i,J-1:J+1))
-            endif
-          elseif (order5 == 1.0) then
-            if (vhh_in(i,J,k) >= 0.0) then
-              call weno5_face(wq, T7, cfl_v(i,J-1:J+1))
-            else
-              call weno5_face(wq, T7(7:1:-1), cfl_v(i,J-1:J+1))
-            endif
-          else
-            qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
-            call PPM_reconstruction(wq, T7(3), T7(4), T7(5), sign(1.0,vhh_in(i,J,k)), cfl_v(i,J), qext)
-          endif
-          flux_y_out(i,J,m) = vhh_in(i,J,k)*wq
-        enddo
-      endif
-    enddo
-    if (associated(OBC)) then ; if (OBC%OBC_pe) then
-      if (OBC%specified_v_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally) then
-        do n=1,OBC%number_of_segments
-          segment=>OBC%segment(n)
-          if (.not. segment%on_pe) cycle
-          if (.not. segment%specified) cycle
-          if (.not. associated(segment%tr_Reg)) cycle
-          if (OBC%segment(n)%is_N_or_S) then
-            if (J >= segment%HI%JsdB .and. J<= segment%HI%JedB) then
-              do i=segment%HI%isd,segment%HI%ied
-                ! Tracer fluxes are set to prescribed values only for inflows from masked areas.
-                ! Now changing to simply fixed inflows.
-                if ((vhr(i,J,k) > 0.0) .and. (segment%direction == OBC_DIRECTION_S) .or. &
-                    (vhr(i,J,k) < 0.0) .and. (segment%direction == OBC_DIRECTION_N)) then
-                  vhh_in(i,J,k) = vhr(i,J,k)
-                  do m=1,segment%tr_Reg%ntseg
-                    ntr_id = segment%tr_reg%Tr(m)%ntr_index
-                    flux_y_out(i,J,ntr_id) = vhh_in(i,J,k)*OBC%segment(n)%tr_Reg%Tr(m)%tres(i,J,k)
-                  enddo
-                endif
-              enddo
-            endif
-          endif
-        enddo
-      endif
-
-      if (OBC%open_v_BCs_exist_globally) then
-        do n=1,OBC%number_of_segments
-          segment=>OBC%segment(n)
-          if (.not. segment%on_pe) cycle
-          if (segment%specified) cycle
-          if (.not. associated(segment%tr_Reg)) cycle
-          if (segment%is_N_or_S .and. J>=segment%HI%JsdB .and. J<=segment%HI%JedB) then
-            do i=segment%HI%isd,segment%HI%ied
-              if ((vhr(i,J,k) > 0.0 .and. G%mask2dT(i,j) < 0.5) .or. &
-                (vhr(i,J,k) < 0.0 .and. G%mask2dT(i,j+1) < 0.5)) then
-                vhh_in(i,J,k) = vhr(i,J,k)
-                do m=1,segment%tr_Reg%ntseg
-                  ntr_id = segment%tr_reg%Tr(m)%ntr_index
-                  flux_y_out(i,J,ntr_id) = vhh_in(i,J,k)*segment%tr_Reg%Tr(m)%tres(i,J,k)
-                enddo
+            do m=1,segment%tr_Reg%ntseg
+              ntr_id = segment%tr_reg%Tr(m)%ntr_index
+              if (segment%direction == OBC_DIRECTION_W) then
+                Ts2x(i,ntr_id) = segment%tr_Reg%Tr(m)%tres(i,j,k)
+              else
+                Ts2x(i+1,ntr_id) = segment%tr_Reg%Tr(m)%tres(i,j,k)
               endif
             enddo
           endif
         enddo
-      endif
-    endif ; endif
-  enddo ! J-loop
+      endif ; endif
+      do m=1,ntr
+        if ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7)) then
+          do I=is-1,ie
+            if (uhh_in(I,j,k) >= 0.0) then ; i_up = i ; else ; i_up = i+1 ; endif
+            T7(:) = Ts2x(i_up-3:i_up+3,m)
+            order3 = G%mask2dCu(I_up-2,j)*G%mask2dCu(I_up-1,j)*G%mask2dCu(I_up,j)*&
+                      G%mask2dCu(I_up+1,j)
+            order5 = order3*G%mask2dCu(I_up-3,j)*G%mask2dCu(I_up+2,j)
+            order7 = 0.0
+            if (advect_schemes(m) == ADVECT_WENO7) &
+              order7 = order5*G%mask2dCu(I_up-4,j)*G%mask2dCu(I_up+3,j)
+            if (order7 == 1.0) then
+              if (uhh_in(I,j,k) >= 0.0) then
+                call weno7_face(wq, T7, cfl_row(I))
+              else
+                call weno7_face(wq, T7(7:1:-1), cfl_row(I))
+              endif
+            elseif (order5 == 1.0) then
+              if (uhh_in(I,j,k) >= 0.0) then
+                call weno5_face(wq, T7, cfl_row(I))
+              else
+                call weno5_face(wq, T7(7:1:-1), cfl_row(I))
+              endif
+            else
+              qext = G%mask2dCu(I_up,j)*G%mask2dCu(I_up-1,j)
+              call PPM_reconstruction(wq, T7(3), T7(4), T7(5), uhh_in(I,j,k), cfl_row(I), qext)
+            endif
+            flux_x_out(I,j,m) = uhh_in(I,j,k)*wq
+          enddo
+        endif
+      enddo
+      if (associated(OBC)) then ; if (OBC%OBC_pe) then
+        if (OBC%specified_u_BCs_exist_globally .or. OBC%open_u_BCs_exist_globally) then
+          do n=1,OBC%number_of_segments
+            segment=>OBC%segment(n)
+            if (.not. segment%on_pe) cycle
+            if (.not. associated(segment%tr_Reg)) cycle
+            if (segment%is_E_or_W .and. j>=segment%HI%jsd .and. j<=segment%HI%jed) then
+              I = segment%HI%IsdB
+              ! Tracer fluxes are set to prescribed values only for inflows from masked areas.
+              ! Now changing to simply fixed inflows.
+              if ((uhr(I,j,k) > 0.0 .and. segment%direction == OBC_DIRECTION_W) .or. &
+                (uhr(I,j,k) < 0.0 .and. segment%direction == OBC_DIRECTION_E)) then
+                uhh_in(I,j,k) = uhr(I,j,k)
+                do m=1,segment%tr_Reg%ntseg
+                  ntr_id = segment%tr_reg%Tr(m)%ntr_index
+                  flux_x_out(I,j,ntr_id) = uhh_in(I,j,k)*segment%tr_Reg%Tr(m)%tres(I,j,k)
+                enddo
+              endif
+            endif
+          enddo
+        endif
+        if (OBC%open_u_BCs_exist_globally) then
+          do n=1,OBC%number_of_segments
+            segment=>OBC%segment(n)
+            if (.not. segment%on_pe) cycle
+            I = segment%HI%IsdB
+            if (segment%is_E_or_W .and. j>=segment%HI%jsd .and. j<=segment%HI%jed) then
+              if (segment%specified) cycle
+              if (.not. associated(segment%tr_Reg)) cycle
+
+              ! Tracer fluxes are set to prescribed values only for inflows from masked areas.
+              if ((uhr(I,j,k) > 0.0 .and. G%mask2dT(i,j) < 0.5) .or. &
+                (uhr(I,j,k) < 0.0 .and. G%mask2dT(i+1,j) < 0.5)) then
+                uhh_in(I,j,k) = uhr(I,j,k)
+                do m=1,segment%tr_Reg%ntseg
+                  ntr_id = segment%tr_reg%Tr(m)%ntr_index
+                  flux_x_out(I,j,ntr_id) = uhh_in(I,j,k)*segment%tr_Reg%Tr(m)%tres(I,j,k)
+                enddo
+              endif
+            endif
+          enddo
+        endif
+      endif ; endif
+    endif ; enddo ! j-loop
+
+    ! Y reconstruction and flux assembly (face-centric), analogous to the X-direction above.
+    do J=js-1,je
+      if (.not. (domore_j_k(J,k) .or. domore_j_k(J+1,k))) cycle
+      ! CFL at every meridional face this column needs, computed once per J (shared across tracers).
+      do i=is,ie
+        if (vhh_in(i,J,k) >= 0.0) then ; j_up = J ; else ; j_up = J+1 ; endif
+        if (h_k(i,j_up) > 0.0) then
+          cfl_v(i,J) = abs(vhh_in(i,J,k)) / h_k(i,j_up)
+        else
+          cfl_v(i,J) = 0.0
+        endif
+      enddo
+      do m=1,ntr
+        if ((advect_schemes(m) == ADVECT_WENO5) .or. (advect_schemes(m) == ADVECT_WENO7)) then
+          do i=is,ie
+            if (vhh_in(i,J,k) >= 0.0) then ; j_up = j ; else ; j_up = j+1 ; endif
+            T7(:) = Ts2y(i,m,j_up-3:j_up+3)
+            order3 = G%mask2dCv(i,J_up-2)*G%mask2dCv(i,J_up-1)*G%mask2dCv(i,J_up)*&
+                      G%mask2dCv(i,J_up+1)
+            order5 = order3*G%mask2dCv(i,J_up-3)*G%mask2dCv(i,J_up+2)
+            order7 = 0.0
+            if (advect_schemes(m) == ADVECT_WENO7) &
+              order7 = order5*G%mask2dCv(i,J_up-4)*G%mask2dCv(i,J_up+3)
+            if (order7 == 1.0) then
+              if (vhh_in(i,J,k) >= 0.0) then
+                call weno7_face(wq, T7, cfl_v(i,J))
+              else
+                call weno7_face(wq, T7(7:1:-1), cfl_v(i,J))
+              endif
+            elseif (order5 == 1.0) then
+              if (vhh_in(i,J,k) >= 0.0) then
+                call weno5_face(wq, T7, cfl_v(i,J))
+              else
+                call weno5_face(wq, T7(7:1:-1), cfl_v(i,J))
+              endif
+            else
+              qext = G%mask2dCv(i,J_up)*G%mask2dCv(i,J_up-1)
+              call PPM_reconstruction(wq, T7(3), T7(4), T7(5), vhh_in(i,J,k), cfl_v(i,J), qext)
+            endif
+            flux_y_out(i,J,m) = vhh_in(i,J,k)*wq
+          enddo
+        endif
+      enddo
+      if (associated(OBC)) then ; if (OBC%OBC_pe) then
+        if (OBC%specified_v_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally) then
+          do n=1,OBC%number_of_segments
+            segment=>OBC%segment(n)
+            if (.not. segment%on_pe) cycle
+            if (.not. segment%specified) cycle
+            if (.not. associated(segment%tr_Reg)) cycle
+            if (OBC%segment(n)%is_N_or_S) then
+              if (J >= segment%HI%JsdB .and. J<= segment%HI%JedB) then
+                do i=segment%HI%isd,segment%HI%ied
+                  ! Tracer fluxes are set to prescribed values only for inflows from masked areas.
+                  ! Now changing to simply fixed inflows.
+                  if ((vhr(i,J,k) > 0.0) .and. (segment%direction == OBC_DIRECTION_S) .or. &
+                      (vhr(i,J,k) < 0.0) .and. (segment%direction == OBC_DIRECTION_N)) then
+                    vhh_in(i,J,k) = vhr(i,J,k)
+                    do m=1,segment%tr_Reg%ntseg
+                      ntr_id = segment%tr_reg%Tr(m)%ntr_index
+                      flux_y_out(i,J,ntr_id) = vhh_in(i,J,k)*OBC%segment(n)%tr_Reg%Tr(m)%tres(i,J,k)
+                    enddo
+                  endif
+                enddo
+              endif
+            endif
+          enddo
+        endif
+
+        if (OBC%open_v_BCs_exist_globally) then
+          do n=1,OBC%number_of_segments
+            segment=>OBC%segment(n)
+            if (.not. segment%on_pe) cycle
+            if (segment%specified) cycle
+            if (.not. associated(segment%tr_Reg)) cycle
+            if (segment%is_N_or_S .and. J>=segment%HI%JsdB .and. J<=segment%HI%JedB) then
+              do i=segment%HI%isd,segment%HI%ied
+                if ((vhr(i,J,k) > 0.0 .and. G%mask2dT(i,j) < 0.5) .or. &
+                  (vhr(i,J,k) < 0.0 .and. G%mask2dT(i,j+1) < 0.5)) then
+                  vhh_in(i,J,k) = vhr(i,J,k)
+                  do m=1,segment%tr_Reg%ntseg
+                    ntr_id = segment%tr_reg%Tr(m)%ntr_index
+                    flux_y_out(i,J,ntr_id) = vhh_in(i,J,k)*segment%tr_Reg%Tr(m)%tres(i,J,k)
+                  enddo
+                endif
+              enddo
+            endif
+          enddo
+        endif
+      endif ; endif
+    enddo ! J-loop
 
   endif ! do_recon
 
   ! Zhang & Shu (2010) positivity limiter: rescale each cell's outgoing fluxes, all together,
-  ! so it cannot draw down more tracer mass in one step than it has available. h_k here is a
-  ! cell volume [H L2 ~> m3 or kg] (see hprev/hprev_s1/hprev_s2), matching flux_x_out/
-  ! flux_y_out's units, so hT and outgoing are directly comparable.
+  ! so it cannot draw down more tracer mass in one step than it has available.
   ! pass_var(theta) fills halo theta from the neighbor PE so a shared PE-boundary face
-  ! is scaled by the same factor on both sides (westward/southward flow needs theta(i+1)/theta(j+1)).
-  ! Every PE must call pass_var, including those with do_recon=.false. (theta=1).
+  ! is scaled by the same factor on both sides.
+  ! Every PE must call pass_var, including those with do_recon=.false.
   do m = 1, ntr
     if (.not. apply_lim(m)) cycle
 
@@ -1023,7 +974,7 @@ end subroutine compute_flux_2d
 !> WENO5-Z + MP reconstruction at the right face of cell q(4), given a 7-point upwind-ordered stencil.
 pure subroutine weno5_face(wf, q, cfl)
   real, intent(in)  :: q(7)      !< stencil ordered upwind to downwind [conc]
-  real, intent(in)  :: cfl(3)    !< absolute value of the advective CFL number [nondim]
+  real, intent(in)  :: cfl       !< absolute value of the advective CFL number at this face [nondim]
   real, intent(out) :: wf        !< reconstructed value at the right face of q(4) [conc]
 
   real :: P0, P1, P2                   ! sub-stencil polynomial reconstructions
@@ -1038,13 +989,9 @@ pure subroutine weno5_face(wf, q, cfl)
   real :: wpl, wmr                     ! PPM-fallback left/right edge states
   real :: dA, mA                       ! PPM-fallback edge difference/mean, for shape correction
   real :: a6                           ! PPM-fallback curvature
-  logical :: flag                      ! true when the local CFL is not constant across the stencil
   real, parameter :: C1_6 = 1.0/6.0
   real, parameter :: d0 = 1.0/10.0, d1 = 6.0/10.0, d2 = 3.0/10.0
   real, parameter :: alpha = 2.0
-  real, parameter :: tau_tiny = 1.0e-20  ! Below this, the whole 5-point stencil is treated
-                                          ! as flat (background) rather than calling the
-                                          ! near-singular weight_fac [A ~> a]
 
   ! WENO5-Z sub-stencil reconstructions
   P0 = ((2.0*q(2) - 7.0*q(3)) + 11.0*q(4))*C1_6
@@ -1063,73 +1010,59 @@ pure subroutine weno5_face(wf, q, cfl)
 
   ! WENO-Z nonlinear weights
   tau = abs(b0 - 2.0*b1 + b2)
-  ! if (tau <= tau_tiny) then
-  !   ! See the identical guard in weno7_face: the whole stencil is flat here (b0, b1, b2,
-  !   ! and tau are all ~0), where weight_fac's 1+tau/b is singular. Skip it and fall back
-  !   ! to the optimal linear WENO5 weights (d0+d1+d2 = 1 exactly), rather than letting the
-  !   ! near-singular division amplify decomposition-dependent sub-underflow FP noise.
-  !   wf = d0*P0 + d1*P1 + d2*P2
-  ! else
-    w0 = d0 * weight_fac(tau, b0)
-    w1 = d1 * weight_fac(tau, b1)
-    w2 = d2 * weight_fac(tau, b2)
-    wnorm = 1.0 / (w0 + w1 + w2)
-    wf = (w0*P0 + w1*P1 + w2*P2) * wnorm
-  ! endif
+  w0 = d0 * weight_fac(tau, b0)
+  w1 = d1 * weight_fac(tau, b1)
+  w2 = d2 * weight_fac(tau, b2)
+  wnorm = 1.0 / (w0 + w1 + w2)
+  wf = (w0*P0 + w1*P1 + w2*P2) * wnorm
 
   ! MP limiter (Suresh & Huynh 1997)
   qul  = q(4) + alpha * (q(4) - q(3))
   qmp  = q(4) + minmod2(q(5) - q(4), qul - q(4))
 
-  ! if ((wf - q(4)) * (wf - qmp) > 0) then
+  dm2  = q(3) - 2.0*q(2) + q(1)
+  dm1  = q(2) - 2.0*q(3) + q(4)
+  dd0  = q(5) - 2.0*q(4) + q(3)
+  dd1  = q(4) - 2.0*q(5) + q(6)
+  dd2  = q(5) - 2.0*q(6) + q(7)
 
-    dm2  = q(3) - 2.0*q(2) + q(1)
-    dm1  = q(2) - 2.0*q(3) + q(4)
-    dd0  = q(5) - 2.0*q(4) + q(3)
-    dd1  = q(4) - 2.0*q(5) + q(6)
-    dd2  = q(5) - 2.0*q(6) + q(7)
+  dm4p = minmod6(4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1, dm1, dd2)
+  dm4m = minmod6(4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0, dm2, dd1)
 
-    dm4p = minmod6(4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1, dm1, dd2)
-    dm4m = minmod6(4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0, dm2, dd1)
+  qmd  = 0.5*(q(5) + q(4)) - 0.5*dm4p
+  qlc  = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
 
-    qmd  = 0.5*(q(5) + q(4)) - 0.5*dm4p
-    qlc  = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
+  qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
+  qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
 
-    qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
-    qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
+  wf = min(max(qmin, qmax), wf) ; wf = max(min(qmin, qmax), wf)
+  q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
 
-    wf = min(max(qmin, qmax), wf) ; wf = max(min(qmin, qmax), wf)
-    q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
+  if (((qmax-qmin) > (q0_max-q0_min) .and. (tau > bM) ) ) then
 
-    ! flag = (minval(cfl(:)) > 0.2) .and. (abs(maxval(cfl(:)) - minval(cfl(:))) > 1.0e-6)
-    ! if (((qmax-qmin) > (q0_max-q0_min) .and. ((tau > bM) .or. flag)) ) then
-    if (((qmax-qmin) > (q0_max-q0_min) .and. (tau > bM) ) ) then
-
-      wpl = ((-q(3) + 5.0*q(4)) + 2.0*q(5)) / 6.0
-      wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
-      wmr = ((-q(5) + 5.0*q(4)) + 2.0*q(3)) / 6.0
-      wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
-      dA = wpl - wmr ; mA = 0.5*( wpl + wmr )
-      if ((q(5)-q(4))*(q(4)-q(3)) <= 0.) then
-        wmr = q(4) ; wpl = q(4)
-      elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
-        wmr = (3.*q(4)) - 2.*wpl
-      elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
-        wpl = (3.*q(4)) - 2.*wmr
-      endif
-
-      a6 = 6.*q(4) - 3. * (wpl + wmr) ! Curvature
-      wf = (wpl - 0.5 * cfl(2) * ((wpl - wmr) - a6 * (1. - 2./3. * cfl(2))))
+    wpl = ((-q(3) + 5.0*q(4)) + 2.0*q(5)) / 6.0
+    wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
+    wmr = ((-q(5) + 5.0*q(4)) + 2.0*q(3)) / 6.0
+    wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
+    dA = wpl - wmr ; mA = 0.5*( wpl + wmr )
+    if ((q(5)-q(4))*(q(4)-q(3)) <= 0.) then
+      wmr = q(4) ; wpl = q(4)
+    elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
+      wmr = (3.*q(4)) - 2.*wpl
+    elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
+      wpl = (3.*q(4)) - 2.*wmr
     endif
 
-  ! endif
+    a6 = 6.*q(4) - 3. * (wpl + wmr) ! Curvature
+    wf = (wpl - 0.5 * cfl * ((wpl - wmr) - a6 * (1. - 2./3. * cfl)))
+  endif
 
 end subroutine weno5_face
 
 !> WENO7-Z + MP reconstruction at the right face of cell q(4), given a 7-point upwind-ordered stencil.
 pure subroutine weno7_face(wf, q, cfl)
   real, intent(in)  :: q(7)     !< stencil ordered upwind to downwind [conc]
-  real, intent(in)  :: cfl(3)      !< absolute value of the advective CFL number [nondim]
+  real, intent(in)  :: cfl      !< absolute value of the advective CFL number at this face [nondim]
   real, intent(out) :: wf       !< reconstructed value at the right face of q(4) [conc]
 
   real :: P0, P1, P2, P3               ! sub-stencil polynomial reconstructions
@@ -1145,13 +1078,9 @@ pure subroutine weno7_face(wf, q, cfl)
   real :: wpl, wmr                     ! PPM-fallback left/right edge states
   real :: dA, mA                       ! PPM-fallback edge difference/mean, for shape correction
   real :: a6                           ! PPM-fallback curvature
-  logical :: flag                      ! true when the local CFL is not constant across the stencil
   real, parameter :: C1_12 = 1.0/12.0
   real, parameter :: d0 = 1.0/35.0, d1 = 12.0/35.0, d2 = 18.0/35.0, d3 = 4.0/35.0
   real, parameter :: alpha = 2.0
-  real, parameter :: tau_tiny = 1.0e-20  ! Below this, the whole 7-point stencil is treated
-                                          ! as flat (background) rather than calling the
-                                          ! near-singular weight_fac [A ~> a]
 
   ! WENO7-Z sub-stencil reconstructions
   P0 = (-3.0*q(1) + 13.0*q(2) - 23.0*q(3) + 25.0*q(4)) * C1_12
@@ -1160,92 +1089,76 @@ pure subroutine weno7_face(wf, q, cfl)
   P3 = (3.0*q(4) + 13.0*q(5) - 5.0*q(6) + q(7)) * C1_12
 
   ! Smoothness indicators, in the compact expanded form of Balsara & Shu (2000, JCP),
-  ! (also reproduced in Balsara, Garain & Shu 2016). Coefficients pre-divided by 1000 
+  ! (also reproduced in Balsara, Garain & Shu 2016). Coefficients pre-divided by 1000
   ! (normalized out by weight_fac)
   b0 = ( q(1)*((0.547*q(1) - 3.882*q(2)) + (4.642*q(3) - 1.854*q(4))) &
        + q(2)*((7.043*q(2) - 17.246*q(3)) + 7.042*q(4))) &
-     + ( q(3)*(11.003*q(3) - 9.402*q(4)) &
+       + ( q(3)*(11.003*q(3) - 9.402*q(4)) &
        + 2.107*q(4)**2 )
   b1 = ( q(2)*((0.267*q(2) - 1.642*q(3)) + (1.602*q(4) - 0.494*q(5))) &
        + q(3)*((2.843*q(3) - 5.966*q(4)) + 1.922*q(5))) &
-     + ( q(4)*(3.443*q(4) - 2.522*q(5)) &
+       + ( q(4)*(3.443*q(4) - 2.522*q(5)) &
        + 0.547*q(5)**2 )
   b2 = ( q(3)*((0.547*q(3) - 2.522*q(4)) + (1.922*q(5) - 0.494*q(6))) &
        + q(4)*((3.443*q(4) - 5.966*q(5)) + 1.602*q(6))) &
-     + ( q(5)*(2.843*q(5) - 1.642*q(6)) &
+       + ( q(5)*(2.843*q(5) - 1.642*q(6)) &
        + 0.267*q(6)**2 )
   b3 = ( q(4)*((2.107*q(4) - 9.402*q(5)) + (7.042*q(6) - 1.854*q(7))) &
        + q(5)*((11.003*q(5) - 17.246*q(6)) + 4.642*q(7))) &
-     + ( q(6)*(7.043*q(6) - 3.882*q(7)) &
+       + ( q(6)*(7.043*q(6) - 3.882*q(7)) &
        + 0.547*q(7)**2 )
 
-  ! bM = 0.25*(b0+b1+b2+b3)
   bM = min(b0, b1, b2, b3)
 
   ! WENO7-Z nonlinear weights
   tau = abs((b0 - b3) + 3*(b1 - b2))
-  ! if (tau <= tau_tiny) then
-  !   ! The whole 7-point stencil is flat to within floating-point noise (b0..b3 and tau
-  !   ! are all ~0): weight_fac's 1+tau/b is singular here, and would otherwise blow up
-  !   ! whatever sub-underflow floating-point noise is present (harmless on its own, but
-  !   ! decomposition-dependent) into a checksum-visible difference. Fall back directly to
-  !   ! the optimal linear WENO7 weights, which is what the nonlinear weights converge to
-  !   ! as tau -> 0 anyway. d0+d1+d2+d3 = 1 exactly, so no separate normalization is needed.
-  !   wf = (d0*P0 + d1*P1) + (d2*P2 + d3*P3)
-  ! else
-    w0 = d0 * weight_fac(tau, b0)
-    w1 = d1 * weight_fac(tau, b1)
-    w2 = d2 * weight_fac(tau, b2)
-    w3 = d3 * weight_fac(tau, b3)
-    wnorm = 1.0 / ((w0 + w1) + (w2 + w3))
-    wf = ((w0*P0 + w1*P1) + (w2*P2 + w3*P3)) * wnorm
-  ! endif
+  w0 = d0 * weight_fac(tau, b0)
+  w1 = d1 * weight_fac(tau, b1)
+  w2 = d2 * weight_fac(tau, b2)
+  w3 = d3 * weight_fac(tau, b3)
+  wnorm = 1.0 / ((w0 + w1) + (w2 + w3))
+  wf = ((w0*P0 + w1*P1) + (w2*P2 + w3*P3)) * wnorm
 
   ! MP limiter (Suresh & Huynh 1997)
   qul  = q(4) + alpha * (q(4) - q(3))
   qmp  = q(4) + minmod2(q(5) - q(4), qul - q(4))
 
-  ! if ((wf - q(4)) * (wf - qmp) > 0) then
+  dm2  = q(3) - 2.0*q(2) + q(1)
+  dm1  = q(2) - 2.0*q(3) + q(4)
+  dd0  = q(5) - 2.0*q(4) + q(3)
+  dd1  = q(4) - 2.0*q(5) + q(6)
+  dd2  = q(5) - 2.0*q(6) + q(7)
 
-    dm2  = q(3) - 2.0*q(2) + q(1)
-    dm1  = q(2) - 2.0*q(3) + q(4)
-    dd0  = q(5) - 2.0*q(4) + q(3)
-    dd1  = q(4) - 2.0*q(5) + q(6)
-    dd2  = q(5) - 2.0*q(6) + q(7)
+  dm4p = minmod6(4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1, dm1, dd2)
+  dm4m = minmod6(4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0, dm2, dd1)
 
-    dm4p = minmod6(4.0*dd0 - dd1, 4.0*dd1 - dd0, dd0, dd1, dm1, dd2)
-    dm4m = minmod6(4.0*dm1 - dd0, 4.0*dd0 - dm1, dm1, dd0, dm2, dd1)
+  qmd  = 0.5*(q(5) + q(4)) - 0.5*dm4p
+  qlc  = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
 
-    qmd  = 0.5*(q(5) + q(4)) - 0.5*dm4p
-    qlc  = 0.5*(3.0*q(4) - q(3)) + (4.0/3.0)*dm4m
+  qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
+  qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
 
-    qmin = max(min(q(4), q(5), qmd), min(q(4), qul, qlc))
-    qmax = min(max(q(4), q(5), qmd), max(q(4), qul, qlc))
+  wf = min(max(qmin, qmax), wf) ; wf = max(min(qmin, qmax), wf)
+  q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
 
-    wf = min(max(qmin, qmax), wf) ; wf = max(min(qmin, qmax), wf)
-    q0_min = min(q(4), qmp) ; q0_max = max(q(4), qmp)
+  if (((qmax-qmin) > (q0_max-q0_min) .and. (tau > bM) ) ) then
 
-    ! flag = (minval(cfl(:)) > 0.2) .and. (abs(maxval(cfl(:)) - minval(cfl(:))) > 1.0e-6)
-    ! if (((qmax-qmin) > (q0_max-q0_min) .and. ((tau > bM) .or. flag)) ) then
-    if (((qmax-qmin) > (q0_max-q0_min) .and. (tau > bM) ) ) then
-
-      wpl = ((-q(3) + 5.0*q(4)) + 2.0*q(5)) / 6.0
-      wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
-      wmr = ((-q(5) + 5.0*q(4)) + 2.0*q(3)) / 6.0
-      wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
-      dA = wpl - wmr ; mA = 0.5*( wpl + wmr )
-      if ((q(5)-q(4))*(q(4)-q(3)) <= 0.) then
-        wmr = q(4) ; wpl = q(4)
-      elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
-        wmr = (3.*q(4)) - 2.*wpl
-      elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
-        wpl = (3.*q(4)) - 2.*wmr
-      endif
-
-      a6 = 6.*q(4) - 3. * (wpl + wmr) ! Curvature
-      wf = (wpl - 0.5 * cfl(2) * ((wpl - wmr) - a6 * (1. - 2./3. * cfl(2))))
+    wpl = ((-q(3) + 5.0*q(4)) + 2.0*q(5)) / 6.0
+    wpl = min(max(q(4), q(5)), wpl) ; wpl = max(min(q(4), q(5)), wpl)
+    wmr = ((-q(5) + 5.0*q(4)) + 2.0*q(3)) / 6.0
+    wmr = min(max(q(4), q(3)), wmr) ; wmr = max(min(q(4), q(3)), wmr)
+    dA = wpl - wmr ; mA = 0.5*( wpl + wmr )
+    if ((q(5)-q(4))*(q(4)-q(3)) <= 0.) then
+      wmr = q(4) ; wpl = q(4)
+    elseif ( dA*(q(4)-mA) > (dA*dA)/6. ) then
+      wmr = (3.*q(4)) - 2.*wpl
+    elseif ( dA*(q(4)-mA) < - (dA*dA)/6. ) then
+      wpl = (3.*q(4)) - 2.*wmr
     endif
-  ! endif
+
+    a6 = 6.*q(4) - 3. * (wpl + wmr) ! Curvature
+    wf = (wpl - 0.5 * cfl * ((wpl - wmr) - a6 * (1. - 2./3. * cfl)))
+  endif
 
 end subroutine weno7_face
 
@@ -1412,19 +1325,19 @@ pure subroutine PPM_reconstruction(wq_ppm, qm, q0, qp, u, cfl, qext)
 
   dA = aR - aL ; mA = 0.5*(aR + aL)
   if (qext*(qp - q0)*(q0 - qm) <= 0.) then
-      aL = q0 ; aR = q0
+    aL = q0 ; aR = q0
   elseif (dA*(q0 - mA) > (dA*dA)/6.) then
-      aL = (3.*q0) - 2.*aR
+    aL = (3.*q0) - 2.*aR
   elseif (dA*(q0 - mA) < -(dA*dA)/6.) then
-      aR = (3.*q0) - 2.*aL
+    aR = (3.*q0) - 2.*aL
   endif
 
   a6 = 6.*q0 - 3.*(aR + aL)
 
   if (u >= 0.0) then
-      wq_ppm = aR - 0.5*cfl*((aR - aL) - a6*(1. - 2./3.*cfl))
+    wq_ppm = aR - 0.5*cfl*((aR - aL) - a6*(1. - 2./3.*cfl))
   else
-      wq_ppm = aL + 0.5*cfl*((aR - aL) + a6*(1. - 2./3.*cfl))
+    wq_ppm = aL + 0.5*cfl*((aR - aL) + a6*(1. - 2./3.*cfl))
   endif
 
 end subroutine PPM_reconstruction
@@ -1440,9 +1353,9 @@ pure elemental function minmod4(a, b, c, d) result(r)
   real :: r, s
   s = sign(1.0, a)
   if ((sign(1.0,b)==s) .and. (sign(1.0,c)==s) .and. (sign(1.0,d)==s)) then
-      r = s * min(abs(a), abs(b), abs(c), abs(d))
+    r = s * min(abs(a), abs(b), abs(c), abs(d))
   else
-      r = 0.0
+    r = 0.0
   endif
 end function minmod4
 
@@ -1452,9 +1365,9 @@ pure elemental function minmod6(a, b, c, d, e, f) result(r)
   s = sign(1.0, a)
   if ((sign(1.0,b)==s) .and. (sign(1.0,c)==s) .and. &
       (sign(1.0,d)==s) .and. (sign(1.0,e)==s) .and. (sign(1.0,f)==s)) then
-      r = s * min(abs(a), abs(b), abs(c), abs(d), abs(e), abs(f))
+    r = s * min(abs(a), abs(b), abs(c), abs(d), abs(e), abs(f))
   else
-      r = 0.0
+    r = 0.0
   endif
 end function minmod6
 

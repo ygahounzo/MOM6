@@ -150,7 +150,7 @@ function register_sphere_advection_tracer(G, GV, US, param_file, CS, tr_Reg, res
     call register_tracer(tr_ptr, tr_Reg, param_file, G%HI, GV, &
       name=name, longname=longname, units="kg kg-1", &
       registry_diags=.true., flux_units=flux_units, &
-      restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+      restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit, nonneg_lim=.true.)
 
     !   Set coupled_tracers to be true (hard-coded above) to provide the surface
     ! values to the coupler (if any).  This is meta-code and its arguments will
